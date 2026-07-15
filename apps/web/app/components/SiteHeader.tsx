@@ -1,64 +1,112 @@
 "use client";
 
 import Link from "next/link";
-import { BellIcon, CalendarIcon, SearchIcon, UserIcon, UsersIcon } from "./icons";
+import { usePathname } from "next/navigation";
+
 import { AccountControl } from "./AccountControl";
-import { LanguageSwitcher } from "./I18nProvider";
-import { useI18n } from "./I18nProvider";
+import { LanguageSwitcher, useI18n } from "./I18nProvider";
+import { BellIcon, CalendarIcon, SearchIcon, UserIcon, UsersIcon } from "./icons";
+import styles from "./SiteHeader.module.css";
+
+const destinations = [
+  { href: "/discover", key: "nav.discover" as const },
+  { href: "/groups", key: "nav.groups" as const },
+  { href: "/me/events", key: "nav.myEvents" as const },
+  { href: "/studio/events", key: "nav.hostStudio" as const },
+];
+
+function routeIsActive(pathname: string, href: string) {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
 
 export function SiteHeader() {
+  const pathname = usePathname();
   const { t } = useI18n();
+  const region = t("nav.regionValue");
+
   return (
     <>
-      <header className="site-header">
-        <Link className="wordmark" href="/" aria-label="Spott">
-          SPOTT
-        </Link>
-        <nav className="desktop-nav" aria-label="Primary navigation">
-          <Link href="/discover">{t("nav.discover")}</Link>
-          <Link href="/groups">{t("nav.groups")}</Link>
-          <Link href="/me/events">{t("nav.myEvents")}</Link>
-          <Link href="/studio/events">{t("nav.hostStudio")}</Link>
-        </nav>
-        <div className="header-actions">
-          <LanguageSwitcher compact />
+      <header className={styles.header}>
+        <div className={styles.identity}>
+          <Link className={styles.wordmark} href="/discover" aria-label="Spott">
+            Spott
+          </Link>
           <Link
-            className="icon-button header-search"
-            href="/discover#search"
-            aria-label={t("nav.search")}
+            className={styles.region}
+            href="/discover"
+            aria-label={t("nav.region", { region })}
           >
-            <SearchIcon />
+            {region}
+            <span aria-hidden="true">⌄</span>
           </Link>
-          <Link className="icon-button" href="/notifications" aria-label={t("nav.notifications")}>
+        </div>
+
+        <nav className={styles.desktopNav} aria-label={t("nav.primary")}>
+          {destinations.map((destination) => (
+            <Link
+              key={destination.href}
+              href={destination.href}
+              aria-current={routeIsActive(pathname, destination.href) ? "page" : undefined}
+            >
+              {t(destination.key)}
+            </Link>
+          ))}
+        </nav>
+
+        <div className={styles.actions}>
+          <span className={styles.locale}><LanguageSwitcher compact /></span>
+          <Link
+            className={styles.notification}
+            href="/notifications"
+            aria-label={t("nav.notifications")}
+          >
             <BellIcon />
+            <span className={styles.notificationDot} aria-hidden="true" />
           </Link>
-          <AccountControl />
-          <Link className="create-button" href="/create">
-            {t("nav.create")} <span aria-hidden="true">＋</span>
+          <span className={styles.account}><AccountControl /></span>
+          <Link className={styles.create} href="/create">
+            {t("nav.create")}
           </Link>
         </div>
       </header>
-      <nav className="mobile-dock" aria-label="Mobile navigation">
-        <Link href="/discover">
-          <SearchIcon />
-          <span>{t("nav.discover")}</span>
+
+      <nav className={styles.mobileDock} aria-label={t("nav.mobile")}>
+        <DockLink pathname={pathname} href="/discover" label={t("nav.discover")} icon={<SearchIcon />} />
+        <DockLink pathname={pathname} href="/groups" label={t("nav.groups")} icon={<UsersIcon />} />
+        <Link
+          className={styles.mobileCreate}
+          href="/create"
+          aria-label={t("nav.create")}
+          aria-current={routeIsActive(pathname, "/create") ? "page" : undefined}
+        >
+          <span aria-hidden="true">＋</span>
+          <small>{t("nav.create")}</small>
         </Link>
-        <Link href="/groups">
-          <UsersIcon />
-          <span>{t("nav.groups")}</span>
-        </Link>
-        <Link className="mobile-create" href="/create" aria-label={t("nav.create")}>
-          <b>＋</b>
-        </Link>
-        <Link href="/me/events">
-          <CalendarIcon />
-          <span>{t("nav.myEvents")}</span>
-        </Link>
-        <Link href="/me/settings">
-          <UserIcon />
-          <span>{t("nav.account")}</span>
-        </Link>
+        <DockLink pathname={pathname} href="/me/events" label={t("nav.myEvents")} icon={<CalendarIcon />} />
+        <DockLink pathname={pathname} href="/me/settings" label={t("nav.account")} icon={<UserIcon />} />
       </nav>
     </>
+  );
+}
+
+function DockLink({
+  pathname,
+  href,
+  label,
+  icon,
+}: {
+  pathname: string;
+  href: string;
+  label: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      aria-current={routeIsActive(pathname, href) ? "page" : undefined}
+    >
+      {icon}
+      <span>{label}</span>
+    </Link>
   );
 }

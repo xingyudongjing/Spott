@@ -125,9 +125,14 @@ const eventSummaryBaseSchema = z.object({
   }
 });
 
-export const eventSummarySchema = eventSummaryBaseSchema.and(z.object({
+const eventSummaryOutputSchema = eventSummaryBaseSchema.and(z.object({
   coordinate: eventCoordinateSchema.extend({ precision: z.literal("approximate") }).nullable(),
 }).passthrough());
+
+export const eventSummarySchema = z.preprocess(
+  stripDiscoveryDetailFields,
+  eventSummaryOutputSchema,
+);
 
 const registrationQuestionSchema = z.object({
   id: uuid,
@@ -223,5 +228,48 @@ function stripLegacyDisplayFields<Event extends EventSummary | EventDetail>(even
   delete (normalized as Record<string, unknown>).priceLabel;
   delete (normalized.organizer as Record<string, unknown>).reliability;
   delete (normalized.fee as Record<string, unknown>).boundaryStatement;
+  return normalized;
+}
+
+const discoveryDetailOnlyFields = [
+  "exactAddress",
+  "exactCoordinate",
+  "exactLatitude",
+  "exactLongitude",
+  "attendeeRequirements",
+  "riskFlags",
+  "riskDetails",
+  "exactAddressVisibility",
+  "registrationQuestions",
+  "media",
+  "mediaCount",
+  "groupId",
+  "checkinMode",
+  "commentPermission",
+  "posterEnabled",
+  "joinInfo",
+  "joinInstructions",
+  "joinURL",
+  "meetingURL",
+  "onlineJoinURL",
+  "checkinCode",
+  "checkinToken",
+  "ticketCode",
+] as const;
+
+function stripDiscoveryDetailFields(value: unknown): unknown {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+  const normalized = { ...value } as Record<string, unknown>;
+  for (const field of discoveryDetailOnlyFields) delete normalized[field];
+
+  const coordinate = normalized.coordinate;
+  if (
+    coordinate !== null
+    && typeof coordinate === "object"
+    && !Array.isArray(coordinate)
+    && (coordinate as Record<string, unknown>).precision === "exact"
+  ) {
+    normalized.coordinate = null;
+  }
   return normalized;
 }

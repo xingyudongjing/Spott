@@ -9,6 +9,7 @@ import {
 } from "../app/lib/discovery-query";
 import {
   EventContractError,
+  parseEventPage,
   parseEventSummary,
   type EventDetail,
   type EventSummary,
@@ -159,6 +160,38 @@ describe("strict event contracts", () => {
     expect(parsed).not.toHaveProperty("priceLabel");
     expect(parsed.organizer).not.toHaveProperty("reliability");
     expect(parsed.fee).not.toHaveProperty("boundaryStatement");
+  });
+
+  test("strips detail-only and exact-location facts at the discovery parse boundary", () => {
+    const parsed = parseEventPage({
+      items: [{
+        ...summary,
+        coordinate: { latitude: 35.68123, longitude: 139.79123, precision: "exact" },
+        exactAddress: "1-2-3 Kiyosumi",
+        exactCoordinate: { latitude: 35.68123, longitude: 139.79123 },
+        attendeeRequirements: "Bring an ID",
+        registrationQuestions: [{ prompt: "Private question" }],
+        joinInfo: { meetingURL: "https://private.example.test/room" },
+        checkinCode: "123456",
+        media: [{ url: "https://private.example.test/photo.jpg" }],
+        queryRank: 0.93,
+      }],
+      nextCursor: null,
+      hasMore: false,
+      serverTime: "2026-07-16T00:00:00.000Z",
+      queryExplanationId: "privacy-boundary-test",
+    });
+
+    const [event] = parsed.items;
+    expect(event.coordinate).toBeNull();
+    expect(event).not.toHaveProperty("exactAddress");
+    expect(event).not.toHaveProperty("exactCoordinate");
+    expect(event).not.toHaveProperty("attendeeRequirements");
+    expect(event).not.toHaveProperty("registrationQuestions");
+    expect(event).not.toHaveProperty("joinInfo");
+    expect(event).not.toHaveProperty("checkinCode");
+    expect(event).not.toHaveProperty("media");
+    expect((event as EventSummary & { queryRank: number }).queryRank).toBe(0.93);
   });
 
   test("throws a precise parse error instead of filling missing required facts", () => {

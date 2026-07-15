@@ -1,40 +1,56 @@
 import Image from "next/image";
-import type { EventView } from "../lib/demo-data";
-import type { Locale } from "../i18n/messages";
 
-const mark: Record<string, string> = {
-  walk: "TOKYO / BLUE HOUR",
-  music: "LISTEN / EXCHANGE",
-  outdoor: "PACIFIC / 05:45",
-  art: "MAKE / PRINT / SHARE",
-  language: "LOOK / SPEAK / SLOW",
-  food: "TASTE / MAP / CITY",
-};
+import styles from "./EventCover.module.css";
 
-export function EventCover({ event, large = false, locale = "zh-Hans" }: { event: EventView; large?: boolean; locale?: Locale }) {
-  const categoryLabel = localizedCategory(event.category, event.categoryLabel, locale);
-  if (event.coverURL) {
-    return <div className={`event-cover event-cover-photo${large ? " event-cover-large" : ""}`}>
-      <Image src={event.coverURL} alt="" fill unoptimized sizes={large ? "(max-width: 780px) 100vw, 60vw" : "(max-width: 780px) 100vw, 33vw"} />
-      <span className="event-cover-scrim" />
-      <span className="cover-index">SPOTT · {categoryLabel}</span>
-      <strong>{event.title}</strong>
-    </div>;
-  }
-  return (
-    <div className={`event-cover cover-${event.category}${large ? " event-cover-large" : ""}`}>
-      <span className="cover-orbit" />
-      <span className="cover-index">SPT / {event.id.slice(-3)}</span>
-      <strong>{mark[event.category] ?? "SPOTT / TOKYO"}</strong>
-      <span className="cover-category">{categoryLabel}</span>
-    </div>
-  );
+interface CoverEvent {
+  title: string;
+  category: string;
+  coverURL?: string | null;
 }
 
-function localizedCategory(category: string, fallback: string, locale: Locale) {
-  const values: Record<string, [string, string, string]> = {
-    walk: ["城市漫步", "まち歩き", "City walks"], "city-walk": ["城市探索", "まち歩き", "City walks"], music: ["音乐", "音楽", "Music"], outdoor: ["户外", "アウトドア", "Outdoors"], art: ["艺术与创作", "アート", "Arts"], language: ["语言交换", "言語交換", "Language"], food: ["美食与咖啡", "フード", "Food"], sports: ["运动", "スポーツ", "Sports"], games: ["桌游", "ゲーム", "Games"], learning: ["学习", "学び", "Learning"], wellness: ["身心健康", "ウェルネス", "Wellness"], networking: ["职业交流", "交流会", "Networking"], volunteering: ["志愿活动", "ボランティア", "Volunteering"],
-  };
-  const index = locale === "ja" ? 1 : locale === "en" ? 2 : 0;
-  return values[category]?.[index] ?? fallback;
+export function EventCover({
+  event,
+  large = false,
+  priority = false,
+  sizes,
+  className = "",
+}: {
+  event: CoverEvent;
+  large?: boolean;
+  priority?: boolean;
+  sizes?: string;
+  className?: string;
+  locale?: string;
+}) {
+  const rootClassName = `${styles.root}${large ? ` ${styles.large}` : ""}${className ? ` ${className}` : ""}`;
+  if (event.coverURL) {
+    return (
+      <div className={rootClassName} data-testid="event-cover-photo">
+        <Image
+          src={event.coverURL}
+          alt={event.title}
+          fill
+          priority={priority}
+          sizes={sizes ?? (large ? "(max-width: 780px) 100vw, 60vw" : "(max-width: 780px) 100vw, 232px")}
+          className={styles.image}
+        />
+      </div>
+    );
+  }
+  return (
+    <div
+      className={`${rootClassName} ${styles.fallback}`}
+      data-category={event.category}
+      data-testid="event-cover-fallback"
+      role="img"
+      aria-label={event.title}
+    >
+      <svg viewBox="0 0 320 180" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+        <path className={styles.horizon} d="M18 131c35-18 68-8 96-25 27-16 51-44 90-37 35 6 51 34 98 24" />
+        <path className={styles.orbit} d="M83 111c14-59 85-85 137-44 34 27 29 79-5 99" />
+        <circle className={styles.sun} cx="220" cy="55" r="18" />
+        <path className={styles.trace} d="M21 146h278M42 158h212M121 39l-5 82m38-102 3 112m31-92-7 78" />
+      </svg>
+    </div>
+  );
 }

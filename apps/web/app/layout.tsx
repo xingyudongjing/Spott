@@ -31,7 +31,16 @@ export const metadata: Metadata = {
   icons: { icon: "/favicon.svg", apple: "/spott-icon.svg" },
 };
 
-export const viewport: Viewport = { themeColor: "#F7F6F2", colorScheme: "light", width: "device-width", initialScale: 1, viewportFit: "cover" };
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#F7F5F0" },
+    { media: "(prefers-color-scheme: dark)", color: "#0E1014" },
+  ],
+  colorScheme: "light dark",
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+};
 
 export default async function RootLayout({
   children,
@@ -40,7 +49,7 @@ export default async function RootLayout({
 }>) {
   const locale = await serverLocale();
   return (
-    <html lang={locale}>
+    <html lang={locale} data-scroll-behavior="smooth">
       <body className={`${inter.variable} ${notoSC.variable} ${notoJP.variable}`}>
         <I18nProvider initialLocale={locale}>
           <AppDialogProvider>

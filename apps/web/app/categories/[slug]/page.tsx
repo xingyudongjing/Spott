@@ -1,7 +1,6 @@
-import { DiscoverExperience } from "../../components/DiscoverExperience";
-import { Footer } from "../../components/Footer";
-import { getEvents } from "../../lib/api";
+import { redirect } from "next/navigation";
 
 export default async function CategoryPage({ params }: { params: Promise<{ slug: string }> }) {
-  return <main><DiscoverExperience initialEvents={await getEvents()} initialCategory={(await params).slug} /><Footer /></main>;
+  const { slug } = await params;
+  redirect(`/discover?category=${encodeURIComponent(slug)}`);
 }

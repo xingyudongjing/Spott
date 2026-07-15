@@ -1,22 +1,23 @@
+@import "@spott/design-tokens/tokens.css";
 @import "tailwindcss";
 
 :root {
-  color-scheme: light;
-  --canvas: #f7f5f0;
-  --paper: #fffefb;
-  --ink: #0e1014;
-  --muted: #686b73;
-  --line: #d8d5ce;
-  --line-dark: #aca9a2;
-  --twilight: #6e5be7;
-  --twilight-pale: #e9e5ff;
-  --coral: #ff745f;
-  --coral-pale: #ffe6df;
-  --mint: #3dbd91;
-  --mint-pale: #dff5eb;
-  --amber: #f5b642;
-  --danger: #d94b44;
-  --focus: #2f66ff;
+  color-scheme: light dark;
+  --canvas: var(--spott-canvas);
+  --paper: var(--spott-surface);
+  --ink: var(--spott-ink);
+  --muted: var(--spott-muted);
+  --line: var(--spott-divider);
+  --line-dark: color-mix(in srgb, var(--spott-divider) 68%, var(--spott-ink));
+  --twilight: var(--spott-twilight);
+  --twilight-pale: color-mix(in srgb, var(--spott-twilight) 12%, var(--spott-surface));
+  --coral: var(--spott-coral);
+  --coral-pale: color-mix(in srgb, var(--spott-coral) 13%, var(--spott-surface));
+  --mint: var(--spott-mint);
+  --mint-pale: color-mix(in srgb, var(--spott-mint) 13%, var(--spott-surface));
+  --amber: var(--spott-amber);
+  --danger: var(--spott-danger);
+  --focus: var(--spott-twilight);
   --shadow-sm: 0 8px 24px rgb(14 16 20 / 7%);
   --shadow-lg: 0 26px 64px rgb(14 16 20 / 14%);
   --radius-sm: 10px;
@@ -36,7 +37,6 @@ html {
 
 body {
   margin: 0;
-  min-width: 320px;
   background: var(--canvas);
   color: var(--ink);
   font-family: var(--font-inter), var(--font-noto-sc), var(--font-noto-jp), system-ui, sans-serif;
@@ -3326,8 +3326,8 @@ body:has(.studio-page) > .mobile-dock {
   *::before,
   *::after {
     scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
-    animation-duration: 0.01ms !important;
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
   }
 }

@@ -16,7 +16,9 @@
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@spott/design-tokens": "workspace:*",
     "drizzle-orm": "0.45.2",
+    "maplibre-gl": "^5.24.0",
     "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6",

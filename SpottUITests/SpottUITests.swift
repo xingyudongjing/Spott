@@ -46,6 +46,26 @@ final class SpottUITests: XCTestCase {
     }
 
     @MainActor
+    func testEachSystemTabRetainsItsOwnNavigationPath() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        XCTAssertTrue(app.buttons["通知"].waitForExistence(timeout: 5))
+        app.buttons["通知"].tap()
+        XCTAssertTrue(app.navigationBars["通知"].waitForExistence(timeout: 3))
+
+        app.tabBars.buttons["社群"].tap()
+        XCTAssertFalse(app.navigationBars["通知"].exists)
+
+        app.tabBars.buttons["发现"].tap()
+        XCTAssertTrue(
+            app.navigationBars["通知"].waitForExistence(timeout: 3),
+            "切换 Tab 后，发现 Tab 的原生 NavigationStack 应保留自己的路径"
+        )
+        XCTAssertEqual(app.tabBars.count, 1)
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {

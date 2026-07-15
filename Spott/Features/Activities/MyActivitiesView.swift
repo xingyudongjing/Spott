@@ -131,7 +131,7 @@ struct MyActivitiesView: View {
                 message: selection.emptyMessage,
                 actionTitle: selection == .upcoming ? "去发现活动" : nil
             ) {
-                if selection == .upcoming { model.selectedTab = .discovery }
+                if selection == .upcoming { model.router.selectedTab = .discovery }
             }
         } else {
             ForEach(filteredItems) { item in

@@ -3,25 +3,6 @@ import Observation
 import SwiftUI
 import UIKit
 
-enum AppTab: Hashable, Sendable { case discovery, activities, create, groups, profile }
-
-enum AppRoute: Hashable, Sendable {
-    case event(EventSummary)
-    case wallet
-    case notifications
-    case hostStudio
-    case settings
-    case group(UUID)
-    case profile(String)
-}
-
-enum AppGate: String, Identifiable, Sendable {
-    case login
-    case phoneVerification
-    case notificationPermission
-    var id: String { rawValue }
-}
-
 enum ViewLoadState<Value: Sendable>: Sendable {
     case initial
     case loading
@@ -46,8 +27,6 @@ struct SyncBannerState: Equatable, Sendable {
 @MainActor
 @Observable
 final class AppModel {
-    var selectedTab: AppTab = .discovery
-    var discoveryPath: [AppRoute] = []
     var presentedGate: AppGate?
     var eventState: ViewLoadState<[EventSummary]> = .initial
     var session: UserSession?
@@ -59,6 +38,7 @@ final class AppModel {
     let analytics: AnalyticsClient
     let persistence: PersistenceStore
     let sync: SyncEngine
+    let router: AppRouter
 
     init(
         api: SpottAPIClient,
@@ -70,6 +50,7 @@ final class AppModel {
         self.analytics = analytics
         self.persistence = persistence
         self.sync = sync
+        router = AppRouter()
     }
 
     func bootstrap() async {
@@ -118,7 +99,9 @@ final class AppModel {
         banner = nil
     }
 
-    func show(event: EventSummary) { discoveryPath.append(.event(event)) }
+    func show(event: EventSummary, in tab: AppTab? = nil) {
+        router.show(event: event, in: tab)
+    }
 
     func trackAnalytics(_ signal: P0AnalyticsSignal) {
         Task { [analytics] in
@@ -126,9 +109,28 @@ final class AppModel {
         }
     }
 
-    func requireTrust(for action: EventAction, destination: () -> Void) {
-        guard session != nil else { presentedGate = .login; return }
+    func requireTrust(
+        for action: EventAction,
+        event: EventSummary? = nil,
+        draft: DeferredRegistrationDraft = .init(),
+        destination: () -> Void
+    ) {
+        guard session != nil else {
+            if let event, [.register, .joinWaitlist].contains(action) {
+                router.deferRegistration(for: event, action: action, draft: draft, requiring: .login)
+            }
+            presentedGate = .login
+            return
+        }
         guard session?.user.phoneVerified == true || !action.requiresPhone else {
+            if let event, [.register, .joinWaitlist].contains(action) {
+                router.deferRegistration(
+                    for: event,
+                    action: action,
+                    draft: draft,
+                    requiring: .phoneVerification
+                )
+            }
             presentedGate = .phoneVerification
             return
         }
@@ -136,22 +138,16 @@ final class AppModel {
     }
 
     func open(url: URL) {
-        let components = url.pathComponents.filter { $0 != "/" }
-        guard components.count >= 2 else { return }
-        Task {
+        Task { @MainActor in
             do {
+                if await router.open(url: url) { return }
+                guard router.isTrustedDeepLink(url) else { return }
+                let components = url.pathComponents.filter { $0 != "/" }
+                guard components.count >= 2 else { return }
                 switch components[0] {
-                case "e":
-                    let event = try await api.event(identifier: components[1])
-                    selectedTab = .discovery
-                    discoveryPath = [.event(event)]
                 case "g":
                     let group = try await api.group(identifier: components[1])
-                    selectedTab = .discovery
-                    discoveryPath = [.group(group.id)]
-                case "u":
-                    selectedTab = .discovery
-                    discoveryPath = [.profile(components[1])]
+                    router.push(.group(group.id), in: .groups, selectingExplicitTab: true)
                 case "s":
                     let resolution = try await api.resolveShareLink(code: components[1])
                     await openShareResolution(resolution)
@@ -165,16 +161,19 @@ final class AppModel {
     }
 
     private func openShareResolution(_ resolution: ShareLinkResolution) async {
-        selectedTab = .discovery
         switch resolution.resourceType {
         case "event":
             if let event = try? await api.event(identifier: resolution.resourceId.uuidString.lowercased()) {
-                discoveryPath = [.event(event)]
+                router.show(event: event, in: .discovery)
             }
         case "group":
-            discoveryPath = [.group(resolution.resourceId)]
+            router.push(.group(resolution.resourceId), in: .groups, selectingExplicitTab: true)
         case "profile":
-            discoveryPath = [.profile(resolution.resourceId.uuidString.lowercased())]
+            router.push(
+                .profile(resolution.resourceId.uuidString.lowercased()),
+                in: .profile,
+                selectingExplicitTab: true
+            )
         default:
             break
         }
@@ -185,8 +184,22 @@ final class AppModel {
     }
 
     func didAuthenticate(_ newSession: UserSession) {
+        let completedGate = presentedGate
+        if let previousUserID = session?.user.id, previousUserID != newSession.user.id {
+            router.resetSensitiveNavigation()
+        }
         session = newSession
-        presentedGate = newSession.user.phoneVerified ? nil : .phoneVerification
+        if newSession.user.phoneVerified {
+            presentedGate = nil
+            if let completedGate {
+                router.resumeDeferredIntent(after: completedGate)
+            }
+        } else {
+            if router.deferredRegistrationIntent != nil {
+                router.transitionDeferredIntent(to: .phoneVerification)
+            }
+            presentedGate = .phoneVerification
+        }
         Task {
             try? await sync.bootstrap(userID: newSession.user.id)
             await reconcileStorePurchases()
@@ -238,12 +251,19 @@ final class AppModel {
             )
         )
         presentedGate = nil
+        router.resumeDeferredIntent(after: .phoneVerification)
+    }
+
+    func cancelPresentedGate() {
+        router.cancelDeferredIntent()
+        presentedGate = nil
     }
 
     func signOut() {
         GoogleSignInManager.shared.signOut()
         session = nil
         presentedGate = nil
+        router.resetSensitiveNavigation()
         Task { try? await api.signOut(); try? await sync.resetSensitiveScope(reason: .signOut) }
     }
 

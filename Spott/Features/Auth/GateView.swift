@@ -68,7 +68,10 @@ private struct LoginView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("关闭") { dismiss() }
+                    Button("关闭") {
+                        model.cancelPresentedGate()
+                        dismiss()
+                    }
                 }
             }
         }
@@ -167,11 +170,13 @@ private struct LoginView: View {
             .buttonStyle(PrimaryButtonStyle())
             .disabled(busy || !emailIsValid || (challenge != nil && code.count != 6))
 
+#if DEBUG
             if let developmentCode = challenge?.developmentCode {
                 Label("本地开发验证码：\(developmentCode)", systemImage: "hammer")
                     .font(.caption.monospaced())
                     .foregroundStyle(SpottColor.amber)
             }
+#endif
 
             if let error {
                 Label(error.message, systemImage: "exclamationmark.circle.fill")
@@ -286,10 +291,16 @@ private struct LoginView: View {
                     )
                     model.didAuthenticate(session)
                 } else {
-                    challenge = try await model.api.requestEmailCode(
+                    let response = try await model.api.requestEmailCode(
                         email: email.trimmingCharacters(in: .whitespacesAndNewlines),
                         deviceID: DeviceIdentity.current
                     )
+                    challenge = response
+#if DEBUG
+                    if let developmentCode = response.developmentCode {
+                        code = developmentCode
+                    }
+#endif
                     focusedField = .code
                 }
             } catch {
@@ -377,11 +388,13 @@ private struct PhoneVerificationView: View {
                             .font(.system(size: 13, weight: .semibold, design: .rounded))
                             .foregroundStyle(SpottColor.mint)
 
+#if DEBUG
                         if let developmentCode = challenge?.developmentCode {
                             Text("本地开发验证码：\(developmentCode)")
                                 .font(.caption.monospaced())
                                 .foregroundStyle(SpottColor.amber)
                         }
+#endif
                         if let error {
                             Label(error.message, systemImage: "exclamationmark.circle.fill")
                                 .font(.caption)
@@ -393,6 +406,11 @@ private struct PhoneVerificationView: View {
             }
             .navigationTitle("安全验证")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { model.cancelPresentedGate() }
+                }
+            }
         }
     }
 
@@ -431,10 +449,16 @@ private struct PhoneVerificationView: View {
                         model.markPhoneVerified()
                     }
                 } else {
-                    challenge = try await model.api.requestPhoneCode(
+                    let response = try await model.api.requestPhoneCode(
                         phone: normalizedPhone,
                         deviceID: DeviceIdentity.current
                     )
+                    challenge = response
+#if DEBUG
+                    if let developmentCode = response.developmentCode {
+                        code = developmentCode
+                    }
+#endif
                 }
             } catch {
                 self.error = AppModel.map(error)

@@ -6,6 +6,7 @@ struct EventDetailView: View {
     @Environment(AppModel.self) private var model
     @State private var detail: EventSummary
     @State private var registrationPresented = false
+    @State private var registrationDraft = DeferredRegistrationDraft()
     @State private var favorited: Bool
     @State private var notice: String?
     @State private var busy = false
@@ -18,7 +19,7 @@ struct EventDetailView: View {
 
     init(event: EventSummary) {
         _detail = State(initialValue: event)
-        _favorited = State(initialValue: event.favorited ?? false)
+        _favorited = State(initialValue: event.favorited)
     }
 
     var body: some View {
@@ -98,7 +99,7 @@ struct EventDetailView: View {
             }
         }
         .sheet(isPresented: $registrationPresented) {
-            RegistrationSheet(event: detail) { registration in
+            RegistrationSheet(event: detail, draft: registrationDraft) { registration in
                 detail.registrationStatus = registration.status
                 detail.availableActions = registration.availableActions ?? [.cancelRegistration, .viewTicket]
                 notice = registration.status == "waitlisted" ? "已加入候补。" : "报名成功，已同步到你的行程。"
@@ -139,9 +140,15 @@ struct EventDetailView: View {
             async let feedbackRequest = try? model.api.feedbackSummary(eventID: detail.id)
             if let current = await eventRequest {
                 detail = current
-                favorited = current.favorited ?? favorited
+                favorited = current.favorited
             }
             feedbackSummary = await feedbackRequest
+        }
+        .task(id: model.router.pendingRegistrationPresentation?.id) {
+            let reference = EventRouteReference(event: detail)
+            guard let intent = model.router.takeRegistrationPresentation(for: reference) else { return }
+            registrationDraft = intent.draft
+            registrationPresented = true
         }
     }
 
@@ -218,7 +225,7 @@ struct EventDetailView: View {
     private var aboutSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("关于这次活动").font(.system(size: 21, weight: .bold, design: .rounded))
-            Text(detail.description ?? "活动详情由局头持续补充中。")
+            Text(detail.description)
                 .font(.body)
                 .foregroundStyle(SpottColor.ink.opacity(0.88))
                 .lineSpacing(6)
@@ -296,14 +303,16 @@ struct EventDetailView: View {
     }
 
     private func perform(_ action: EventAction) {
-        model.requireTrust(for: action) {
+        model.requireTrust(for: action, event: detail) {
             switch action {
-            case .register, .joinWaitlist: registrationPresented = true
-            case .viewTicket: model.selectedTab = .activities
+            case .register, .joinWaitlist:
+                registrationDraft = .init()
+                registrationPresented = true
+            case .viewTicket: model.router.selectedTab = .activities
             case .checkIn: openCheckIn()
             case .cancelRegistration: cancelRegistration()
             case .joinGroup:
-                if let id = detail.groupId { model.discoveryPath.append(.group(id)) }
+                if let id = detail.groupId { model.router.push(.group(id)) }
             default: notice = "操作入口已准备。"
             }
         }
@@ -789,12 +798,25 @@ private struct RegistrationSheet: View {
     @Environment(\.dismiss) private var dismiss
     let event: EventSummary
     let completion: (Registration) -> Void
-    @State private var partySize = 1
-    @State private var joinWaitlist = true
-    @State private var answers: [UUID: RegistrationAnswer] = [:]
-    @State private var attendeeNote = ""
+    @State private var partySize: Int
+    @State private var joinWaitlist: Bool
+    @State private var answers: [UUID: RegistrationAnswer]
+    @State private var attendeeNote: String
     @State private var submitting = false
     @State private var error: UserFacingError?
+
+    init(
+        event: EventSummary,
+        draft: DeferredRegistrationDraft = .init(),
+        completion: @escaping (Registration) -> Void
+    ) {
+        self.event = event
+        self.completion = completion
+        _partySize = State(initialValue: draft.partySize)
+        _joinWaitlist = State(initialValue: draft.joinWaitlistIfFull)
+        _answers = State(initialValue: draft.answers)
+        _attendeeNote = State(initialValue: draft.attendeeNote)
+    }
 
     var body: some View {
         NavigationStack {

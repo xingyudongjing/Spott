@@ -31,7 +31,6 @@ struct SpottApp: App {
             AppRootView()
                 .environment(model)
                 .environment(\.locale, (AppLanguage(rawValue: appLanguage) ?? .system).locale)
-                .preferredColorScheme(.light)
                 .task { await model.bootstrap() }
                 .onReceive(NotificationCenter.default.publisher(for: .spottPushTokenUpdated)) { _ in
                     Task { await model.registerPendingPushToken() }

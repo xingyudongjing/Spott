@@ -84,7 +84,7 @@ private struct DiscoveryTopBar: View {
                     accessibilityLabel: mapMode ? "显示列表" : "显示地图"
                 ) { mapMode.toggle() }
                 topButton(icon: "bell", accessibilityLabel: "通知") {
-                    model.discoveryPath.append(.notifications)
+                    model.router.push(.notifications)
                 }
             }
             HStack(spacing: 10) {
@@ -246,7 +246,7 @@ private struct EventFeed: View {
     }
 
     private var hostInvitation: some View {
-        Button { model.selectedTab = .create } label: {
+        Button { model.router.selectedTab = .create } label: {
             HStack(spacing: 14) {
                 ZStack {
                     Circle().fill(SpottColor.twilightPale).frame(width: 46, height: 46)

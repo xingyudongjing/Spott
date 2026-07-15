@@ -4,18 +4,18 @@ struct AppRootView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        @Bindable var model = model
+        @Bindable var router = model.router
         Group {
             if #available(iOS 26.0, *) {
-                appTabs(selection: $model.selectedTab)
+                appTabs(selection: $router.selectedTab)
                     .tabBarMinimizeBehavior(.onScrollDown)
             } else {
-                appTabs(selection: $model.selectedTab)
+                appTabs(selection: $router.selectedTab)
             }
         }
         .tint(SpottColor.twilight)
-        .sheet(item: $model.presentedGate) { gate in
-            GateView(gate: gate)
+        .sheet(isPresented: presentedGateBinding) {
+            GatePresentationView()
                 .presentationDetents([.medium, .large])
         }
         .overlay(alignment: .top) {
@@ -27,41 +27,63 @@ struct AppRootView: View {
         }
     }
 
+    private var presentedGateBinding: Binding<Bool> {
+        Binding(
+            get: { model.presentedGate != nil },
+            set: { isPresented in
+                if !isPresented, model.presentedGate != nil {
+                    model.cancelPresentedGate()
+                }
+            }
+        )
+    }
+
     private func appTabs(selection: Binding<AppTab>) -> some View {
-        @Bindable var model = model
         return TabView(selection: selection) {
-            NavigationStack(path: $model.discoveryPath) {
+            NavigationStack(path: model.router.binding(for: .discovery)) {
                 DiscoveryView()
-                    .navigationDestination(for: AppRoute.self) { route in
-                        RouteView(route: route)
-                    }
+                    .appRouteDestinations()
             }
             .tabItem { Label("发现", systemImage: "safari") }
             .tag(AppTab.discovery)
 
-            NavigationStack {
-                MyActivitiesView()
-            }
-            .tabItem { Label("行程", systemImage: "calendar") }
-            .tag(AppTab.activities)
-
-            NavigationStack {
-                EventComposerView()
-            }
-            .tabItem { Label("创建", systemImage: "plus") }
-            .tag(AppTab.create)
-
-            NavigationStack {
+            NavigationStack(path: model.router.binding(for: .groups)) {
                 GroupsHomeView()
+                    .appRouteDestinations()
             }
             .tabItem { Label("社群", systemImage: "person.2") }
             .tag(AppTab.groups)
 
-            NavigationStack {
+            NavigationStack(path: model.router.binding(for: .create)) {
+                EventComposerView()
+                    .appRouteDestinations()
+            }
+            .tabItem { Label("创建", systemImage: "plus") }
+            .tag(AppTab.create)
+
+            NavigationStack(path: model.router.binding(for: .activities)) {
+                MyActivitiesView()
+                    .appRouteDestinations()
+            }
+            .tabItem { Label("行程", systemImage: "calendar") }
+            .tag(AppTab.activities)
+
+            NavigationStack(path: model.router.binding(for: .profile)) {
                 ProfileHomeView()
+                    .appRouteDestinations()
             }
             .tabItem { Label("我的", systemImage: "person") }
             .tag(AppTab.profile)
+        }
+    }
+}
+
+private struct GatePresentationView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if let gate = model.presentedGate {
+            GateView(gate: gate)
         }
     }
 }
@@ -71,13 +93,69 @@ private struct RouteView: View {
 
     var body: some View {
         switch route {
-        case .event(let event): EventDetailView(event: event)
+        case .event(let reference): RoutedEventView(reference: reference)
         case .wallet: WalletView()
         case .notifications: NotificationsView()
         case .hostStudio: HostStudioView()
         case .settings: SettingsView()
         case .group(let id): GroupDetailView(groupID: id)
         case .profile(let identifier): PublicProfileView(identifier: identifier)
+        }
+    }
+}
+
+private extension View {
+    func appRouteDestinations() -> some View {
+        navigationDestination(for: AppRoute.self) { route in
+            RouteView(route: route)
+        }
+    }
+}
+
+private struct RoutedEventView: View {
+    @Environment(AppModel.self) private var model
+    let reference: EventRouteReference
+    @State private var event: EventSummary?
+    @State private var error: UserFacingError?
+
+    var body: some View {
+        Group {
+            if let event {
+                EventDetailView(event: event)
+            } else if let error {
+                SpottStateCard(
+                    icon: "calendar.badge.exclamationmark",
+                    title: "无法打开活动",
+                    message: error.message,
+                    actionTitle: "重新加载"
+                ) {
+                    Task { await load(force: true) }
+                }
+                .padding(SpottMetric.pageInset)
+            } else {
+                ProgressView("正在加载活动…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .background(SpottColor.canvas.ignoresSafeArea())
+        .task(id: reference) { await load(force: false) }
+    }
+
+    private func load(force: Bool) async {
+        if !force, let cached = model.router.cachedEvent(for: reference) {
+            event = cached
+        }
+        guard !reference.identifier.isEmpty else {
+            error = .init(id: "EVENT_ROUTE_INVALID", message: "活动链接无效。", retryable: false)
+            return
+        }
+        do {
+            let current = try await model.api.event(identifier: reference.identifier)
+            model.router.cache(event: current)
+            event = current
+            error = nil
+        } catch {
+            if event == nil { self.error = AppModel.map(error) }
         }
     }
 }

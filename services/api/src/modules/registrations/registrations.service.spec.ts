@@ -313,6 +313,7 @@ function itineraryRow(overrides: Record<string, unknown> = {}) {
     itinerary_locale_confirmed_at: new Date('2026-07-01T00:00:00.000Z'),
     itinerary_version: '7',
     itinerary_updated_at: new Date('2026-07-15T02:00:00.000Z'),
+    itinerary_checkin_eligible: false,
     ...overrides,
   };
 }
@@ -340,7 +341,7 @@ describe('RegistrationsService privacy-safe itinerary pagination', () => {
           partySize: 2,
           attendeeNote: null,
           offerExpiresAt: null,
-          availableActions: ['cancelRegistration', 'viewTicket', 'checkIn'],
+          availableActions: ['cancelRegistration', 'viewTicket'],
           version: 4,
           updatedAt: '2026-07-16T02:00:00.000Z',
         },
@@ -382,6 +383,41 @@ describe('RegistrationsService privacy-safe itinerary pagination', () => {
     expect(sql).toContain("asset.moderation_state = 'approved'");
     expect(sql).toContain('FROM events.waitlist_promotions');
     expect(sql).toContain('offer.expires_at > itinerary_clock.server_time');
+    expect(sql).toContain('FROM admin.config_revisions');
+    expect(sql).toContain("revision.state = 'active'");
+    expect(sql).toContain('revision.effective_from <= itinerary_clock.server_time');
+    expect(sql).toContain('revision.effective_to > itinerary_clock.server_time');
+    expect(sql).toMatch(
+      /COALESCE\([\s\S]*?checkin\.window\.before_minutes[\s\S]*?,\s*60\s*\) AS before_minutes/,
+    );
+    expect(sql).toMatch(
+      /COALESCE\([\s\S]*?checkin\.window\.after_minutes[\s\S]*?,\s*120\s*\) AS after_minutes/,
+    );
+    expect(sql).toContain('itinerary_clock.server_time >= event.starts_at');
+    expect(sql).toContain('itinerary_clock.server_time <= event.ends_at');
+    expect(sql).toContain('AS itinerary_checkin_eligible');
+  });
+
+  it('includes checkIn only when the database marks a confirmed itinerary row inside the window', async () => {
+    const query = vi.fn().mockResolvedValue({
+      rows: [itineraryRow({
+        itinerary_starts_at: new Date('2026-07-16T03:30:00.000Z'),
+        itinerary_ends_at: new Date('2026-07-16T05:00:00.000Z'),
+        itinerary_checkin_eligible: true,
+      })],
+    });
+    const service = new RegistrationsService({ query } as never, {} as never, {} as never);
+
+    const page = await service.mine('019b0000-0000-7000-8000-000000000001') as {
+      items: Array<{ registration: { availableActions: string[] } }>;
+    };
+
+    expect(page.items[0]?.registration.availableActions).toEqual([
+      'cancelRegistration',
+      'viewTicket',
+      'checkIn',
+    ]);
+    expect(query).toHaveBeenCalledOnce();
   });
 
   it('keeps a registration when its event is unavailable', async () => {
@@ -407,11 +443,12 @@ describe('RegistrationsService privacy-safe itinerary pagination', () => {
     const service = new RegistrationsService({ query } as never, {} as never, {} as never);
 
     const page = await service.mine('019b0000-0000-7000-8000-000000000001') as {
-      items: Array<{ registration: { id: string }; event: unknown }>;
+      items: Array<{ registration: { id: string; availableActions: string[] }; event: unknown }>;
     };
 
     expect(page.items).toHaveLength(1);
     expect(page.items[0]?.registration.id).toBe('019b0000-0000-7000-8200-000000000003');
+    expect(page.items[0]?.registration.availableActions).not.toContain('checkIn');
     expect(page.items[0]?.event).toBeNull();
   });
 

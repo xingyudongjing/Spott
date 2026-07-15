@@ -38,6 +38,7 @@ interface RegistrationItineraryRow extends RegistrationRow {
   itinerary_locale_confirmed_at: Date | null;
   itinerary_version: string | null;
   itinerary_updated_at: Date | null;
+  itinerary_checkin_eligible: boolean;
 }
 
 interface RegistrationQuestionRow {
@@ -556,6 +557,34 @@ export class RegistrationsService {
     const result = await this.database.query<RegistrationItineraryRow>(
       `WITH itinerary_clock AS (
          SELECT clock_timestamp() AS server_time
+       ), active_checkin_config AS (
+         SELECT DISTINCT ON (revision.key)
+           revision.key, revision.value_json
+         FROM admin.config_revisions revision
+         CROSS JOIN itinerary_clock
+         WHERE revision.key IN (
+             'checkin.window.before_minutes',
+             'checkin.window.after_minutes'
+           )
+           AND revision.state = 'active'
+           AND (revision.effective_from IS NULL
+             OR revision.effective_from <= itinerary_clock.server_time)
+           AND (revision.effective_to IS NULL
+             OR revision.effective_to > itinerary_clock.server_time)
+         ORDER BY revision.key, revision.version DESC
+       ), checkin_window AS (
+         SELECT
+           COALESCE(
+             MAX((config.value_json #>> '{}')::bigint)
+               FILTER (WHERE config.key = 'checkin.window.before_minutes'),
+             60
+           ) AS before_minutes,
+           COALESCE(
+             MAX((config.value_json #>> '{}')::bigint)
+               FILTER (WHERE config.key = 'checkin.window.after_minutes'),
+             120
+           ) AS after_minutes
+         FROM active_checkin_config config
        )
        SELECT itinerary_clock.server_time, r.*,
          promotion.expires_at AS offer_expires_at,
@@ -573,8 +602,17 @@ export class RegistrationsService {
          event.primary_locale AS itinerary_primary_locale,
          event.locale_confirmed_at AS itinerary_locale_confirmed_at,
          event.version::text AS itinerary_version,
-         event.updated_at AS itinerary_updated_at
+         event.updated_at AS itinerary_updated_at,
+         (
+           r.status = 'confirmed'
+           AND event.id IS NOT NULL
+           AND itinerary_clock.server_time >= event.starts_at
+             - checkin_window.before_minutes * interval '1 minute'
+           AND itinerary_clock.server_time <= event.ends_at
+             + checkin_window.after_minutes * interval '1 minute'
+         ) AS itinerary_checkin_eligible
        FROM itinerary_clock
+       CROSS JOIN checkin_window
        LEFT JOIN events.registrations r
          ON r.user_id = $1
          AND r.deleted_at IS NULL
@@ -625,7 +663,7 @@ export class RegistrationsService {
     const last = page.at(-1);
     return {
       items: page.map((row) => ({
-        registration: this.toView(row),
+        registration: this.toView(row, row.itinerary_checkin_eligible),
         event: this.toItineraryEvent(row),
       })),
       hasMore,
@@ -1062,11 +1100,14 @@ export class RegistrationsService {
     );
   }
 
-  private toView(row: RegistrationRow): Record<string, unknown> {
+  private toView(row: RegistrationRow, checkInEligible = true): Record<string, unknown> {
     const actions: AvailableAction[] = [];
     if (['pending', 'confirmed', 'waitlisted', 'offered'].includes(row.status)) actions.push('cancelRegistration');
     if (row.status === 'offered') actions.push('register');
-    if (row.status === 'confirmed') actions.push('viewTicket', 'checkIn');
+    if (row.status === 'confirmed') {
+      actions.push('viewTicket');
+      if (checkInEligible) actions.push('checkIn');
+    }
     return {
       id: row.id,
       eventId: row.event_id,

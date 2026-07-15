@@ -599,7 +599,7 @@ git commit -m "feat(ui): share discovery and event action semantics"
 - Modify: `Spott/Core/API/SpottAPIClient.swift`
 - Create: `SpottTests/ItineraryContractTests.swift`
 
-- [ ] **Step 1: 写行程契约与稳定游标 Red 测试**
+- [x] **Step 1: 写行程契约与稳定游标 Red 测试**
 
 `GET /me/registrations` 不得让 Web/iOS 再逐条请求活动详情。测试先断言返回每项包含 registration 与隐私安全的 `event` 摘要，同时两条相同 `updated_at` 的 registration 跨页无重复/跳项；cursor 固定编码 `(updated_at,id)`，不能只编码时间。
 
@@ -612,15 +612,15 @@ RegistrationItineraryItem: { registration: Registration, event: ItineraryEventSu
 RegistrationItineraryPage: { items, nextCursor|null, hasMore, serverTime }
 ```
 
-- [ ] **Step 2: 用单次参数化查询返回行程摘要**
+- [x] **Step 2: 用单次参数化查询返回行程摘要**
 
 `mine` 在同一 SQL 中 join event/location/首张可见 cover 和最新未过期 promotion，按 `r.updated_at DESC,r.id DESC` 稳定分页；活动被删除/无权查看时 `event:null`，仍保留报名状态供用户理解，不静默丢项。`serverTime` 来自数据库/服务端，使 offered 到期和 upcoming/past 分组不依赖不可信设备时钟。
 
-- [ ] **Step 3: 同步 OpenAPI 与双端模型**
+- [x] **Step 3: 同步 OpenAPI 与双端模型**
 
 生成 bundle/client 后，Web Zod 与 Swift Codable 都严格解析上述结构；三端测试拒绝 exactAddress/exact coordinate/join URL 等越权字段。现有详情 API 仍在用户打开行程项后按需调用，不在列表 N+1 请求。
 
-- [ ] **Step 4: 验证并提交**
+- [x] **Step 4: 验证并提交**
 
 ```bash
 PATH=/opt/homebrew/opt/node@24/bin:$PATH pnpm --filter @spott/api test -- registrations.service.spec.ts
@@ -672,13 +672,13 @@ git commit -m "feat(itinerary): return privacy-safe event summaries"
 - Modify: `apps/web/package.json`
 - Modify: `pnpm-lock.yaml`
 
-- [ ] **Step 1: 写发现界面 Red 组件测试**
+- [x] **Step 1: 写发现界面 Red 组件测试**
 
 用 Testing Library 断言：390px 首屏 DOM 顺序在搜索后立即出现第一张真实卡；筛选改变会更新 URL 和 API 查询；late response 不覆盖新查询；加载更多不会去重掩盖服务端游标错误；无 MapLibre 样式 URL 时不出现地图切换；有坐标只渲染真实 marker；错误时保留旧列表并显示 live region。Playwright 渲染测试再断言 390×844 第一活动媒体/标题 `top <= 330`、360×800 `top <= 360`，页面无横向溢出且所有可见主交互命中区至少 44×44。
 
 先把 `maplibre-gl` 与 `@spott/design-tokens` 加入 Web dependencies 并更新 lockfile；测试只替换 MapLibre 的 WebGL 边界，不断言 mock marker，自身断言来自真实 `EventSummary.coordinate` 到 adapter input 的行为。测试必须覆盖 `/discover` 首次 SSR 不重复请求、back/forward 恢复全部筛选、`hasMore=true` 但无 cursor 的显式 contract 错误、初始错误不与 empty 同时出现。
 
-- [ ] **Step 2: 将状态改为 URL 驱动、可取消请求**
+- [x] **Step 2: 将状态改为 URL 驱动、可取消请求**
 
 `/discover` 在服务端解析 `searchParams` 并取得一次 `initialPage`；根路由重定向或复用同一 server helper，不维护第二套发现实现。`DiscoveryShell` 仅持有 `EventPage`、pending/error、selected event 和 list/map mode；筛选从 URL 解析。搜索 300ms 防抖，每个请求拥有 `AbortController` 与单调 request sequence：
 
@@ -692,21 +692,21 @@ if (!controller.signal.aborted) setPage(page);
 
 删除现有 `filtered`/`tokyoParts` 客户端成员过滤和硬编码 categories/regions 三语对象，选项标签由 i18n key 提供。popstate 恢复 URL 状态只触发一次请求；刷新失败保留旧页面，AbortError 不显示为失败；服务端返回重复 id 时不得由 UI 去重掩盖游标错误。
 
-- [ ] **Step 3: 实现 Quiet Confidence 首屏**
+- [x] **Step 3: 实现 Quiet Confidence 首屏**
 
 桌面：紧凑标题/搜索/地区/列表地图切换，下面立即是单一带边界的活动列表表面；不使用大 Hero，也不把每一项拆成漂浮 dashboard 卡。移动 Web：针对拇指与单手操作重排为高完成度内容卡，目标 y=210–260，390×844 最晚 y=330、360×800 最晚 y=360 出现第一张卡标题或封面，不是简单缩小桌面。两端都显示本地化时间、公开区域、结构化价格、format、语言确认状态、余位/候补和真实 organizer trust；无 cover 使用抽象类别占位，不造摄影图、城市、时间或活动事实。卡片只有一个整体主链接，不嵌套互相竞争的链接。
 
-- [ ] **Step 4: 懒加载 MapLibre 适配层**
+- [x] **Step 4: 懒加载 MapLibre 适配层**
 
 仅在 `NEXT_PUBLIC_MAP_STYLE_URL` 存在且用户切换地图时 `dynamic import('maplibre-gl')`。marker 只来自非空 `coordinate`，`precision === 'approximate'` 显示本地化“约在此区域”。地图和列表共享 `EventDiscoveryQuery`；移动/缩放完成后防抖、归一化并仅在真实变化时更新 `bounds` URL，忽略首次程序化相机移动，避免 URL↔地图循环。无坐标活动仍留在旁边列表；切换/卸载移除 listeners、markers、observer 并调用 `map.remove()`；style/CORS/WebGL 失败回到仍可用的真实列表。
 
-- [ ] **Step 5: 完成响应式、深浅色、键盘与减少动态**
+- [x] **Step 5: 完成响应式、深浅色、键盘与减少动态**
 
 新旅程样式优先使用 scoped CSS module 并导入共享 design tokens，不继续堆叠全局覆盖。CSS 值映射 design tokens：12 control、18 card、24 cover、28 panel；交互 44px；焦点可见；移除 `body min-width: 320px`；360/390/768/1440 与 200% zoom 无页面级横向滚动（只允许明确 chip rail 横滚）；`prefers-reduced-motion` 将过渡降至 1ms；`prefers-contrast` 加强边界。Header/dock 当前路由带 `aria-current="page"`，移动 header 保留地区与通知；详情/报名页不得与全局 dock 叠加。
 
 `EventCover` 使用安全的远程图片策略或首方代理，移除无理由的 `unoptimized`，提供准确 `sizes`，只有首张 LCP cover 可 priority。生产构建验证首屏 chunk 不包含 MapLibre。
 
-- [ ] **Step 6: 验证与提交 Web 发现**
+- [x] **Step 6: 验证与提交 Web 发现**
 
 ```bash
 PATH=/opt/homebrew/opt/node@24/bin:$PATH pnpm --filter @spott/web test:unit -- DiscoveryShell EventCard

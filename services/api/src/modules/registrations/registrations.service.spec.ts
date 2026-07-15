@@ -375,6 +375,7 @@ describe('RegistrationsService privacy-safe itinerary pagination', () => {
       21,
     ]);
     expect(sql).toContain('LEFT JOIN events.events');
+    expect(sql).toContain('AND r.deleted_at IS NULL');
     expect(sql).toContain('LEFT JOIN events.event_locations');
     expect(sql).toContain('FROM events.event_media');
     expect(sql).toContain("asset.state = 'ready'");

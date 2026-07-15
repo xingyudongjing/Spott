@@ -577,6 +577,7 @@ export class RegistrationsService {
        FROM itinerary_clock
        LEFT JOIN events.registrations r
          ON r.user_id = $1
+         AND r.deleted_at IS NULL
          AND ($2::timestamptz IS NULL
            OR (r.updated_at, r.id) < ($2::timestamptz, $3::uuid))
        LEFT JOIN LATERAL (

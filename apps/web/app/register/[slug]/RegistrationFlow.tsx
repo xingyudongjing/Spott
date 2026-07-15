@@ -18,7 +18,7 @@ interface Quote {
 
 export function RegistrationFlow({ event }: { event: EventView }) {
   const { locale, t } = useI18n();
-  const [accepted, setAccepted] = useState(event.fee.isFree);
+  const [accepted, setAccepted] = useState(event.fee?.isFree ?? false);
   const [partySize, setPartySize] = useState(1);
   const [answers, setAnswers] = useState<Record<string, string | boolean>>({});
   const [attendeeNote, setAttendeeNote] = useState('');
@@ -287,7 +287,7 @@ export function RegistrationFlow({ event }: { event: EventView }) {
             />
             <span>
               <strong>{t('registration.acceptFee')}</strong>
-              <small>{event.fee.boundaryStatement}</small>
+              <small>{event.fee?.boundaryStatement ?? ''}</small>
             </span>
           </label>
           <div className="points-confirm">

@@ -155,6 +155,8 @@ describe('worker job registry', () => {
       query: async (text: string, values: readonly unknown[] = []) => {
         if (text.includes('WITH due AS')) {
           expect(text).toContain("r.status = 'offered'");
+          expect(text).toContain('FOR UPDATE OF r SKIP LOCKED');
+          expect(text).not.toContain('FOR UPDATE OF p, r');
           return result([{
           registration_id: '50000000-0000-0000-0000-000000000001',
           event_id: '70000000-0000-0000-0000-000000000001',

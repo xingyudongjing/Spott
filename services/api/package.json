@@ -10,7 +10,7 @@
     "lint": "eslint src --max-warnings=0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:integration": "tsx ../../scripts/test-postgis.ts src/modules/events/events.discovery.integration.spec.ts"
+    "test:integration": "tsx ../../scripts/test-postgis.ts src/modules/events/events.discovery.integration.spec.ts src/modules/registrations/registrations.concurrency.integration.spec.ts"
   },
   "dependencies": {
     "@apple/app-store-server-library": "3.1.0",

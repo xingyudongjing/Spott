@@ -323,7 +323,7 @@ struct EventCardView: View {
                         .lineLimit(2)
                     HStack(spacing: 6) {
                         Image(systemName: "location")
-                        Text(verbatim: event.publicArea)
+                        Text(verbatim: event.publicArea ?? "")
                         Text("·")
                         if let time = event.startsAt?.formatted(date: .omitted, time: .shortened) {
                             Text(verbatim: time)

@@ -194,6 +194,27 @@ describe("strict event contracts", () => {
     expect((event as EventSummary & { queryRank: number }).queryRank).toBe(0.93);
   });
 
+  test("preserves nullable draft facts without manufacturing location or fee copy", () => {
+    const draft = {
+      ...summary,
+      status: "draft",
+      region: null,
+      publicArea: null,
+      fee: null,
+    };
+
+    const parsed = parseEventSummary(draft);
+    const normalized = normalizeEvent(draft);
+
+    expect(parsed.region).toBeNull();
+    expect(parsed.publicArea).toBeNull();
+    expect(parsed.fee).toBeNull();
+    expect(normalized.region).toBeNull();
+    expect(normalized.publicArea).toBeNull();
+    expect(normalized.fee).toBeNull();
+    expect(normalized.priceLabel).toBe("");
+  });
+
   test("throws a precise parse error instead of filling missing required facts", () => {
     expect(() => normalizeEvent({ id: summary.id, publicSlug: summary.publicSlug, title: summary.title }))
       .toThrow(EventContractError);
@@ -213,7 +234,7 @@ describe("strict event contracts", () => {
     expect(normalized.categoryLabel).toBe(summary.category);
     expect(normalized.priceLabel).not.toBe("LEGACY PRICE");
     expect(normalized.organizer.reliability).not.toBe("LEGACY TRUST");
-    expect(normalized.fee.boundaryStatement).not.toBe("LEGACY BOUNDARY");
+    expect(normalized.fee?.boundaryStatement).not.toBe("LEGACY BOUNDARY");
   });
 });
 

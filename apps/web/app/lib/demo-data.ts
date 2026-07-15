@@ -21,7 +21,7 @@ export type EventView = Omit<
   coordinate: KnownEventDetail["coordinate"];
   categoryLabel: string;
   priceLabel: string;
-  fee: KnownEventSummary["fee"] & { boundaryStatement?: string };
+  fee: (Exclude<KnownEventSummary["fee"], null> & { boundaryStatement?: string }) | null;
   organizer: KnownEventSummary["organizer"] & { reliability: string };
   exactAddress?: KnownEventDetail["exactAddress"];
   attendeeRequirements?: KnownEventDetail["attendeeRequirements"];

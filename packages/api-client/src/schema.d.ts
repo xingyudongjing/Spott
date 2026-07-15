@@ -2412,6 +2412,9 @@ export interface components {
         EventItems: {
             items: components["schemas"]["EventDetail"][];
         };
+        EventSummaryItems: {
+            items: components["schemas"]["EventSummary"][];
+        };
         RegistrationQuestion: {
             id: components["schemas"]["UUID"];
             prompt: string;
@@ -4153,7 +4156,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EventItems"];
+                    "application/json": components["schemas"]["EventSummaryItems"];
                 };
             };
             401: components["responses"]["Error"];

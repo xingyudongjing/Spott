@@ -10,6 +10,7 @@ import {
   type Role,
 } from '@spott/domain';
 import type { PoolClient } from 'pg';
+import { z } from 'zod';
 import { Database } from '../../platform/database.js';
 import { FieldCrypto } from '../../platform/crypto.js';
 import { IdempotencyService } from '../../platform/idempotency.js';
@@ -17,6 +18,11 @@ import type { AuthenticatedUser } from '../../platform/request-context.js';
 import { PointsService } from '../points/points.service.js';
 import type { DiscoveryQuery, EventFormat, EventLocale } from './events.discovery-query.js';
 import { buildDiscoveryStatement } from './events.discovery-sql.js';
+
+const discoveryCursorSchema = z.object({
+  date: z.iso.datetime({ offset: true }),
+  id: z.uuid(),
+}).strict();
 
 export interface EventDraftInput {
   title?: string | undefined;
@@ -1073,15 +1079,10 @@ export class EventsService {
     if (!cursor) return null;
     try {
       const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown;
-      if (!parsed || typeof parsed !== 'object') throw new Error('invalid');
-      const candidate = parsed as { date?: unknown; id?: unknown };
-      if (typeof candidate.date !== 'string' || typeof candidate.id !== 'string') {
-        throw new Error('invalid');
-      }
-      const date = new Date(candidate.date);
-      const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-      if (Number.isNaN(date.getTime()) || !uuid.test(candidate.id)) throw new Error('invalid');
-      return { date: date.toISOString(), id: candidate.id };
+      const candidate = discoveryCursorSchema.parse(parsed);
+      const canonicalDate = new Date(candidate.date).toISOString();
+      if (candidate.date !== canonicalDate) throw new Error('invalid');
+      return { date: canonicalDate, id: candidate.id };
     } catch {
       throw new DomainError('CURSOR_INVALID', '分页游标无效。', 400);
     }

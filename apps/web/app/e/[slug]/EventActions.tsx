@@ -83,7 +83,7 @@ export function EventActions({ event, remaining }: { event: EventView; remaining
   function addToCalendar() {
     const escape = (value: string) => value.replaceAll("\\", "\\\\").replaceAll("\n", "\\n").replaceAll(",", "\\,").replaceAll(";", "\\;");
     const stamp = (value: string) => new Date(value).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-    const content = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Spott//Events//EN", "BEGIN:VEVENT", `UID:${event.id}@spott.jp`, `DTSTAMP:${stamp(new Date().toISOString())}`, `DTSTART:${stamp(event.startsAt)}`, `DTEND:${stamp(event.endsAt)}`, `SUMMARY:${escape(event.title)}`, `DESCRIPTION:${escape(event.description)}`, `LOCATION:${escape(event.publicArea)}`, `URL:${window.location.origin}/e/${event.publicSlug}`, "END:VEVENT", "END:VCALENDAR"].join("\r\n");
+    const content = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Spott//Events//EN", "BEGIN:VEVENT", `UID:${event.id}@spott.jp`, `DTSTAMP:${stamp(new Date().toISOString())}`, `DTSTART:${stamp(event.startsAt)}`, `DTEND:${stamp(event.endsAt)}`, `SUMMARY:${escape(event.title)}`, `DESCRIPTION:${escape(event.description)}`, `LOCATION:${escape(event.publicArea ?? "")}`, `URL:${window.location.origin}/e/${event.publicSlug}`, "END:VEVENT", "END:VCALENDAR"].join("\r\n");
     const anchor = document.createElement("a");
     anchor.href = URL.createObjectURL(new Blob([content], { type: "text/calendar;charset=utf-8" }));
     anchor.download = `${event.publicSlug}.ics`;

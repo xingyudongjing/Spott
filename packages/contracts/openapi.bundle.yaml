@@ -779,7 +779,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EventItems'
+                $ref: '#/components/schemas/EventSummaryItems'
         '401':
           $ref: '#/components/responses/Error'
   /events/{id}/favorite:
@@ -4494,6 +4494,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/EventDetail'
+    EventSummaryItems:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventSummary'
     RegistrationQuestion:
       type: object
       required:

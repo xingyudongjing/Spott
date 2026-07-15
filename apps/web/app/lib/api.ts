@@ -18,7 +18,7 @@ export function normalizeEvent(value: unknown): EventView {
       ...parsed.organizer,
       reliability: trustFacts(parsed),
     },
-    fee: { ...parsed.fee },
+    fee: parsed.fee ? { ...parsed.fee } : null,
   } as EventView;
 }
 
@@ -60,6 +60,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function feeLabel(event: EventSummary | EventDetail): string {
+  if (!event.fee) return "";
   if (event.fee.isFree) return "JPY 0";
   if (event.fee.amountJPY !== null) return `JPY ${event.fee.amountJPY}`;
   return [event.fee.collectorName, event.fee.method].filter((value): value is string => Boolean(value)).join(" · ");

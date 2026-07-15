@@ -113,7 +113,11 @@ struct SpottActivityAttributes: ActivityAttributes {
 enum LiveActivityIntegration {
     static func start(event: EventSummary) throws {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-        let attributes = SpottActivityAttributes(eventID: event.id, title: event.title, publicArea: event.publicArea)
+        let attributes = SpottActivityAttributes(
+            eventID: event.id,
+            title: event.title,
+            publicArea: event.publicArea ?? ""
+        )
         _ = try Activity.request(attributes: attributes, content: .init(state: .init(phase: "即将开始", minutesRemaining: 60), staleDate: event.startsAt), pushType: .token)
     }
 }

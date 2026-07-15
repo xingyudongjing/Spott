@@ -274,7 +274,7 @@ export class WorkerJobs {
            FROM events.waitlist_promotions p JOIN events.registrations r ON r.id = p.registration_id
            WHERE p.accepted_at IS NULL AND p.expired_at IS NULL
              AND p.expires_at <= clock_timestamp() AND r.status = 'offered'
-           ORDER BY p.expires_at FOR UPDATE OF p, r SKIP LOCKED LIMIT $1
+           ORDER BY p.expires_at FOR UPDATE OF r SKIP LOCKED LIMIT $1
          ), marked AS (
            UPDATE events.waitlist_promotions p SET expired_at = clock_timestamp()
            FROM due WHERE p.id = due.id

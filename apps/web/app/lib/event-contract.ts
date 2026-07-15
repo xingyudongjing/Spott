@@ -95,12 +95,12 @@ const eventSummaryBaseSchema = z.object({
   endsAt: nullableDateTime,
   deadlineAt: nullableDateTime,
   displayTimeZone: z.string().min(1),
-  region: z.string(),
-  publicArea: z.string(),
+  region: z.string().nullable(),
+  publicArea: z.string().nullable(),
   capacity: z.number().int().min(0),
   confirmedCount: z.number().int().min(0),
   availableCapacity: z.number().int().min(0),
-  fee: eventFeeSchema,
+  fee: eventFeeSchema.nullable(),
   coverURL: z.url().nullable(),
   tags: z.array(z.string()).max(5),
   organizer: eventOrganizerSchema,
@@ -222,12 +222,14 @@ function stripLegacyDisplayFields<Event extends EventSummary | EventDetail>(even
   const normalized = {
     ...event,
     organizer: { ...event.organizer },
-    fee: { ...event.fee },
+    fee: event.fee ? { ...event.fee } : null,
   } as Event;
   delete (normalized as Record<string, unknown>).categoryLabel;
   delete (normalized as Record<string, unknown>).priceLabel;
   delete (normalized.organizer as Record<string, unknown>).reliability;
-  delete (normalized.fee as Record<string, unknown>).boundaryStatement;
+  if (normalized.fee) {
+    delete (normalized.fee as Record<string, unknown>).boundaryStatement;
+  }
   return normalized;
 }
 

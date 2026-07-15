@@ -507,7 +507,7 @@ paths:
       summary: List the current user favorite events
       tags: [Events]
       responses:
-        '200': { description: Favorite events, content: { application/json: { schema: { $ref: '#/components/schemas/EventItems' } } } }
+        '200': { description: Favorite events, content: { application/json: { schema: { $ref: '#/components/schemas/EventSummaryItems' } } } }
         '401': { $ref: '#/components/responses/Error' }
   /events/{id}/favorite:
     put:
@@ -2612,6 +2612,13 @@ components:
         items:
           type: array
           items: { $ref: '#/components/schemas/EventDetail' }
+    EventSummaryItems:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/EventSummary' }
     RegistrationQuestion:
       type: object
       required: [id, prompt, kind, required, options]

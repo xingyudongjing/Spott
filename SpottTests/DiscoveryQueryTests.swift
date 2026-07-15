@@ -51,6 +51,24 @@ final class DiscoveryQueryTests: XCTestCase {
         XCTAssertThrowsError(try decoder.decode(EventSummary.self, from: data))
     }
 
+    func testEventSummaryDecodesTruthfulNullDraftFacts() throws {
+        let data = try JSONSerialization.data(withJSONObject: eventPayload(overrides: [
+            "status": "draft",
+            "region": NSNull(),
+            "publicArea": NSNull(),
+            "fee": NSNull(),
+        ]))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let summary = try decoder.decode(EventSummary.self, from: data)
+
+        XCTAssertNil(summary.region)
+        XCTAssertNil(summary.publicArea)
+        XCTAssertNil(summary.fee)
+        XCTAssertEqual(summary.priceLabel, "")
+    }
+
     func testDiscoveryAlwaysUsesSearchAndCancellationStopsTheNetworkRequest() async throws {
         let started = expectation(description: "network request started")
         let stopped = expectation(description: "network request cancelled")

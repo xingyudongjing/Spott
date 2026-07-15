@@ -156,8 +156,8 @@ struct EventSummary: Codable, Identifiable, Hashable, Sendable {
     let endsAt: Date?
     let deadlineAt: Date?
     let displayTimeZone: String
-    let region: String
-    let publicArea: String
+    let region: String?
+    let publicArea: String?
     let capacity: Int
     let confirmedCount: Int
     let availableCapacity: Int

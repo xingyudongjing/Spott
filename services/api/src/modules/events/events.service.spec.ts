@@ -341,6 +341,10 @@ describe('EventsService event contract', () => {
       id: 'not-a-uuid',
     })).toString('base64url'),
     Buffer.from(JSON.stringify({ date: 123, id: null })).toString('base64url'),
+    Buffer.from(JSON.stringify({
+      date: '-100000-01-01T00:00:00.000Z',
+      id: '019b0000-0000-7000-8100-000000000001',
+    })).toString('base64url'),
   ])('rejects an invalid cursor before querying PostgreSQL', async (cursor) => {
     const query = vi.fn().mockResolvedValue({ rows: [] });
     const service = new EventsService({ query } as never, {} as never, {} as never, {} as never);

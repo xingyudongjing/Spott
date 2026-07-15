@@ -399,6 +399,7 @@ export class RegistrationsService {
       if (replay) return replay.body;
       const registration = await this.load(client, registrationId, true);
       if (registration.user_id !== user.id) throw new DomainError('REGISTRATION_FORBIDDEN', '无权操作此报名。', 403);
+      await this.lockActiveWaitlistPromotion(client, registration.id);
       if (registration.status !== 'offered' || !registration.offer_expires_at || registration.offer_expires_at <= new Date()) {
         throw new DomainError('WAITLIST_OFFER_EXPIRED', '候补确认已过期。', 409);
       }
@@ -457,6 +458,7 @@ export class RegistrationsService {
       if (!['pending', 'confirmed', 'waitlisted', 'offered'].includes(registration.status)) {
         throw new DomainError('INVALID_STATE_TRANSITION', '当前报名状态不能取消。', 422);
       }
+      await this.lockActiveWaitlistPromotion(client, registration.id);
       await client.query('SELECT event_id FROM events.event_capacity WHERE event_id = $1 FOR UPDATE', [
         registration.event_id,
       ]);
@@ -966,6 +968,18 @@ export class RegistrationsService {
     const row = result.rows[0];
     if (!row) throw new DomainError('REGISTRATION_NOT_FOUND', '报名记录不存在。', 404);
     return row;
+  }
+
+  private async lockActiveWaitlistPromotion(client: PoolClient, registrationId: string): Promise<void> {
+    await client.query(
+      `SELECT promotion.id
+       FROM events.waitlist_promotions promotion
+       WHERE promotion.registration_id = $1
+         AND promotion.accepted_at IS NULL AND promotion.expired_at IS NULL
+       ORDER BY promotion.offered_at DESC, promotion.id DESC
+       LIMIT 1 FOR UPDATE`,
+      [registrationId],
+    );
   }
 
   private toView(row: RegistrationRow): Record<string, unknown> {

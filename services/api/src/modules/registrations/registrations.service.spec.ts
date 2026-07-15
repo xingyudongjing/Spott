@@ -224,6 +224,14 @@ describe('RegistrationsService offered capacity accounting', () => {
 
     await service.acceptWaitlist(user, registrationId, '019b0000-0000-7000-9000-000000000001');
 
+    const promotionLock = queries.findIndex(({ text }) => (
+      text.includes('FROM events.waitlist_promotions') && text.includes('FOR UPDATE')
+    ));
+    const capacityLock = queries.findIndex(({ text }) => (
+      text.includes('SELECT e.capacity') && text.includes('FOR UPDATE')
+    ));
+    expect(promotionLock).toBeGreaterThanOrEqual(0);
+    expect(capacityLock).toBeGreaterThan(promotionLock);
     const update = queries.find(({ text }) => text.includes('UPDATE events.event_capacity'));
     expect(update?.text).toContain('offered_count = GREATEST(0, offered_count - $2)');
     expect(update?.values).toEqual([eventId, 3]);
@@ -257,6 +265,14 @@ describe('RegistrationsService offered capacity accounting', () => {
 
     await service.cancel(user, registrationId, '019b0000-0000-7000-9000-000000000002');
 
+    const promotionLock = queries.findIndex(({ text }) => (
+      text.includes('FROM events.waitlist_promotions') && text.includes('FOR UPDATE')
+    ));
+    const capacityLock = queries.findIndex(({ text }) => (
+      text.includes('FROM events.event_capacity') && text.includes('FOR UPDATE')
+    ));
+    expect(promotionLock).toBeGreaterThanOrEqual(0);
+    expect(capacityLock).toBeGreaterThan(promotionLock);
     const update = queries.find(({ text }) => text.includes('confirmed_count = GREATEST'));
     expect(update?.text).toContain("offered_count = GREATEST(0, offered_count - CASE WHEN $2 = 'offered' THEN $3 ELSE 0 END)");
     expect(update?.values).toEqual([eventId, 'offered', 3]);

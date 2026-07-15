@@ -199,7 +199,7 @@ struct EventDetailView: View {
         VStack(spacing: 0) {
             DetailFact(icon: "calendar", title: "时间", value: detail.startsAt?.formatted(.dateTime.month(.wide).day().weekday().hour().minute()) ?? "时间待定")
             Divider().padding(.leading, 47)
-            DetailFact(icon: "mappin.and.ellipse", title: "集合范围", value: detail.publicArea)
+            DetailFact(icon: "mappin.and.ellipse", title: "集合范围", value: detail.publicArea ?? "")
             if let exact = detail.exactAddress, !exact.isEmpty {
                 Divider().padding(.leading, 47)
                 DetailFact(icon: "lock.open", title: "精确地址", value: exact)
@@ -406,13 +406,18 @@ struct EventDetailView: View {
         guard let start = detail.startsAt else { return }
         let end = detail.endsAt ?? start.addingTimeInterval(7200)
         Task {
-            try? await CalendarIntegration().add(title: detail.title, start: start, end: end, notes: "Spott · \(detail.publicArea)\nhttps://spott.jp/e/\(detail.publicSlug)")
+            try? await CalendarIntegration().add(
+                title: detail.title,
+                start: start,
+                end: end,
+                notes: "Spott · \(detail.publicArea ?? "")\nhttps://spott.jp/e/\(detail.publicSlug)"
+            )
             notice = "已添加到系统日历。"
         }
     }
 
     private func openMaps() {
-        let encoded = detail.publicArea.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let encoded = detail.publicArea?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         if let url = URL(string: "http://maps.apple.com/?q=\(encoded)") { model.openExternal(url: url) }
     }
 

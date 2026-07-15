@@ -2104,7 +2104,7 @@ private struct CompactEventRow: View {
                 Text(event.startsAt?.formatted(.dateTime.month().day().hour().minute()) ?? "时间待定")
                     .font(.caption)
                     .foregroundStyle(SpottColor.muted)
-                Text(event.publicArea).font(.caption).foregroundStyle(SpottColor.muted).lineLimit(1)
+                Text(event.publicArea ?? "").font(.caption).foregroundStyle(SpottColor.muted).lineLimit(1)
             }
             Spacer()
             Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(SpottColor.muted.opacity(0.55))

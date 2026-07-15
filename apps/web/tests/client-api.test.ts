@@ -208,6 +208,60 @@ describe("refresh-aware client requests", () => {
     expect(readSession()).toEqual(otherUserSession);
   });
 
+  test("reuses a same-session token rotated elsewhere while an older refresh fails", async () => {
+    saveSession(expiredSession);
+    let releaseRefresh!: () => void;
+    const delayedRefresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    const authorizations: Array<string | null> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith("/auth/refresh")) {
+        await delayedRefresh;
+        return jsonResponse({ error: { message: "old refresh rejected" } }, 401);
+      }
+      const authorization = new Headers(init?.headers).get("Authorization");
+      authorizations.push(authorization);
+      return authorization === "Bearer fresh-access-token"
+        ? jsonResponse({ ok: true })
+        : jsonResponse({ error: { message: "expired" } }, 401);
+    }));
+
+    const request = apiRequest<{ ok: boolean }>("/me/favorite-events", { authenticated: true });
+    await vi.waitFor(() => expect(authorizations).toEqual(["Bearer expired-access-token"]));
+    saveSession(freshSession);
+    releaseRefresh();
+
+    await expect(request).resolves.toEqual({ ok: true });
+    expect(authorizations).toEqual(["Bearer expired-access-token", "Bearer fresh-access-token"]);
+    expect(readSession()).toEqual(freshSession);
+  });
+
+  test("keeps the in-memory login authoritative when persistent storage is readable but not writable", () => {
+    window.localStorage.clear();
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Storage denied", "SecurityError");
+    });
+
+    saveSession(expiredSession);
+
+    expect(window.localStorage.getItem("spott.web.session.v1")).toBeNull();
+    expect(readSession()).toEqual(expiredSession);
+  });
+
+  test("persists a logout tombstone across module reload when storage refuses removal", async () => {
+    saveSession(expiredSession);
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
+      throw new DOMException("Storage denied", "SecurityError");
+    });
+
+    clearSession();
+
+    expect(window.localStorage.getItem("spott.web.session.v1")).toBe("");
+    expect(readSession()).toBeNull();
+    vi.resetModules();
+    const reloadedClient = await import("../app/lib/client-api");
+    expect(reloadedClient.readSession()).toBeNull();
+  });
+
   test("keeps public requests usable when persistent browser storage is denied", async () => {
     window.localStorage.clear();
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {

@@ -6,6 +6,7 @@ const SESSION_KEY = "spott.web.session.v1";
 const DEVICE_KEY = "spott.web.device.v1";
 let volatileDeviceId: string | null = null;
 let volatileSession: WebSession | null = null;
+let volatileSessionIsAuthoritative = false;
 
 export interface SessionUser {
   id: string;
@@ -166,6 +167,7 @@ export function deviceId(): string {
 
 export function readSession(): WebSession | null {
   if (typeof window === "undefined") return null;
+  if (volatileSessionIsAuthoritative) return volatileSession;
   let value: string | null;
   try {
     value = window.localStorage.getItem(SESSION_KEY);
@@ -195,8 +197,9 @@ export function saveSession(session: WebSession): void {
   volatileSession = session;
   try {
     window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    volatileSessionIsAuthoritative = false;
   } catch {
-    // Storage may be disabled in private or hardened browsing contexts.
+    volatileSessionIsAuthoritative = true;
   }
   window.dispatchEvent(new CustomEvent("spott:session", { detail: session }));
 }
@@ -205,8 +208,15 @@ export function clearSession(): void {
   volatileSession = null;
   try {
     window.localStorage.removeItem(SESSION_KEY);
+    volatileSessionIsAuthoritative = false;
   } catch {
-    // The in-memory session is still cleared when persistent storage is unavailable.
+    try {
+      // An empty persistent value is a logout tombstone that survives module reloads.
+      window.localStorage.setItem(SESSION_KEY, "");
+      volatileSessionIsAuthoritative = false;
+    } catch {
+      volatileSessionIsAuthoritative = true;
+    }
   }
   window.dispatchEvent(new CustomEvent("spott:session", { detail: null }));
 }
@@ -308,6 +318,10 @@ async function refreshSession(session: WebSession): Promise<WebSession | null> {
     body: JSON.stringify({ refreshToken: session.refreshToken, deviceId: deviceId() }),
   });
   if (!response.ok) {
+    const currentSession = readSession();
+    if (!sameSessionSnapshot(currentSession, session) && sameSessionIdentity(currentSession, session)) {
+      return currentSession;
+    }
     clearSessionIfCurrent(session);
     return null;
   }

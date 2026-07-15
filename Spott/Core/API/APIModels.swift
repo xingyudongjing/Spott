@@ -1,31 +1,184 @@
 import Foundation
 
+enum EventFormat: String, Codable, CaseIterable, Sendable {
+    case inPerson = "in_person"
+    case online
+    case hybrid
+}
+
+enum EventLocale: String, Codable, CaseIterable, Sendable {
+    case zhHans = "zh-Hans"
+    case ja
+    case en
+}
+
+enum CoordinatePrecision: String, Codable, Sendable {
+    case approximate
+    case exact
+}
+
+enum EventPriceFilter: String, Codable, CaseIterable, Sendable {
+    case free
+    case paid
+}
+
+struct EventCoordinate: Codable, Hashable, Sendable {
+    let latitude: Double
+    let longitude: Double
+    let precision: CoordinatePrecision
+}
+
+struct MapBounds: Codable, Hashable, Sendable {
+    let west: Double
+    let south: Double
+    let east: Double
+    let north: Double
+}
+
+struct EventDiscoveryQuery: Hashable, Sendable {
+    var q: String?
+    var region: String?
+    var category: String?
+    var startsAfter: Date?
+    var startsBefore: Date?
+    var availableOnly: Bool?
+    var format: EventFormat?
+    var language: EventLocale?
+    var price: EventPriceFilter?
+    var bounds: MapBounds?
+    var cursor: String?
+    var limit: Int?
+
+    init(
+        q: String? = nil,
+        region: String? = nil,
+        category: String? = nil,
+        startsAfter: Date? = nil,
+        startsBefore: Date? = nil,
+        availableOnly: Bool? = nil,
+        format: EventFormat? = nil,
+        language: EventLocale? = nil,
+        price: EventPriceFilter? = nil,
+        bounds: MapBounds? = nil,
+        cursor: String? = nil,
+        limit: Int? = nil
+    ) {
+        self.q = q
+        self.region = region
+        self.category = category
+        self.startsAfter = startsAfter
+        self.startsBefore = startsBefore
+        self.availableOnly = availableOnly
+        self.format = format
+        self.language = language
+        self.price = price
+        self.bounds = bounds
+        self.cursor = cursor
+        self.limit = limit
+    }
+
+    var queryItems: [URLQueryItem] {
+        var items: [URLQueryItem] = []
+        append("q", q, to: &items)
+        append("region", region, to: &items)
+        append("category", category, to: &items)
+        append("startsAfter", startsAfter?.ISO8601Format(), to: &items)
+        append("startsBefore", startsBefore?.ISO8601Format(), to: &items)
+        append("availableOnly", availableOnly.map(String.init), to: &items)
+        append("format", format?.rawValue, to: &items)
+        append("language", language?.rawValue, to: &items)
+        append("price", price?.rawValue, to: &items)
+        if let bounds {
+            append(
+                "bounds",
+                [bounds.west, bounds.south, bounds.east, bounds.north]
+                    .map { String(format: "%.15g", locale: Locale(identifier: "en_US_POSIX"), $0) }
+                    .joined(separator: ","),
+                to: &items
+            )
+        }
+        append("cursor", cursor, to: &items)
+        append("limit", limit.map(String.init), to: &items)
+        return items
+    }
+
+    private func append(_ name: String, _ value: String?, to items: inout [URLQueryItem]) {
+        guard let value, !value.isEmpty else { return }
+        items.append(.init(name: name, value: value))
+    }
+}
+
+struct OrganizerTrust: Codable, Hashable, Sendable {
+    enum AttendanceRateBand: String, Codable, Sendable {
+        case unavailable
+        case under70 = "under_70"
+        case from70To89 = "70_89"
+        case over90 = "90_plus"
+    }
+
+    let phoneVerified: Bool
+    let completedEventCount: Int
+    let attendanceRateBand: AttendanceRateBand
+}
+
+struct EventOrganizer: Codable, Hashable, Sendable {
+    let id: UUID
+    let name: String
+    let handle: String
+    let viewerFollowing: Bool
+    let trust: OrganizerTrust
+}
+
+struct ViewerRegistration: Codable, Hashable, Sendable {
+    enum Status: String, Codable, Sendable {
+        case pending
+        case confirmed
+        case waitlisted
+        case offered
+        case checkedIn = "checked_in"
+    }
+
+    let id: UUID
+    let status: Status
+    let partySize: Int
+    let offerExpiresAt: Date?
+}
+
 struct EventSummary: Codable, Identifiable, Hashable, Sendable {
     let id: UUID
     let publicSlug: String
     let organizerId: UUID
     let status: String
     let title: String
+    let description: String
+    let category: String
     let startsAt: Date?
     let endsAt: Date?
+    let deadlineAt: Date?
     let displayTimeZone: String
     let region: String
     let publicArea: String
     let capacity: Int
     let confirmedCount: Int
-    let priceLabel: String
+    let availableCapacity: Int
     let coverURL: URL?
     let tags: [String]
+    let organizer: EventOrganizer
+    var favorited: Bool
+    var registrationStatus: String?
+    let viewerRegistration: ViewerRegistration?
+    let registrationMode: String
+    let waitlistEnabled: Bool
+    let format: EventFormat
+    let primaryLocale: EventLocale
+    let supportedLocales: [EventLocale]
+    let localeConfirmed: Bool
     var availableActions: [EventAction]
     let version: Int
     let updatedAt: Date
-    var description: String?
+    let coordinate: EventCoordinate?
     var exactAddress: String?
-    var registrationStatus: String?
     var fee: EventFee?
-    var organizerName: String? = nil
-    var organizerHandle: String? = nil
-    var favorited: Bool? = nil
     var attendeeRequirements: String? = nil
     var riskFlags: [String]? = nil
     var riskDetails: [String: String]? = nil
@@ -36,7 +189,15 @@ struct EventSummary: Codable, Identifiable, Hashable, Sendable {
     var exactAddressVisibility: String? = nil
     var registrationQuestions: [RegistrationQuestion]? = nil
 
-    var remaining: Int { max(0, capacity - confirmedCount) }
+    var remaining: Int { availableCapacity }
+    var organizerName: String? { organizer.name }
+    var organizerHandle: String? { organizer.handle }
+    var priceLabel: String {
+        guard let fee else { return "" }
+        if fee.isFree { return "¥0" }
+        if let amount = fee.amountJPY { return "¥\(amount.formatted())" }
+        return [fee.collectorName, fee.method].compactMap { $0 }.joined(separator: " · ")
+    }
 }
 
 struct EventFee: Codable, Hashable, Sendable {
@@ -46,7 +207,144 @@ struct EventFee: Codable, Hashable, Sendable {
     let method: String?
     let paymentDeadlineText: String?
     let refundPolicy: String?
-    let boundaryStatement: String
+    private let legacyBoundaryStatement: String?
+
+    var boundaryStatement: String { legacyBoundaryStatement ?? "" }
+
+    init(
+        isFree: Bool,
+        amountJPY: Int?,
+        collectorName: String?,
+        method: String?,
+        paymentDeadlineText: String?,
+        refundPolicy: String?,
+        boundaryStatement: String? = nil
+    ) {
+        self.isFree = isFree
+        self.amountJPY = amountJPY
+        self.collectorName = collectorName
+        self.method = method
+        self.paymentDeadlineText = paymentDeadlineText
+        self.refundPolicy = refundPolicy
+        legacyBoundaryStatement = boundaryStatement
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case isFree, amountJPY, collectorName, method, paymentDeadlineText, refundPolicy
+        case legacyBoundaryStatement = "boundaryStatement"
+    }
+}
+
+struct EventCTASession: Hashable, Sendable {
+    let authenticated: Bool
+    let phoneVerified: Bool
+
+    static let guest = Self(authenticated: false, phoneVerified: false)
+    static let unverified = Self(authenticated: true, phoneVerified: false)
+    static let verified = Self(authenticated: true, phoneVerified: true)
+}
+
+struct EventCTAState: Hashable, Sendable {
+    enum Kind: String, Hashable, Sendable {
+        case eventUnavailable = "event_unavailable"
+        case acceptWaitlist = "accept_waitlist"
+        case viewItinerary = "view_itinerary"
+        case viewPending = "view_pending"
+        case viewWaitlist = "view_waitlist"
+        case continueLogin = "continue_login"
+        case continuePhoneVerification = "continue_phone_verification"
+        case registrationClosed = "registration_closed"
+        case joinWaitlist = "join_waitlist"
+        case fullClosed = "full_closed"
+        case apply
+        case register
+    }
+
+    enum Intent: String, Hashable, Sendable {
+        case none
+        case acceptWaitlist = "accept_waitlist"
+        case itinerary
+        case login
+        case phoneVerification = "phone_verification"
+        case register
+    }
+
+    let kind: Kind
+    let intent: Intent
+    let disabled: Bool
+    var registrationId: String? = nil
+    var offerExpiresAt: Date? = nil
+
+    static func resolve(
+        event: EventSummary,
+        session: EventCTASession,
+        now: Date = .now
+    ) -> EventCTAState {
+        if ["cancelled", "ended", "removed"].contains(event.status) {
+            return disabled(.eventUnavailable)
+        }
+
+        if let registration = event.viewerRegistration,
+           registration.status == .offered,
+           let expiry = registration.offerExpiresAt,
+           expiry > now {
+            return .init(
+                kind: .acceptWaitlist,
+                intent: .acceptWaitlist,
+                disabled: false,
+                registrationId: registration.id.uuidString.lowercased(),
+                offerExpiresAt: expiry
+            )
+        }
+        if let registration = event.viewerRegistration,
+           [.confirmed, .checkedIn].contains(registration.status) {
+            return itinerary(.viewItinerary, registration.id)
+        }
+        if let registration = event.viewerRegistration, registration.status == .pending {
+            return itinerary(.viewPending, registration.id)
+        }
+        if let registration = event.viewerRegistration, registration.status == .waitlisted {
+            return itinerary(.viewWaitlist, registration.id)
+        }
+
+        let isFull = event.capacity > 0 && event.availableCapacity == 0
+        let windowOpen = event.status == "published" && (event.deadlineAt.map { $0 > now } ?? true)
+        let structurallyRegistrable = windowOpen && (!isFull || event.waitlistEnabled)
+        if !session.authenticated && structurallyRegistrable {
+            return .init(kind: .continueLogin, intent: .login, disabled: false)
+        }
+        if session.authenticated && !session.phoneVerified && structurallyRegistrable {
+            return .init(kind: .continuePhoneVerification, intent: .phoneVerification, disabled: false)
+        }
+
+        let canRegister = event.availableActions.contains(.register)
+        let canJoinWaitlist = event.availableActions.contains(.joinWaitlist)
+        if !windowOpen || (!isFull && !canRegister && !canJoinWaitlist) {
+            return disabled(.registrationClosed)
+        }
+        if isFull && event.waitlistEnabled && canJoinWaitlist {
+            return .init(kind: .joinWaitlist, intent: .register, disabled: false)
+        }
+        if isFull { return disabled(.fullClosed) }
+        if event.registrationMode == "approval" && canRegister {
+            return .init(kind: .apply, intent: .register, disabled: false)
+        }
+        if canRegister { return .init(kind: .register, intent: .register, disabled: false) }
+        return disabled(.registrationClosed)
+    }
+
+    private static func itinerary(_ kind: Kind, _ registrationID: UUID) -> EventCTAState {
+        .init(
+            kind: kind,
+            intent: .itinerary,
+            disabled: false,
+            registrationId: registrationID.uuidString.lowercased()
+        )
+    }
+
+    private static func disabled(_ kind: Kind) -> EventCTAState {
+        .init(kind: kind, intent: .none, disabled: true)
+    }
 }
 
 struct EventDraftInput: Codable, Sendable {
@@ -1027,8 +1325,106 @@ enum JSONValue: Codable, Hashable, Sendable {
 
 extension EventSummary {
     static let samples: [EventSummary] = [
-        .init(id: UUID(uuidString: "019B0000-0000-7000-8100-000000000001")!, publicSlug: "tokyo-afterglow-walk", organizerId: UUID(), status: "published", title: "东京余光 · 隅田川蓝调散步", startsAt: ISO8601DateFormatter().date(from: "2026-07-18T08:30:00Z"), endsAt: ISO8601DateFormatter().date(from: "2026-07-18T11:00:00Z"), displayTimeZone: "Asia/Tokyo", region: "tokyo", publicArea: "清澄白河站附近", capacity: 24, confirmedCount: 12, priceLabel: "免费", coverURL: nil, tags: ["city-walk", "摄影"], availableActions: [.register], version: 1, updatedAt: .now, description: "从清澄白河走到隅田川，在入夜前后记录城市颜色。", exactAddress: nil, registrationStatus: nil, fee: nil),
-        .init(id: UUID(uuidString: "019B0000-0000-7000-8100-000000000002")!, publicSlug: "shimokita-vinyl-night", organizerId: UUID(), status: "published", title: "下北泽黑胶交换夜", startsAt: ISO8601DateFormatter().date(from: "2026-07-20T10:00:00Z"), endsAt: nil, displayTimeZone: "Asia/Tokyo", region: "tokyo", publicArea: "下北泽", capacity: 16, confirmedCount: 8, priceLabel: "免费", coverURL: nil, tags: ["music", "新朋友"], availableActions: [.register], version: 1, updatedAt: .now, description: "带一张最近循环播放的唱片，认识同样认真听歌的人。", exactAddress: nil, registrationStatus: nil, fee: nil)
+        .init(
+            id: UUID(uuidString: "019B0000-0000-7000-8100-000000000001")!,
+            publicSlug: "tokyo-afterglow-walk",
+            organizerId: UUID(uuidString: "019B0000-0000-7000-8100-000000000010")!,
+            status: "published",
+            title: "东京余光 · 隅田川蓝调散步",
+            description: "从清澄白河走到隅田川，在入夜前后记录城市颜色。",
+            category: "city-walk",
+            startsAt: ISO8601DateFormatter().date(from: "2026-07-18T08:30:00Z"),
+            endsAt: ISO8601DateFormatter().date(from: "2026-07-18T11:00:00Z"),
+            deadlineAt: ISO8601DateFormatter().date(from: "2026-07-18T07:30:00Z"),
+            displayTimeZone: "Asia/Tokyo",
+            region: "tokyo",
+            publicArea: "清澄白河站附近",
+            capacity: 24,
+            confirmedCount: 12,
+            availableCapacity: 12,
+            coverURL: nil,
+            tags: ["city-walk", "摄影"],
+            organizer: .init(
+                id: UUID(uuidString: "019B0000-0000-7000-8100-000000000010")!,
+                name: "周末开局",
+                handle: "weekend_kai",
+                viewerFollowing: false,
+                trust: .init(phoneVerified: true, completedEventCount: 18, attendanceRateBand: .over90)
+            ),
+            favorited: false,
+            registrationStatus: nil,
+            viewerRegistration: nil,
+            registrationMode: "automatic",
+            waitlistEnabled: true,
+            format: .inPerson,
+            primaryLocale: .ja,
+            supportedLocales: [.ja, .zhHans],
+            localeConfirmed: true,
+            availableActions: [.register],
+            version: 1,
+            updatedAt: ISO8601DateFormatter().date(from: "2026-07-16T00:00:00Z")!,
+            coordinate: nil,
+            exactAddress: nil,
+            fee: .init(
+                isFree: true,
+                amountJPY: nil,
+                collectorName: nil,
+                method: nil,
+                paymentDeadlineText: nil,
+                refundPolicy: nil,
+                boundaryStatement: "本活动免费。"
+            )
+        ),
+        .init(
+            id: UUID(uuidString: "019B0000-0000-7000-8100-000000000002")!,
+            publicSlug: "shimokita-vinyl-night",
+            organizerId: UUID(uuidString: "019B0000-0000-7000-8100-000000000011")!,
+            status: "published",
+            title: "下北泽黑胶交换夜",
+            description: "带一张最近循环播放的唱片，认识同样认真听歌的人。",
+            category: "music",
+            startsAt: ISO8601DateFormatter().date(from: "2026-07-20T10:00:00Z"),
+            endsAt: ISO8601DateFormatter().date(from: "2026-07-20T13:00:00Z"),
+            deadlineAt: ISO8601DateFormatter().date(from: "2026-07-20T09:00:00Z"),
+            displayTimeZone: "Asia/Tokyo",
+            region: "tokyo",
+            publicArea: "下北泽",
+            capacity: 16,
+            confirmedCount: 8,
+            availableCapacity: 8,
+            coverURL: nil,
+            tags: ["music", "新朋友"],
+            organizer: .init(
+                id: UUID(uuidString: "019B0000-0000-7000-8100-000000000011")!,
+                name: "小光",
+                handle: "tokyo_hikari",
+                viewerFollowing: false,
+                trust: .init(phoneVerified: true, completedEventCount: 6, attendanceRateBand: .from70To89)
+            ),
+            favorited: false,
+            registrationStatus: nil,
+            viewerRegistration: nil,
+            registrationMode: "automatic",
+            waitlistEnabled: true,
+            format: .inPerson,
+            primaryLocale: .ja,
+            supportedLocales: [.ja],
+            localeConfirmed: true,
+            availableActions: [.register],
+            version: 1,
+            updatedAt: ISO8601DateFormatter().date(from: "2026-07-16T00:00:00Z")!,
+            coordinate: nil,
+            exactAddress: nil,
+            fee: .init(
+                isFree: true,
+                amountJPY: nil,
+                collectorName: nil,
+                method: nil,
+                paymentDeadlineText: nil,
+                refundPolicy: nil,
+                boundaryStatement: "本活动免费。"
+            )
+        ),
     ]
 }
 

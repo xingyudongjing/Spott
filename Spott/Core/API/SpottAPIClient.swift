@@ -30,23 +30,36 @@ actor SpottAPIClient {
     private let session: URLSession
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let usesCredentials: Bool
     private var refreshTask: Task<UserSession, Error>?
 
-    init(environment: APIEnvironment, credentials: CredentialVault, session: URLSession = .shared) {
+    init(
+        environment: APIEnvironment,
+        credentials: CredentialVault,
+        session: URLSession = .shared,
+        usesCredentials: Bool = true
+    ) {
         self.environment = environment
         self.credentials = credentials
         self.session = session
+        self.usesCredentials = usesCredentials
         encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
     }
 
-    func discovery(region: String, query: String? = nil) async throws -> DiscoveryPage {
-        let path = query?.isEmpty == false ? "events/search" : "discovery/feed"
-        var components = URLComponents(url: environment.baseURL.appending(path: path), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "region", value: region)] + (query.map { [URLQueryItem(name: "q", value: $0)] } ?? [])
+    func discovery(_ query: EventDiscoveryQuery) async throws -> DiscoveryPage {
+        var components = URLComponents(
+            url: environment.baseURL.appending(path: "events/search"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = query.queryItems
         return try await send(URLRequest(url: components.url!))
+    }
+
+    func discovery(region: String, query: String? = nil) async throws -> DiscoveryPage {
+        try await discovery(.init(q: query, region: region))
     }
 
     func event(identifier: String) async throws -> EventSummary {
@@ -910,9 +923,12 @@ actor SpottAPIClient {
         var request = source
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(UUID().uuidString.lowercased(), forHTTPHeaderField: "X-Request-Id")
-        if authenticated, let stored = try await credentials.session() { request.setValue("Bearer \(stored.accessToken)", forHTTPHeaderField: "Authorization") }
+        if authenticated, usesCredentials, let stored = try await credentials.session() {
+            request.setValue("Bearer \(stored.accessToken)", forHTTPHeaderField: "Authorization")
+        }
         var attempt = 0
         while true {
+            try Task.checkCancellation()
             do {
                 let (data, response) = try await session.data(for: request)
                 guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
@@ -924,7 +940,9 @@ actor SpottAPIClient {
                 guard (200..<300).contains(http.statusCode) else { throw decodeError(data: data, status: http.statusCode) }
                 if Response.self == EmptyResponse.self { return EmptyResponse() as! Response }
                 return try decoder.decode(Response.self, from: data)
-            } catch let error as APIError { throw error }
+            } catch is CancellationError { throw CancellationError() }
+            catch let error as URLError where error.code == .cancelled { throw CancellationError() }
+            catch let error as APIError { throw error }
             catch {
                 guard attempt < 2, request.httpMethod == "GET" || request.value(forHTTPHeaderField: "Idempotency-Key") != nil else { throw error }
                 attempt += 1

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { APIError, apiRequest, readSession, saveSession, type WebSession } from "../app/lib/client-api";
+import { APIError, apiRequest, clearSession, readSession, saveSession, type WebSession } from "../app/lib/client-api";
 
 const expiredSession: WebSession = {
   accessToken: "expired-access-token",
@@ -22,7 +22,22 @@ const freshSession: WebSession = {
   refreshToken: "rotated-refresh-token",
 };
 
+const otherUserSession: WebSession = {
+  accessToken: "other-user-access-token",
+  accessTokenExpiresAt: "2026-07-17T00:00:00.000Z",
+  refreshToken: "other-user-refresh-token",
+  sessionId: "019b0000-0000-7000-8100-000000000191",
+  user: {
+    id: "019b0000-0000-7000-8100-000000000192",
+    publicHandle: "other-viewer",
+    phoneVerified: true,
+    restrictions: [],
+  },
+};
+
 beforeEach(() => {
+  vi.restoreAllMocks();
+  clearSession();
   window.localStorage.clear();
   window.localStorage.setItem("spott.web.device.v1", "019b0000-0000-7000-8100-000000000099");
   vi.unstubAllGlobals();
@@ -109,6 +124,106 @@ describe("refresh-aware client requests", () => {
     await expect(apiRequest("/events/search?limit=24")).rejects.toBeInstanceOf(APIError);
     expect(refreshCalls).toBe(1);
     expect(protectedCalls).toBe(2);
+    expect(readSession()).toBeNull();
+  });
+
+  test("never replays a stale request into a different signed-in account", async () => {
+    saveSession(expiredSession);
+    let releaseResponse!: () => void;
+    const delayedResponse = new Promise<void>((resolve) => { releaseResponse = resolve; });
+    const calls: Array<{ authorization: string | null; idempotencyKey: string | null }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      calls.push({
+        authorization: new Headers(init?.headers).get("Authorization"),
+        idempotencyKey: new Headers(init?.headers).get("Idempotency-Key"),
+      });
+      await delayedResponse;
+      return jsonResponse({ error: { message: "expired" } }, 401);
+    }));
+
+    const request = apiRequest("/events/event-a/registrations", {
+      method: "POST",
+      authenticated: true,
+      idempotent: true,
+      body: JSON.stringify({ partySize: 1 }),
+    });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    saveSession(otherUserSession);
+    releaseResponse();
+
+    await expect(request).rejects.toBeInstanceOf(APIError);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.authorization).toBe("Bearer expired-access-token");
+    expect(calls[0]?.idempotencyKey).toBeTruthy();
+    expect(readSession()).toEqual(otherUserSession);
+  });
+
+  test("does not let a stale refresh success overwrite a newly signed-in account", async () => {
+    saveSession(expiredSession);
+    let releaseRefresh!: () => void;
+    const delayedRefresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    let protectedCalls = 0;
+    let refreshCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (String(input).endsWith("/auth/refresh")) {
+        refreshCalls += 1;
+        await delayedRefresh;
+        return jsonResponse(freshSession);
+      }
+      protectedCalls += 1;
+      return jsonResponse({ error: { message: "expired" } }, 401);
+    }));
+
+    const request = apiRequest("/me/favorite-events", { authenticated: true });
+    await vi.waitFor(() => expect(refreshCalls).toBe(1));
+    saveSession(otherUserSession);
+    releaseRefresh();
+
+    await expect(request).rejects.toBeInstanceOf(APIError);
+    expect(protectedCalls).toBe(1);
+    expect(refreshCalls).toBe(1);
+    expect(readSession()).toEqual(otherUserSession);
+  });
+
+  test("does not let a stale refresh failure clear a newly signed-in account", async () => {
+    saveSession(expiredSession);
+    let releaseRefresh!: () => void;
+    const delayedRefresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    let refreshCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (String(input).endsWith("/auth/refresh")) {
+        refreshCalls += 1;
+        await delayedRefresh;
+        return jsonResponse({ error: { message: "refresh rejected" } }, 401);
+      }
+      return jsonResponse({ error: { message: "expired" } }, 401);
+    }));
+
+    const request = apiRequest("/me/favorite-events", { authenticated: true });
+    await vi.waitFor(() => expect(refreshCalls).toBe(1));
+    saveSession(otherUserSession);
+    releaseRefresh();
+
+    await expect(request).rejects.toBeInstanceOf(APIError);
+    expect(readSession()).toEqual(otherUserSession);
+  });
+
+  test("keeps public requests usable when persistent browser storage is denied", async () => {
+    window.localStorage.clear();
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("Storage denied", "SecurityError");
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Storage denied", "SecurityError");
+    });
+    vi.stubGlobal("fetch", vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Authorization")).toBeNull();
+      expect(headers.get("X-Spott-Device-Id")).toMatch(/^[0-9a-f-]{36}$/i);
+      return jsonResponse({ items: [] });
+    }));
+
+    await expect(apiRequest("/events/search?limit=24")).resolves.toEqual({ items: [] });
     expect(readSession()).toBeNull();
   });
 });

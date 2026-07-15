@@ -4,6 +4,8 @@ import type { EventView } from "./demo-data";
 
 const SESSION_KEY = "spott.web.session.v1";
 const DEVICE_KEY = "spott.web.device.v1";
+let volatileDeviceId: string | null = null;
+let volatileSession: WebSession | null = null;
 
 export interface SessionUser {
   id: string;
@@ -26,7 +28,7 @@ type APIRequestInit = RequestInit & {
   ifMatch?: number;
 };
 
-let refreshInFlight: Promise<WebSession | null> | null = null;
+const refreshesInFlight = new Map<string, Promise<WebSession | null>>();
 
 export interface APIErrorBody {
   code?: string;
@@ -149,34 +151,92 @@ export function apiBase(): string {
 
 export function deviceId(): string {
   if (typeof window === "undefined") return "00000000-0000-4000-8000-000000000000";
-  let value = window.localStorage.getItem(DEVICE_KEY);
-  if (!value) {
-    value = window.crypto.randomUUID();
-    window.localStorage.setItem(DEVICE_KEY, value);
+  try {
+    const stored = window.localStorage.getItem(DEVICE_KEY);
+    if (stored) return stored;
+    const generated = volatileDeviceId ?? window.crypto.randomUUID();
+    volatileDeviceId = generated;
+    window.localStorage.setItem(DEVICE_KEY, generated);
+    return generated;
+  } catch {
+    if (!volatileDeviceId) volatileDeviceId = window.crypto.randomUUID();
+    return volatileDeviceId;
   }
-  return value;
 }
 
 export function readSession(): WebSession | null {
   if (typeof window === "undefined") return null;
-  const value = window.localStorage.getItem(SESSION_KEY);
-  if (!value) return null;
+  let value: string | null;
   try {
-    return JSON.parse(value) as WebSession;
+    value = window.localStorage.getItem(SESSION_KEY);
   } catch {
-    window.localStorage.removeItem(SESSION_KEY);
+    return volatileSession;
+  }
+  if (!value) {
+    volatileSession = null;
+    return null;
+  }
+  try {
+    const session = JSON.parse(value) as WebSession;
+    volatileSession = session;
+    return session;
+  } catch {
+    volatileSession = null;
+    try {
+      window.localStorage.removeItem(SESSION_KEY);
+    } catch {
+      // Ignore cleanup failures for malformed persistent state.
+    }
     return null;
   }
 }
 
 export function saveSession(session: WebSession): void {
-  window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  volatileSession = session;
+  try {
+    window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  } catch {
+    // Storage may be disabled in private or hardened browsing contexts.
+  }
   window.dispatchEvent(new CustomEvent("spott:session", { detail: session }));
 }
 
 export function clearSession(): void {
-  window.localStorage.removeItem(SESSION_KEY);
+  volatileSession = null;
+  try {
+    window.localStorage.removeItem(SESSION_KEY);
+  } catch {
+    // The in-memory session is still cleared when persistent storage is unavailable.
+  }
   window.dispatchEvent(new CustomEvent("spott:session", { detail: null }));
+}
+
+function sameSessionIdentity(left: WebSession | null, right: WebSession | null): boolean {
+  return Boolean(
+    left
+      && right
+      && left.user.id === right.user.id
+      && left.sessionId === right.sessionId,
+  );
+}
+
+function sameSessionSnapshot(left: WebSession | null, right: WebSession | null): boolean {
+  return Boolean(
+    sameSessionIdentity(left, right)
+      && left?.accessToken === right?.accessToken
+      && left?.refreshToken === right?.refreshToken,
+  );
+}
+
+function sessionChangedError(): APIError {
+  return new APIError(401, {
+    code: "SESSION_CHANGED",
+    message: "登录账号已切换，请重试当前操作。",
+  });
+}
+
+function clearSessionIfCurrent(session: WebSession): void {
+  if (sameSessionSnapshot(readSession(), session)) clearSession();
 }
 
 export function requireLogin(returnTo = window.location.pathname): never {
@@ -190,16 +250,19 @@ export async function apiRequest<T>(
 ): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.idempotent && !headers.has("Idempotency-Key")) headers.set("Idempotency-Key", crypto.randomUUID());
-  return apiRequestAttempt<T>(path, { ...init, headers }, true);
+  return apiRequestAttempt<T>(path, { ...init, headers }, true, null);
 }
 
 async function apiRequestAttempt<T>(
   path: string,
   init: APIRequestInit,
   allowRefresh: boolean,
+  requestSession: WebSession | null,
 ): Promise<T> {
   const session = readSession();
+  if (requestSession && !sameSessionIdentity(session, requestSession)) throw sessionChangedError();
   if (init.authenticated && !session) requireLogin();
+  const ownerSession = requestSession ?? session;
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   headers.set("X-Spott-Device-Id", deviceId());
@@ -211,15 +274,17 @@ async function apiRequestAttempt<T>(
   if (response.status === 401 && session && path !== "/auth/refresh") {
     if (allowRefresh) {
       const latestSession = readSession();
-      if (latestSession && latestSession.accessToken !== session.accessToken) {
-        return apiRequestAttempt<T>(path, init, false);
+      if (ownerSession && !sameSessionIdentity(latestSession, ownerSession)) throw sessionChangedError();
+      if (latestSession && !sameSessionSnapshot(latestSession, session)) {
+        return apiRequestAttempt<T>(path, init, false, ownerSession);
       }
       if (latestSession) {
         const refreshed = await refreshSessionOnce(latestSession);
-        if (refreshed) return apiRequestAttempt<T>(path, init, false);
+        if (ownerSession && !sameSessionIdentity(readSession(), ownerSession)) throw sessionChangedError();
+        if (refreshed) return apiRequestAttempt<T>(path, init, false, ownerSession);
       }
     } else {
-      clearSession();
+      clearSessionIfCurrent(session);
     }
   }
   if (!response.ok) {
@@ -243,21 +308,29 @@ async function refreshSession(session: WebSession): Promise<WebSession | null> {
     body: JSON.stringify({ refreshToken: session.refreshToken, deviceId: deviceId() }),
   });
   if (!response.ok) {
-    clearSession();
+    clearSessionIfCurrent(session);
     return null;
   }
   const refreshed = (await response.json()) as WebSession;
+  const currentSession = readSession();
+  if (!sameSessionSnapshot(currentSession, session)) {
+    return sameSessionIdentity(currentSession, session) ? currentSession : null;
+  }
+  if (!sameSessionIdentity(refreshed, session)) return null;
   saveSession(refreshed);
   return refreshed;
 }
 
 function refreshSessionOnce(session: WebSession): Promise<WebSession | null> {
-  if (!refreshInFlight) {
-    refreshInFlight = refreshSession(session).finally(() => {
-      refreshInFlight = null;
+  const generation = `${session.user.id}:${session.sessionId}:${session.refreshToken}`;
+  let refresh = refreshesInFlight.get(generation);
+  if (!refresh) {
+    refresh = refreshSession(session).finally(() => {
+      refreshesInFlight.delete(generation);
     });
+    refreshesInFlight.set(generation, refresh);
   }
-  return refreshInFlight;
+  return refresh;
 }
 
 export async function refreshCurrentSession(): Promise<WebSession | null> {

@@ -827,6 +827,115 @@ struct Registration: Codable, Identifiable, Sendable {
     let checkinMethod: String?
 }
 
+struct ItineraryEventSummary: Codable, Identifiable, Hashable, Sendable {
+    let id: UUID
+    let publicSlug: String
+    let status: String
+    let title: String
+    let startsAt: Date?
+    let endsAt: Date?
+    let displayTimeZone: String
+    let region: String?
+    let publicArea: String?
+    let coverURL: URL?
+    let format: EventFormat
+    let primaryLocale: EventLocale
+    let localeConfirmed: Bool
+    let version: Int
+    let updatedAt: Date
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, publicSlug, status, title, startsAt, endsAt, displayTimeZone
+        case region, publicArea, coverURL, format, primaryLocale, localeConfirmed, version, updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        try rejectUnknownItineraryKeys(CodingKeys.self, from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        publicSlug = try container.decode(String.self, forKey: .publicSlug)
+        status = try container.decode(String.self, forKey: .status)
+        title = try container.decode(String.self, forKey: .title)
+        startsAt = try container.decode(Date?.self, forKey: .startsAt)
+        endsAt = try container.decode(Date?.self, forKey: .endsAt)
+        displayTimeZone = try container.decode(String.self, forKey: .displayTimeZone)
+        region = try container.decode(String?.self, forKey: .region)
+        publicArea = try container.decode(String?.self, forKey: .publicArea)
+        coverURL = try container.decode(URL?.self, forKey: .coverURL)
+        format = try container.decode(EventFormat.self, forKey: .format)
+        primaryLocale = try container.decode(EventLocale.self, forKey: .primaryLocale)
+        localeConfirmed = try container.decode(Bool.self, forKey: .localeConfirmed)
+        version = try container.decode(Int.self, forKey: .version)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+}
+
+struct RegistrationItineraryItem: Codable, Sendable {
+    let registration: Registration
+    let event: ItineraryEventSummary?
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case registration, event
+    }
+
+    init(from decoder: Decoder) throws {
+        try rejectUnknownItineraryKeys(CodingKeys.self, from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        registration = try container.decode(Registration.self, forKey: .registration)
+        event = try container.decode(ItineraryEventSummary?.self, forKey: .event)
+    }
+}
+
+struct RegistrationItineraryPage: Codable, Sendable {
+    let items: [RegistrationItineraryItem]
+    let nextCursor: String?
+    let hasMore: Bool
+    let serverTime: Date
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case items, nextCursor, hasMore, serverTime
+    }
+
+    init(from decoder: Decoder) throws {
+        try rejectUnknownItineraryKeys(CodingKeys.self, from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        items = try container.decode([RegistrationItineraryItem].self, forKey: .items)
+        nextCursor = try container.decode(String?.self, forKey: .nextCursor)
+        hasMore = try container.decode(Bool.self, forKey: .hasMore)
+        serverTime = try container.decode(Date.self, forKey: .serverTime)
+    }
+}
+
+private struct ItineraryCodingKey: CodingKey, Hashable {
+    let stringValue: String
+    let intValue: Int?
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+        intValue = nil
+    }
+
+    init?(intValue: Int) {
+        stringValue = String(intValue)
+        self.intValue = intValue
+    }
+}
+
+private func rejectUnknownItineraryKeys<Keys>(
+    _ keys: Keys.Type,
+    from decoder: Decoder
+) throws where Keys: CodingKey & CaseIterable {
+    let container = try decoder.container(keyedBy: ItineraryCodingKey.self)
+    let allowed = Set(Keys.allCases.map(\.stringValue))
+    let unexpected = container.allKeys.map(\.stringValue).filter { !allowed.contains($0) }.sorted()
+    guard unexpected.isEmpty else {
+        throw DecodingError.dataCorrupted(.init(
+            codingPath: decoder.codingPath,
+            debugDescription: "Unexpected itinerary fields: \(unexpected.joined(separator: ", "))"
+        ))
+    }
+}
+
 struct EventAttendee: Codable, Identifiable, Sendable {
     struct Identity: Codable, Sendable {
         let id: UUID

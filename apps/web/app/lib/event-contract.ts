@@ -175,6 +175,49 @@ export const eventPageSchema = z.object({
   queryExplanationId: z.string(),
 }).passthrough();
 
+const registrationSchema = z.object({
+  id: uuid,
+  eventId: uuid,
+  userId: uuid,
+  status: registrationStatus,
+  partySize: z.number().int().min(1),
+  attendeeNote: z.string().max(1000).nullable().optional(),
+  offerExpiresAt: nullableDateTime.optional(),
+  availableActions: z.array(availableAction),
+  version: z.number().int().min(1),
+  updatedAt: dateTime,
+}).strict();
+
+export const itineraryEventSummarySchema = z.object({
+  id: uuid,
+  publicSlug: z.string(),
+  status: eventStatus,
+  title: z.string(),
+  startsAt: nullableDateTime,
+  endsAt: nullableDateTime,
+  displayTimeZone: z.string().min(1),
+  region: z.string().nullable(),
+  publicArea: z.string().nullable(),
+  coverURL: z.url().nullable(),
+  format: z.enum(["in_person", "online", "hybrid"]),
+  primaryLocale: locale,
+  localeConfirmed: z.boolean(),
+  version: z.number().int().min(1),
+  updatedAt: dateTime,
+}).strict();
+
+export const registrationItineraryItemSchema = z.object({
+  registration: registrationSchema,
+  event: itineraryEventSummarySchema.nullable(),
+}).strict();
+
+export const registrationItineraryPageSchema = z.object({
+  items: z.array(registrationItineraryItemSchema),
+  nextCursor: z.string().nullable(),
+  hasMore: z.boolean(),
+  serverTime: dateTime,
+}).strict();
+
 export type EventCoordinate = z.infer<typeof eventCoordinateSchema>;
 export type EventFormat = z.infer<typeof eventSummaryBaseSchema>["format"];
 export type EventLocale = z.infer<typeof locale>;
@@ -185,6 +228,9 @@ export type ViewerRegistration = z.infer<typeof viewerRegistrationSchema>;
 export type EventSummary = z.infer<typeof eventSummarySchema>;
 export type EventDetail = z.infer<typeof eventDetailSchema>;
 export type EventPage = z.infer<typeof eventPageSchema>;
+export type ItineraryEventSummary = z.infer<typeof itineraryEventSummarySchema>;
+export type RegistrationItineraryItem = z.infer<typeof registrationItineraryItemSchema>;
+export type RegistrationItineraryPage = z.infer<typeof registrationItineraryPageSchema>;
 
 export class EventContractError extends Error {
   readonly issues: ZodError["issues"];
@@ -210,6 +256,10 @@ export function parseEventDetail(value: unknown): EventDetail {
 export function parseEventPage(value: unknown): EventPage {
   const page = parseContract("EventPage", eventPageSchema, value);
   return { ...page, items: page.items.map(stripLegacyDisplayFields) };
+}
+
+export function parseRegistrationItineraryPage(value: unknown): RegistrationItineraryPage {
+  return parseContract("RegistrationItineraryPage", registrationItineraryPageSchema, value);
 }
 
 function parseContract<Schema extends z.ZodType>(contract: string, schema: Schema, value: unknown): z.infer<Schema> {

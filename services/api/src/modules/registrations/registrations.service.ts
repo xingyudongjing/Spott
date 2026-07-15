@@ -21,6 +21,25 @@ interface RegistrationRow {
   offer_expires_at: Date | null;
 }
 
+interface RegistrationItineraryRow extends RegistrationRow {
+  server_time: Date;
+  itinerary_event_id: string | null;
+  itinerary_public_slug: string | null;
+  itinerary_status: string | null;
+  itinerary_title: string | null;
+  itinerary_starts_at: Date | null;
+  itinerary_ends_at: Date | null;
+  itinerary_display_time_zone: string | null;
+  itinerary_region: string | null;
+  itinerary_public_area: string | null;
+  itinerary_cover_url: string | null;
+  itinerary_format: string | null;
+  itinerary_primary_locale: string | null;
+  itinerary_locale_confirmed_at: Date | null;
+  itinerary_version: string | null;
+  itinerary_updated_at: Date | null;
+}
+
 interface RegistrationQuestionRow {
   id: string;
   kind: 'text' | 'single_choice' | 'boolean';
@@ -532,28 +551,88 @@ export class RegistrationsService {
   }
 
   async mine(userId: string, cursor?: string, limit = 20): Promise<unknown> {
-    const date = cursor ? new Date(Buffer.from(cursor, 'base64url').toString('utf8')) : null;
-    const result = await this.database.query<RegistrationRow>(
-      `SELECT r.*, p.expires_at AS offer_expires_at
-       FROM events.registrations r
+    const decodedCursor = this.decodeItineraryCursor(cursor);
+    const safeLimit = Math.min(Math.max(limit, 1), 100);
+    const result = await this.database.query<RegistrationItineraryRow>(
+      `WITH itinerary_clock AS (
+         SELECT clock_timestamp() AS server_time
+       )
+       SELECT itinerary_clock.server_time, r.*,
+         promotion.expires_at AS offer_expires_at,
+         event.id AS itinerary_event_id,
+         event.public_slug::text AS itinerary_public_slug,
+         event.status::text AS itinerary_status,
+         event.title AS itinerary_title,
+         event.starts_at AS itinerary_starts_at,
+         event.ends_at AS itinerary_ends_at,
+         event.display_time_zone AS itinerary_display_time_zone,
+         location.region_id AS itinerary_region,
+         location.public_area AS itinerary_public_area,
+         cover.cover_url AS itinerary_cover_url,
+         event.format AS itinerary_format,
+         event.primary_locale AS itinerary_primary_locale,
+         event.locale_confirmed_at AS itinerary_locale_confirmed_at,
+         event.version::text AS itinerary_version,
+         event.updated_at AS itinerary_updated_at
+       FROM itinerary_clock
+       LEFT JOIN events.registrations r
+         ON r.user_id = $1
+         AND ($2::timestamptz IS NULL
+           OR (r.updated_at, r.id) < ($2::timestamptz, $3::uuid))
        LEFT JOIN LATERAL (
-         SELECT expires_at FROM events.waitlist_promotions p
-         WHERE p.registration_id = r.id AND p.expired_at IS NULL
-         ORDER BY p.offered_at DESC LIMIT 1
-       ) p ON true
-       WHERE r.user_id = $1 AND ($2::timestamptz IS NULL OR r.updated_at < $2)
-       ORDER BY r.updated_at DESC, r.id DESC LIMIT $3`,
-      [userId, date?.toISOString() ?? null, Math.min(Math.max(limit, 1), 100) + 1],
+         SELECT offer.expires_at
+         FROM events.waitlist_promotions offer
+         WHERE offer.registration_id = r.id
+           AND offer.accepted_at IS NULL
+           AND offer.expired_at IS NULL
+           AND offer.expires_at > itinerary_clock.server_time
+         ORDER BY offer.offered_at DESC, offer.id DESC
+         LIMIT 1
+       ) promotion ON true
+       LEFT JOIN events.events event
+         ON event.id = r.event_id
+         AND event.deleted_at IS NULL
+         AND event.status IN (
+           'published', 'registration_closed', 'in_progress', 'ended', 'cancelled', 'archived'
+         )
+       LEFT JOIN events.event_locations location ON location.event_id = event.id
+       LEFT JOIN LATERAL (
+         SELECT asset.derivatives->'card'->>'url' AS cover_url
+         FROM events.event_media media
+         JOIN media.assets asset ON asset.id = media.media_asset_id
+         WHERE media.event_id = event.id
+           AND media.moderation_state = 'approved'
+           AND asset.state = 'ready'
+           AND asset.moderation_state = 'approved'
+           AND asset.deleted_at IS NULL
+           AND asset.derivatives->'card'->>'url' IS NOT NULL
+         ORDER BY media.sort_order, media.id
+         LIMIT 1
+       ) cover ON true
+       ORDER BY r.updated_at DESC, r.id DESC
+       LIMIT $4`,
+      [
+        userId,
+        decodedCursor?.date ?? null,
+        decodedCursor?.id ?? null,
+        safeLimit + 1,
+      ],
     );
-    const hasMore = result.rows.length > limit;
-    const items = result.rows.slice(0, limit);
+    const registrationRows = result.rows.filter((row) => Boolean(row.id));
+    const hasMore = registrationRows.length > safeLimit;
+    const page = registrationRows.slice(0, safeLimit);
+    const last = page.at(-1);
     return {
-      items: items.map((row) => this.toView(row)),
+      items: page.map((row) => ({
+        registration: this.toView(row),
+        event: this.toItineraryEvent(row),
+      })),
       hasMore,
       nextCursor:
-        hasMore && items.at(-1)
-          ? Buffer.from(items.at(-1)!.updated_at.toISOString()).toString('base64url')
+        hasMore && last
+          ? this.encodeItineraryCursor(last.updated_at, last.id)
           : null,
+      serverTime: (result.rows[0]?.server_time ?? new Date()).toISOString(),
     };
   }
 
@@ -999,6 +1078,50 @@ export class RegistrationsService {
       version: Number(row.version),
       updatedAt: row.updated_at.toISOString(),
     };
+  }
+
+  private toItineraryEvent(row: RegistrationItineraryRow): Record<string, unknown> | null {
+    if (!row.itinerary_event_id) return null;
+    return {
+      id: row.itinerary_event_id,
+      publicSlug: row.itinerary_public_slug,
+      status: row.itinerary_status,
+      title: row.itinerary_title,
+      startsAt: row.itinerary_starts_at?.toISOString() ?? null,
+      endsAt: row.itinerary_ends_at?.toISOString() ?? null,
+      displayTimeZone: row.itinerary_display_time_zone,
+      region: row.itinerary_region,
+      publicArea: row.itinerary_public_area,
+      coverURL: row.itinerary_cover_url,
+      format: row.itinerary_format,
+      primaryLocale: row.itinerary_primary_locale,
+      localeConfirmed: row.itinerary_locale_confirmed_at !== null,
+      version: Number(row.itinerary_version),
+      updatedAt: row.itinerary_updated_at?.toISOString() ?? null,
+    };
+  }
+
+  private encodeItineraryCursor(date: Date, id: string): string {
+    return Buffer.from(JSON.stringify({ date: date.toISOString(), id })).toString('base64url');
+  }
+
+  private decodeItineraryCursor(cursor?: string): { date: string; id: string } | null {
+    if (!cursor) return null;
+    try {
+      const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown;
+      if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) throw new Error('invalid');
+      const candidate = decoded as Record<string, unknown>;
+      if (Object.keys(candidate).sort().join(',') !== 'date,id') throw new Error('invalid');
+      if (typeof candidate.date !== 'string' || typeof candidate.id !== 'string') throw new Error('invalid');
+      const date = new Date(candidate.date);
+      if (Number.isNaN(date.getTime()) || date.toISOString() !== candidate.date) throw new Error('invalid');
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate.id)) {
+        throw new Error('invalid');
+      }
+      return { date: candidate.date, id: candidate.id };
+    } catch {
+      throw new DomainError('CURSOR_INVALID', '分页游标无效。', 400);
+    }
   }
 
   private requireRegistrant(user: AuthenticatedUser): void {

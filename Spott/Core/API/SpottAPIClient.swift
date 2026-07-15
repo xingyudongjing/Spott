@@ -113,10 +113,27 @@ actor SpottAPIClient {
         )
     }
 
-    func registrations(limit: Int = 50) async throws -> CursorPage<Registration> {
+    func registrationItinerary(
+        cursor: String? = nil,
+        limit: Int = 50
+    ) async throws -> RegistrationItineraryPage {
         var components = URLComponents(url: environment.baseURL.appending(path: "me/registrations"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        components.queryItems = [
+            URLQueryItem(name: "limit", value: String(min(max(limit, 1), 100)))
+        ]
+        if let cursor, !cursor.isEmpty {
+            components.queryItems?.append(URLQueryItem(name: "cursor", value: cursor))
+        }
         return try await send(URLRequest(url: components.url!))
+    }
+
+    func registrations(limit: Int = 50) async throws -> CursorPage<Registration> {
+        let page = try await registrationItinerary(limit: limit)
+        return CursorPage(
+            items: page.items.map(\.registration),
+            nextCursor: page.nextCursor,
+            hasMore: page.hasMore
+        )
     }
 
     func acceptWaitlist(registrationID: UUID) async throws -> Registration {

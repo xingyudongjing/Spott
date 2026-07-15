@@ -1061,24 +1061,11 @@ paths:
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
-          description: My registrations
+          description: Privacy-safe registration itinerary page
           content:
             application/json:
               schema:
-                type: object
-                required:
-                  - items
-                  - nextCursor
-                  - hasMore
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Registration'
-                  nextCursor:
-                    type: string
-                  hasMore:
-                    type: boolean
+                $ref: '#/components/schemas/RegistrationItineraryPage'
         '400':
           $ref: '#/components/responses/Error'
   /events/{id}/checkin-codes:
@@ -4855,6 +4842,112 @@ components:
           format: int64
           minimum: 1
         updatedAt:
+          type: string
+          format: date-time
+    ItineraryEventSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - publicSlug
+        - status
+        - title
+        - startsAt
+        - endsAt
+        - displayTimeZone
+        - region
+        - publicArea
+        - coverURL
+        - format
+        - primaryLocale
+        - localeConfirmed
+        - version
+        - updatedAt
+      properties:
+        id:
+          $ref: '#/components/schemas/UUID'
+        publicSlug:
+          type: string
+        status:
+          $ref: '#/components/schemas/EventStatus'
+        title:
+          type: string
+        startsAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        endsAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        displayTimeZone:
+          type: string
+          minLength: 1
+        region:
+          type:
+            - string
+            - 'null'
+        publicArea:
+          type:
+            - string
+            - 'null'
+        coverURL:
+          type:
+            - string
+            - 'null'
+          format: uri
+        format:
+          type: string
+          enum:
+            - in_person
+            - online
+            - hybrid
+        primaryLocale:
+          $ref: '#/components/schemas/Locale'
+        localeConfirmed:
+          type: boolean
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        updatedAt:
+          type: string
+          format: date-time
+    RegistrationItineraryItem:
+      type: object
+      additionalProperties: false
+      required:
+        - registration
+        - event
+      properties:
+        registration:
+          $ref: '#/components/schemas/Registration'
+        event:
+          oneOf:
+            - $ref: '#/components/schemas/ItineraryEventSummary'
+            - type: 'null'
+    RegistrationItineraryPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - nextCursor
+        - hasMore
+        - serverTime
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RegistrationItineraryItem'
+        nextCursor:
+          type:
+            - string
+            - 'null'
+        hasMore:
+          type: boolean
+        serverTime:
           type: string
           format: date-time
     CheckinResult:

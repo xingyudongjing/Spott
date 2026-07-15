@@ -2517,6 +2517,40 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
+        ItineraryEventSummary: {
+            id: components["schemas"]["UUID"];
+            publicSlug: string;
+            status: components["schemas"]["EventStatus"];
+            title: string;
+            /** Format: date-time */
+            startsAt: string | null;
+            /** Format: date-time */
+            endsAt: string | null;
+            displayTimeZone: string;
+            region: string | null;
+            publicArea: string | null;
+            /** Format: uri */
+            coverURL: string | null;
+            /** @enum {string} */
+            format: "in_person" | "online" | "hybrid";
+            primaryLocale: components["schemas"]["Locale"];
+            localeConfirmed: boolean;
+            /** Format: int64 */
+            version: number;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        RegistrationItineraryItem: {
+            registration: components["schemas"]["Registration"];
+            event: components["schemas"]["ItineraryEventSummary"] | null;
+        };
+        RegistrationItineraryPage: {
+            items: components["schemas"]["RegistrationItineraryItem"][];
+            nextCursor: string | null;
+            hasMore: boolean;
+            /** Format: date-time */
+            serverTime: string;
+        };
         CheckinResult: components["schemas"]["Registration"] & {
             /** Format: int64 */
             rewardPoints?: number;
@@ -4467,17 +4501,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description My registrations */
+            /** @description Privacy-safe registration itinerary page */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        items: components["schemas"]["Registration"][];
-                        nextCursor: string;
-                        hasMore: boolean;
-                    };
+                    "application/json": components["schemas"]["RegistrationItineraryPage"];
                 };
             };
             400: components["responses"]["Error"];

@@ -10,11 +10,8 @@ import Testing
 @testable import Spott
 
 struct SpottTests {
-    @Test func nativeGlassKeepsAVisibleEdgeOnTheWarmCanvas() {
-        // On Spott's warm, near-white canvas the system refraction is subtle. Keep
-        // enough dark-edge contrast that compact controls do not visually vanish.
-        #expect(SpottGlassMetrics.edgeOpacity >= 0.16)
-        #expect(SpottGlassMetrics.shadowOpacity > 0)
+    @Test func customGlassDefaultsToNoninteractive() {
+        #expect(SpottGlassMetrics.defaultInteractive == false)
     }
 
     @Test func appleNonceUsesURLSafeCharactersAndRequestedLength() throws {

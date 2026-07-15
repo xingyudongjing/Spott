@@ -27,8 +27,7 @@ enum SpottMetric {
 }
 
 enum SpottGlassMetrics {
-    static let edgeOpacity = 0.18
-    static let shadowOpacity = 0.085
+    static let defaultInteractive = false
 }
 
 struct PrimaryButtonStyle: ButtonStyle {
@@ -70,34 +69,18 @@ struct SurfaceCard<Content: View>: View {
 
 extension View {
     @ViewBuilder
-    func spottGlassPanel<S: Shape>(shape: S, tint: Color? = nil, interactive: Bool = true) -> some View {
+    func spottGlassPanel<S: Shape>(
+        shape: S,
+        tint: Color? = nil,
+        interactive: Bool = SpottGlassMetrics.defaultInteractive
+    ) -> some View {
         if #available(iOS 26.0, *) {
             self
                 .glassEffect(.regular.tint(tint).interactive(interactive), in: shape)
-                .overlay {
-                    shape.stroke(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.92),
-                                SpottColor.ink.opacity(SpottGlassMetrics.edgeOpacity),
-                                Color.white.opacity(0.66)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 0.82
-                    )
-                }
-                .shadow(
-                    color: SpottColor.ink.opacity(SpottGlassMetrics.shadowOpacity),
-                    radius: 13,
-                    y: 6
-                )
         } else {
             self
-                .background(tint?.opacity(0.9) ?? Color.white.opacity(0.78), in: shape)
-                .overlay(shape.stroke(SpottColor.ink.opacity(0.11), lineWidth: 0.72))
-                .shadow(color: SpottColor.ink.opacity(0.07), radius: 9, y: 4)
+                .background(tint?.opacity(0.82) ?? .clear, in: shape)
+                .background(.regularMaterial, in: shape)
         }
     }
 }

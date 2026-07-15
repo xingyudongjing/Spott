@@ -41,7 +41,7 @@ struct AppRootView: View {
     private func appTabs(selection: Binding<AppTab>) -> some View {
         return TabView(selection: selection) {
             NavigationStack(path: model.router.binding(for: .discovery)) {
-                DiscoveryView()
+                DiscoveryView(store: model.discovery)
                     .appRouteDestinations(in: .discovery)
             }
             .tabItem { Label("发现", systemImage: "safari") }

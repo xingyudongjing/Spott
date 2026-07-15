@@ -28,17 +28,20 @@ struct SyncBannerState: Equatable, Sendable {
 @Observable
 final class AppModel {
     var presentedGate: AppGate?
-    var eventState: ViewLoadState<[EventSummary]> = .initial
     var session: UserSession?
     var banner: SyncBannerState?
-    var region = "tokyo"
-    var searchText = ""
 
     let api: SpottAPIClient
     let analytics: AnalyticsClient
     let persistence: PersistenceStore
     let sync: SyncEngine
+    let discovery: DiscoveryStore
     @ObservationIgnored let router: AppRouter
+
+    var region: String {
+        get { discovery.region }
+        set { discovery.region = newValue }
+    }
 
     init(
         api: SpottAPIClient,
@@ -52,6 +55,7 @@ final class AppModel {
         self.persistence = persistence
         self.sync = sync
         self.router = router
+        discovery = DiscoveryStore(service: api, cache: persistence)
     }
 
     var usesNavigationUITestFixture: Bool {
@@ -79,35 +83,24 @@ final class AppModel {
 
     func bootstrap() async {
         if usesNavigationUITestFixture {
-            eventState = .content(EventSummary.samples)
+            discovery.replaceWithFixture(EventSummary.samples)
             if let targetTab = navigationUITestRouteTab {
                 router.selectedTab = targetTab
                 router.show(event: EventSummary.samples[0])
             }
             return
         }
-        if case .loading = eventState { return }
-        eventState = .loading
-        if let cached = try? await persistence.cachedEvents(), !cached.isEmpty {
-            eventState = .offlineContent(cached)
-        }
-        do {
-            let page = try await api.discovery(region: region)
-            try await persistence.replaceEvents(page.items)
-            eventState = page.items.isEmpty ? .empty : .content(page.items)
-            trackAnalytics(.discoveryViewed(
-                region: region,
-                itemCount: page.items.count,
-                reason: "initial"
-            ))
-            if let session = try? await api.currentSession() {
-                self.session = session
-                await reconcileStorePurchases()
-                await registerPendingPushToken()
-            }
-        } catch {
-            if case .offlineContent = eventState { banner = .init(title: "正在展示缓存内容", tone: .offline) }
-            else { eventState = .error(Self.map(error)) }
+        guard discovery.phase == .initial else { return }
+        await discovery.loadInitial()
+        trackAnalytics(.discoveryViewed(
+            region: region,
+            itemCount: discovery.items.count,
+            reason: "initial"
+        ))
+        if let session = try? await api.currentSession() {
+            self.session = session
+            await reconcileStorePurchases()
+            await registerPendingPushToken()
         }
     }
 
@@ -115,12 +108,10 @@ final class AppModel {
         banner = .init(title: "正在同步…", tone: .syncing)
         do {
             _ = try await sync.pull(reason: reason)
-            let page = try await api.discovery(region: region, query: searchText.nilIfBlank)
-            try await persistence.replaceEvents(page.items)
-            eventState = page.items.isEmpty ? .empty : .content(page.items)
+            await discovery.refresh()
             trackAnalytics(.discoveryViewed(
                 region: region,
-                itemCount: page.items.count,
+                itemCount: discovery.items.count,
                 reason: reason.rawValue
             ))
             banner = .init(title: "已是最新", tone: .success)
@@ -315,12 +306,8 @@ final class AppModel {
             sync: SyncEngine(api: api, persistence: persistence),
             router: AppRouter()
         )
-        model.eventState = .content(EventSummary.samples)
+        model.discovery.replaceWithFixture(EventSummary.samples)
         model.session = .preview
         return model
     }
-}
-
-private extension String {
-    var nilIfBlank: String? { trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : self }
 }

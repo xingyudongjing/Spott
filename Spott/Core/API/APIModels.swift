@@ -176,7 +176,7 @@ struct EventSummary: Codable, Identifiable, Hashable, Sendable {
     var availableActions: [EventAction]
     let version: Int
     let updatedAt: Date
-    let coordinate: EventCoordinate?
+    var coordinate: EventCoordinate?
     var exactAddress: String?
     var fee: EventFee?
     var attendeeRequirements: String? = nil
@@ -484,6 +484,41 @@ struct DiscoveryPage: Codable, Sendable {
     let hasMore: Bool
     let serverTime: Date
     let queryExplanationId: String
+
+    init(
+        items: [EventSummary],
+        nextCursor: String?,
+        hasMore: Bool,
+        serverTime: Date,
+        queryExplanationId: String
+    ) {
+        self.items = items.map(\.discoverySafeSummary)
+        self.nextCursor = nextCursor
+        self.hasMore = hasMore
+        self.serverTime = serverTime
+        self.queryExplanationId = queryExplanationId
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            items: try container.decode([EventSummary].self, forKey: .items),
+            nextCursor: try container.decodeIfPresent(String.self, forKey: .nextCursor),
+            hasMore: try container.decode(Bool.self, forKey: .hasMore),
+            serverTime: try container.decode(Date.self, forKey: .serverTime),
+            queryExplanationId: try container.decode(String.self, forKey: .queryExplanationId)
+        )
+    }
+
+    var privacySanitized: DiscoveryPage {
+        DiscoveryPage(
+            items: items,
+            nextCursor: nextCursor,
+            hasMore: hasMore,
+            serverTime: serverTime,
+            queryExplanationId: queryExplanationId
+        )
+    }
 }
 
 struct EventCollection: Codable, Sendable { let items: [EventSummary] }
@@ -1324,6 +1359,29 @@ enum JSONValue: Codable, Hashable, Sendable {
 }
 
 extension EventSummary {
+    var discoverySafeSummary: EventSummary {
+        var result = self
+        if let coordinate = result.coordinate,
+           coordinate.precision == .exact
+            || !coordinate.latitude.isFinite
+            || !coordinate.longitude.isFinite
+            || !(-90 ... 90).contains(coordinate.latitude)
+            || !(-180 ... 180).contains(coordinate.longitude) {
+            result.coordinate = nil
+        }
+        result.exactAddress = nil
+        result.attendeeRequirements = nil
+        result.riskFlags = nil
+        result.riskDetails = nil
+        result.groupId = nil
+        result.checkinMode = nil
+        result.commentPermission = nil
+        result.posterEnabled = nil
+        result.exactAddressVisibility = nil
+        result.registrationQuestions = nil
+        return result
+    }
+
     static let samples: [EventSummary] = [
         .init(
             id: UUID(uuidString: "019B0000-0000-7000-8100-000000000001")!,
@@ -1363,7 +1421,7 @@ extension EventSummary {
             availableActions: [.register],
             version: 1,
             updatedAt: ISO8601DateFormatter().date(from: "2026-07-16T00:00:00Z")!,
-            coordinate: nil,
+            coordinate: .init(latitude: 35.68, longitude: 139.80, precision: .approximate),
             exactAddress: nil,
             fee: .init(
                 isFree: true,
@@ -1413,7 +1471,7 @@ extension EventSummary {
             availableActions: [.register],
             version: 1,
             updatedAt: ISO8601DateFormatter().date(from: "2026-07-16T00:00:00Z")!,
-            coordinate: nil,
+            coordinate: .init(latitude: 35.66, longitude: 139.67, precision: .approximate),
             exactAddress: nil,
             fee: .init(
                 isFree: true,

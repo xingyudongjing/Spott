@@ -1,5 +1,5 @@
 import { screen } from "@testing-library/react";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { SiteHeader } from "../app/components/SiteHeader";
 import { renderWithI18n } from "./event-fixtures";
@@ -7,7 +7,24 @@ import { renderWithI18n } from "./event-fixtures";
 const navigation = vi.hoisted(() => ({ pathname: "/discover" }));
 vi.mock("next/navigation", () => ({ usePathname: () => navigation.pathname }));
 
-beforeEach(() => { navigation.pathname = "/discover"; });
+beforeEach(() => {
+  navigation.pathname = "/discover";
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      clear: vi.fn(),
+      getItem: vi.fn(() => null),
+      key: vi.fn(() => null),
+      length: 0,
+      removeItem: vi.fn(),
+      setItem: vi.fn(),
+    } satisfies Storage,
+  });
+});
+
+afterEach(() => {
+  Reflect.deleteProperty(window, "localStorage");
+});
 
 describe("responsive site navigation", () => {
   test("marks the active route and keeps region plus notifications in the mobile header", () => {

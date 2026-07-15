@@ -3,16 +3,21 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { DiscoveryShell } from "../app/components/discovery/DiscoveryShell";
+import { readSession } from "../app/lib/client-api";
 import { searchEvents } from "../app/lib/events-api";
 import { eventFixture, makeEvent, makePage, renderWithI18n } from "./event-fixtures";
 
 vi.mock("../app/lib/events-api", () => ({ searchEvents: vi.fn() }));
+vi.mock("../app/lib/client-api", () => ({ readSession: vi.fn() }));
 
 const searchEventsMock = vi.mocked(searchEvents);
+const readSessionMock = vi.mocked(readSession);
 
 beforeEach(() => {
   window.history.replaceState(null, "", "/discover");
   searchEventsMock.mockReset();
+  readSessionMock.mockReset();
+  readSessionMock.mockReturnValue(null);
 });
 
 afterEach(() => {
@@ -40,7 +45,7 @@ describe("URL-authoritative discovery", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "活动形式" }), "hybrid");
     await user.selectOptions(screen.getByRole("combobox", { name: "费用" }), "paid");
     await user.selectOptions(screen.getByRole("combobox", { name: "语言" }), "en");
-    await user.click(screen.getByText("更多筛选"));
+    await user.click(screen.getByRole("button", { name: "更多筛选" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "分类" }), "music");
 
     await waitFor(() => {
@@ -61,6 +66,54 @@ describe("URL-authoritative discovery", () => {
         category: "music",
       }),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  test("round-trips explicit start and end dates through the accessible filter sheet", async () => {
+    const user = userEvent.setup();
+    searchEventsMock.mockResolvedValue(makePage());
+    renderWithI18n(<DiscoveryShell initialQuery={{}} initialPage={makePage()} />);
+
+    const opener = screen.getByRole("button", { name: "更多筛选" });
+    await user.click(opener);
+    const sheet = screen.getByRole("dialog", { name: "更多筛选" });
+    expect(sheet).toHaveAttribute("open");
+
+    await user.type(screen.getByLabelText("开始日期"), "2026-08-01");
+    await user.type(screen.getByLabelText("结束日期"), "2026-08-03");
+
+    await waitFor(() => {
+      const restored = new URLSearchParams(window.location.search);
+      expect(restored.get("startsAfter")).toBe("2026-07-31T15:00:00.000Z");
+      expect(restored.get("startsBefore")).toBe("2026-08-03T15:00:00.000Z");
+    });
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "更多筛选" })).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+  });
+
+  test("revalidates once with the local access token so viewer registration facts are current", async () => {
+    readSessionMock.mockReturnValue({
+      accessToken: "viewer-access-token",
+      accessTokenExpiresAt: "2026-07-16T01:00:00.000Z",
+      refreshToken: "viewer-refresh-token",
+      sessionId: "019b0000-0000-7000-8100-000000000091",
+      user: {
+        id: "019b0000-0000-7000-8100-000000000092",
+        publicHandle: "viewer",
+        phoneVerified: true,
+        restrictions: [],
+      },
+    });
+    searchEventsMock.mockResolvedValue(makePage());
+
+    renderWithI18n(<DiscoveryShell initialQuery={{}} initialPage={makePage()} />);
+
+    await waitFor(() => expect(searchEventsMock).toHaveBeenCalledTimes(1));
+    expect(searchEventsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 24 }),
+      expect.objectContaining({ accessToken: "viewer-access-token", signal: expect.any(AbortSignal) }),
     );
   });
 

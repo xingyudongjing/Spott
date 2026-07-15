@@ -1,7 +1,7 @@
 import { DiscoveryShell } from "../components/discovery/DiscoveryShell";
 import { parseDiscoveryQuery, type EventDiscoveryQuery } from "../lib/discovery-query";
 import type { EventPage } from "../lib/event-contract";
-import { searchEvents } from "../lib/events-api";
+import { searchEventsForRequest } from "../lib/events-server";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,7 @@ export default async function DiscoverPage({ searchParams }: { searchParams: Sea
   let initialError: string | null = null;
   try {
     initialQuery = parseDiscoveryQuery(params);
-    initialPage = await searchEvents({ ...initialQuery, limit: initialQuery.limit ?? 24 });
+    initialPage = await searchEventsForRequest({ ...initialQuery, limit: initialQuery.limit ?? 24 });
   } catch (error) {
     initialError = error instanceof Error ? error.name : "DiscoveryError";
   }

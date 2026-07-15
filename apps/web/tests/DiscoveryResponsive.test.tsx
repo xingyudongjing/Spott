@@ -16,6 +16,8 @@ describe("responsive discovery safeguards", () => {
     expect(styles).toContain("prefers-contrast: more");
     expect(styles).toContain("prefers-reduced-motion: reduce");
     expect(styles).toContain("content-visibility: auto");
+    expect(styles).toMatch(/\.mapMarker\s*\{[\s\S]*?width:\s*44px;[\s\S]*?height:\s*44px;/);
+    expect(styles).toMatch(/\.filterDialog::backdrop/);
     expect(globals).not.toMatch(/body\s*\{[\s\S]*?min-width:\s*320px/);
   });
 });

@@ -2,6 +2,7 @@
 
 import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 
+import { readSession } from "../../lib/client-api";
 import { trackProductEvent } from "../../lib/analytics";
 import {
   parseDiscoveryQuery,
@@ -35,6 +36,7 @@ export function DiscoveryShell({
   const [searchText, setSearchText] = useState(initialQuery.q ?? "");
   const [page, setPage] = useState<EventPage | null>(initialPage);
   const [mode, setMode] = useState<"list" | "map">("list");
+  const [mapAttempt, setMapAttempt] = useState(0);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [loading, setLoading] = useState(!initialPage && !initialError);
   const [refreshing, setRefreshing] = useState(false);
@@ -44,6 +46,7 @@ export function DiscoveryShell({
     : brokenCursor(initialPage) ? "pagination" : null);
   const requestRef = useRef<AbortController | null>(null);
   const requestSequence = useRef(0);
+  const viewerRevalidated = useRef(false);
 
   useEffect(() => {
     void trackProductEvent("discovery_viewed", {
@@ -67,11 +70,15 @@ export function DiscoveryShell({
     setError(null);
 
     try {
+      const accessToken = currentAccessToken();
       const result = await searchEvents({
         ...nextQuery,
         cursor: options.cursor,
         limit: nextQuery.limit ?? PAGE_SIZE,
-      }, { signal: controller.signal });
+      }, {
+        signal: controller.signal,
+        ...(accessToken ? { accessToken } : {}),
+      });
       if (controller.signal.aborted || sequence !== requestSequence.current) return;
 
       startTransition(() => {
@@ -96,6 +103,12 @@ export function DiscoveryShell({
       }
     }
   }, [page]);
+
+  useEffect(() => {
+    if (viewerRevalidated.current || !currentAccessToken()) return;
+    viewerRevalidated.current = true;
+    void loadPage(query);
+  }, [loadPage, query]);
 
   const commitQuery = useCallback((nextValue: EventDiscoveryQuery, history: "push" | "replace" = "push") => {
     const next = cleanQuery(nextValue);
@@ -151,8 +164,16 @@ export function DiscoveryShell({
     patchQuery({ bounds });
   }, [patchQuery]);
   const mapFailure = useCallback(() => {
-    setMode("list");
     setError("map");
+  }, []);
+  const retryMap = useCallback(() => {
+    setMapAttempt((attempt) => attempt + 1);
+    setError((current) => current === "map" ? null : current);
+  }, []);
+  const changeMode = useCallback((nextMode: "list" | "map") => {
+    setMode(nextMode);
+    if (nextMode === "map") setMapAttempt((attempt) => attempt + 1);
+    setError((current) => current === "map" ? null : current);
   }, []);
 
   const resultCount = page?.items.length ?? 0;
@@ -170,7 +191,7 @@ export function DiscoveryShell({
         mapEnabled={Boolean(mapStyleURL)}
         onSearchTextChange={setSearchText}
         onRegionChange={(region) => patchQuery({ region })}
-        onModeChange={setMode}
+        onModeChange={changeMode}
       />
       <DiscoveryFilters query={query} onPatch={patchQuery} onReset={reset} />
 
@@ -190,6 +211,7 @@ export function DiscoveryShell({
         error={error}
         mode={mode}
         mapStyleURL={mapStyleURL}
+        mapAttempt={mapAttempt}
         bounds={query.bounds}
         selectedEventId={selectedEventId}
         onRetry={retry}
@@ -197,6 +219,8 @@ export function DiscoveryShell({
         onLoadMore={loadMore}
         onBoundsChange={updateBounds}
         onMapFailure={mapFailure}
+        onRetryMap={retryMap}
+        onUseList={() => changeMode("list")}
         onSelectEvent={setSelectedEventId}
       />
     </section>
@@ -218,4 +242,13 @@ function brokenCursor(page: EventPage | null) {
 
 function isAbortError(error: unknown) {
   return typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
+}
+
+function currentAccessToken() {
+  try {
+    return readSession()?.accessToken;
+  } catch {
+    // Storage can be unavailable in hardened/private browsing contexts.
+    return undefined;
+  }
 }

@@ -29,8 +29,10 @@ export function EventMap({
   events,
   styleURL,
   bounds,
+  selectedEventId,
   mapLabel,
   approximateLabel,
+  loadTimeoutMs = 10_000,
   onBoundsChange,
   onFailure,
   onSelect,
@@ -38,17 +40,29 @@ export function EventMap({
   events: EventSummary[];
   styleURL: string;
   bounds?: MapBounds;
+  selectedEventId?: string | null;
   mapLabel: string;
   approximateLabel: string;
+  loadTimeoutMs?: number;
   onBoundsChange: (bounds: MapBounds) => void;
   onFailure: () => void;
   onSelect?: (eventId: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const markerElementsRef = useRef(new Map<string, HTMLButtonElement>());
+  const selectedEventIdRef = useRef(selectedEventId);
+
+  useEffect(() => {
+    selectedEventIdRef.current = selectedEventId;
+    for (const [eventId, element] of markerElementsRef.current) {
+      element.setAttribute("aria-pressed", String(eventId === selectedEventId));
+    }
+  }, [selectedEventId]);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !styleURL) return;
+    const markerElements = markerElementsRef.current;
 
     let disposed = false;
     let failed = false;
@@ -56,15 +70,27 @@ export function EventMap({
     let markers: MapLibreMarker[] = [];
     let resizeObserver: ResizeObserver | null = null;
     let moveTimer: ReturnType<typeof setTimeout> | null = null;
+    let loadTimer: ReturnType<typeof setTimeout> | null = null;
     let handleMoveEnd: ((event: MapEventType["moveend"] & object) => void) | null = null;
     let ignoreProgrammaticMove = true;
+    let ready = false;
     let lastBounds = bounds ? boundsKey(bounds) : "";
 
     const fail = () => {
-      if (failed || disposed) return;
+      if (ready || failed || disposed) return;
       failed = true;
+      if (loadTimer) clearTimeout(loadTimer);
       onFailure();
     };
+    const markReady = () => {
+      if (disposed || failed) return;
+      ready = true;
+      ignoreProgrammaticMove = false;
+      if (loadTimer) clearTimeout(loadTimer);
+      loadTimer = null;
+    };
+
+    loadTimer = setTimeout(fail, loadTimeoutMs);
 
     void (async () => {
       try {
@@ -102,7 +128,7 @@ export function EventMap({
 
         map.on("moveend", handleMoveEnd);
         map.on("error", fail);
-        map.once("idle", () => { ignoreProgrammaticMove = false; });
+        map.once("idle", markReady);
 
         markers = facts.map((fact) => {
           const markerElement = document.createElement("button");
@@ -114,7 +140,10 @@ export function EventMap({
             "aria-label",
             fact.precision === "approximate" ? `${fact.title} · ${approximateLabel}` : fact.title,
           );
+          markerElement.setAttribute("aria-controls", `map-preview-${fact.eventId}`);
+          markerElement.setAttribute("aria-pressed", String(fact.eventId === selectedEventIdRef.current));
           markerElement.addEventListener("click", () => onSelect?.(fact.eventId));
+          markerElements.set(fact.eventId, markerElement);
           return new maplibre.Marker({ element: markerElement, anchor: "center" })
             .setLngLat([fact.longitude, fact.latitude])
             .addTo(map as MapLibreMap);
@@ -131,16 +160,18 @@ export function EventMap({
 
     return () => {
       disposed = true;
+      if (loadTimer) clearTimeout(loadTimer);
       if (moveTimer) clearTimeout(moveTimer);
       resizeObserver?.disconnect();
       markers.forEach((marker) => marker.remove());
       markers = [];
+      markerElements.clear();
       if (map && handleMoveEnd) map.off("moveend", handleMoveEnd);
       map?.off("error", fail);
       map?.remove();
       map = null;
     };
-  }, [approximateLabel, bounds, events, onBoundsChange, onFailure, onSelect, styleURL]);
+  }, [approximateLabel, bounds, events, loadTimeoutMs, onBoundsChange, onFailure, onSelect, styleURL]);
 
   return <div ref={containerRef} className={styles.mapCanvas} role="region" aria-label={mapLabel} />;
 }

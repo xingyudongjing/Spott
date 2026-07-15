@@ -42,6 +42,8 @@ export type EventCardEvent = Pick<
   | "availableCapacity"
   | "waitlistEnabled"
   | "availableActions"
+  | "registrationStatus"
+  | "viewerRegistration"
 >;
 
 export function EventResultCard({
@@ -115,6 +117,12 @@ function capacityLabel(
   event: EventCardEvent,
   t: ReturnType<typeof useI18n>["t"],
 ) {
+  const viewerStatus = event.viewerRegistration?.status ?? event.registrationStatus;
+  if (viewerStatus === "pending") return t("event.registrationPending");
+  if (viewerStatus === "confirmed") return t("event.registrationConfirmed");
+  if (viewerStatus === "waitlisted") return t("event.waitlist");
+  if (viewerStatus === "offered") return t("event.registrationOffered");
+  if (viewerStatus === "checked_in") return t("event.checkedIn");
   if (event.capacity === 0) return t("event.unlimited");
   if (event.availableCapacity > 0) return t("event.spots", { count: event.availableCapacity });
   if (event.waitlistEnabled && event.availableActions.includes("joinWaitlist")) {

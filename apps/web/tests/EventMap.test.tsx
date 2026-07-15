@@ -1,14 +1,17 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
+import { EventResults, MapEventPreview } from "../app/components/discovery/EventResults";
 import { EventMap, eventMarkerFacts } from "../app/components/discovery/EventMap";
-import { eventFixture, makeEvent } from "./event-fixtures";
+import { eventFixture, makeEvent, makePage, renderWithI18n } from "./event-fixtures";
 
 const mapBoundary = vi.hoisted(() => ({
   remove: vi.fn(),
   resize: vi.fn(),
   handlers: new Map<string, (...args: unknown[]) => void>(),
   onceHandlers: new Map<string, (...args: unknown[]) => void>(),
+  markerElements: [] as HTMLElement[],
   bounds: {
     getWest: () => 139.6,
     getSouth: () => 35.5,
@@ -28,6 +31,7 @@ vi.mock("maplibre-gl", () => {
     remove() { mapBoundary.remove(); }
   }
   class MarkerBoundary {
+    constructor(options: { element: HTMLElement }) { mapBoundary.markerElements.push(options.element); }
     setLngLat() { return this; }
     addTo() { return this; }
     remove() { return this; }
@@ -40,6 +44,7 @@ beforeEach(() => {
   mapBoundary.resize.mockReset();
   mapBoundary.handlers.clear();
   mapBoundary.onceHandlers.clear();
+  mapBoundary.markerElements.length = 0;
 });
 
 describe("MapLibre adapter", () => {
@@ -90,5 +95,112 @@ describe("MapLibre adapter", () => {
     expect(mapBoundary.handlers.has("moveend")).toBe(false);
     expect(mapBoundary.remove).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
+  });
+
+  test("turns a marker selection into an actionable localized detail preview", async () => {
+    const onSelect = vi.fn();
+    render(
+      <EventMap
+        events={[eventFixture]}
+        styleURL="https://media.spott.jp/map/style.json"
+        mapLabel="活动地图"
+        approximateLabel="约在此区域"
+        onBoundsChange={vi.fn()}
+        onFailure={vi.fn()}
+        onSelect={onSelect}
+      />,
+    );
+    await waitFor(() => expect(mapBoundary.markerElements).toHaveLength(1));
+    mapBoundary.markerElements[0]?.click();
+    expect(onSelect).toHaveBeenCalledWith(eventFixture.id);
+
+    renderWithI18n(<MapEventPreview event={eventFixture} />);
+    const preview = screen.getByRole("region", { name: `${eventFixture.title} 活动预览` });
+    expect(preview).toHaveTextContent(eventFixture.publicArea ?? "");
+    expect(screen.getByRole("link", { name: "查看活动详情" })).toHaveAttribute(
+      "href",
+      `/e/${eventFixture.publicSlug}`,
+    );
+  });
+
+  test("fails once when the map cannot become idle before its loading deadline", async () => {
+    vi.useFakeTimers();
+    const onFailure = vi.fn();
+    render(
+      <EventMap
+        events={[eventFixture]}
+        styleURL="https://media.spott.jp/map/style.json"
+        mapLabel="活动地图"
+        approximateLabel="约在此区域"
+        loadTimeoutMs={1_000}
+        onBoundsChange={vi.fn()}
+        onFailure={onFailure}
+      />,
+    );
+
+    await act(async () => { await Promise.resolve(); });
+    await vi.waitFor(() => expect(mapBoundary.onceHandlers.has("idle")).toBe(true));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_001); });
+    expect(onFailure).toHaveBeenCalledTimes(1);
+
+    mapBoundary.handlers.get("error")?.();
+    expect(onFailure).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  test("cancels the loading deadline after idle and ignores later recoverable map errors", async () => {
+    vi.useFakeTimers();
+    const onFailure = vi.fn();
+    render(
+      <EventMap
+        events={[eventFixture]}
+        styleURL="http://127.0.0.1:4201/style.json"
+        mapLabel="活动地图"
+        approximateLabel="约在此区域"
+        loadTimeoutMs={1_000}
+        onBoundsChange={vi.fn()}
+        onFailure={onFailure}
+      />,
+    );
+
+    await act(async () => { await Promise.resolve(); });
+    await vi.waitFor(() => expect(mapBoundary.onceHandlers.has("idle")).toBe(true));
+    mapBoundary.onceHandlers.get("idle")?.();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_001); });
+    mapBoundary.handlers.get("error")?.();
+    expect(onFailure).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  test("keeps results actionable when map loading fails and offers retry or list mode", async () => {
+    const onRetryMap = vi.fn();
+    const onUseList = vi.fn();
+    renderWithI18n(
+      <EventResults
+        page={makePage([eventFixture])}
+        loading={false}
+        refreshing={false}
+        loadingMore={false}
+        error="map"
+        mode="map"
+        mapStyleURL="https://media.spott.jp/map/style.json"
+        mapAttempt={0}
+        onRetry={vi.fn()}
+        onReset={vi.fn()}
+        onLoadMore={vi.fn()}
+        onBoundsChange={vi.fn()}
+        onMapFailure={vi.fn()}
+        onRetryMap={onRetryMap}
+        onUseList={onUseList}
+        onSelectEvent={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("地图暂时不可用");
+    expect(screen.getByRole("link", { name: new RegExp(eventFixture.title) })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "重试地图" }));
+    await userEvent.click(screen.getByRole("button", { name: "查看列表" }));
+    expect(onRetryMap).toHaveBeenCalledTimes(1);
+    expect(onUseList).toHaveBeenCalledTimes(1);
   });
 });

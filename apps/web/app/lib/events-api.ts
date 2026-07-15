@@ -10,13 +10,16 @@ export class EventAPIError extends Error {
 
 export async function searchEvents(
   query: EventDiscoveryQuery,
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; accessToken?: string; cookie?: string },
 ): Promise<EventPage> {
   const params = serializeDiscoveryQuery(query);
   const suffix = params.size ? `?${params.toString()}` : "";
+  const headers = new Headers({ Accept: "application/json" });
+  if (options?.accessToken) headers.set("Authorization", `Bearer ${options.accessToken}`);
+  if (options?.cookie) headers.set("Cookie", options.cookie);
   const response = await fetch(`${eventAPIBase()}/events/search${suffix}`, {
     method: "GET",
-    headers: { Accept: "application/json" },
+    headers,
     credentials: "include",
     signal: options?.signal,
   });

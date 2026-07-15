@@ -78,4 +78,55 @@ test.describe("rendered discovery safeguards", () => {
     await expect(page).toHaveURL(/q=%E9%BB%91%E8%83%B6.*availableOnly=true/);
     await expect(page.getByTestId("discovery-event")).toHaveCount(1);
   });
+
+  test("mobile filter sheet restores focus and map markers open an actionable preview", async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${baseURL}/discover`);
+
+    const filterButton = page.getByRole("button", { name: "更多筛选", exact: true });
+    await filterButton.click();
+    const sheet = page.getByRole("dialog", { name: "更多筛选", exact: true });
+    await expect(sheet).toBeVisible();
+    await expect(page.getByLabel("开始日期", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("结束日期", { exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("discovery-filter-sheet-mobile.png") });
+
+    await sheet.press("Escape");
+    await expect(sheet).toBeHidden();
+    await expect(filterButton).toBeFocused();
+
+    await page.getByRole("button", { name: "地图", exact: true }).click();
+    const marker = page.locator('button[aria-controls^="map-preview-"]').first();
+    await expect(marker).toBeVisible();
+    const markerBox = await marker.boundingBox();
+    expect(markerBox?.width).toBeGreaterThanOrEqual(44);
+    expect(markerBox?.height).toBeGreaterThanOrEqual(44);
+    await marker.click();
+
+    const preview = page.getByRole("region", { name: /活动预览$/ });
+    await expect(preview).toBeVisible();
+    await expect(preview.getByRole("link", { name: "查看活动详情", exact: true })).toHaveAttribute("href", /^\/e\//);
+    await page.screenshot({ path: testInfo.outputPath("discovery-map-preview-mobile.png") });
+  });
+
+  test("map style failure preserves results and offers retry or list mode", async ({ page }, testInfo) => {
+    await page.route("http://127.0.0.1:4201/**", (route) => route.abort("failed"));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${baseURL}/discover`);
+    await page.getByRole("button", { name: "地图", exact: true }).click();
+
+    const fallback = page.locator('[role="alert"]').filter({ hasText: "地图暂时不可用" });
+    await expect(fallback).toContainText("地图暂时不可用");
+    await expect(page.getByTestId("discovery-event").first()).toBeVisible();
+    await expect(fallback.getByRole("button", { name: "重试地图", exact: true })).toBeVisible();
+    await expect(fallback.getByRole("button", { name: "查看列表", exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("discovery-map-fallback-mobile.png") });
+
+    await fallback.getByRole("button", { name: "重试地图", exact: true }).click();
+    await expect(page.locator('[role="alert"]').filter({ hasText: "地图暂时不可用" })).toBeVisible();
+    await page.locator('[role="alert"]').filter({ hasText: "地图暂时不可用" })
+      .getByRole("button", { name: "查看列表", exact: true }).click();
+    await expect(page.getByRole("button", { name: "列表", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("discovery-event").first()).toBeVisible();
+  });
 });

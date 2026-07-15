@@ -1,9 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import Link from "next/link";
 
 import type { MapBounds } from "../../lib/discovery-query";
-import type { EventPage } from "../../lib/event-contract";
+import type { EventPage, EventSummary } from "../../lib/event-contract";
 import { useI18n } from "../I18nProvider";
 import { DiscoveryEmpty, DiscoveryError, DiscoveryLoading } from "./DiscoveryState";
 import { EventList } from "./EventList";
@@ -24,6 +25,7 @@ export function EventResults({
   error,
   mode,
   mapStyleURL,
+  mapAttempt,
   bounds,
   selectedEventId,
   onRetry,
@@ -31,6 +33,8 @@ export function EventResults({
   onLoadMore,
   onBoundsChange,
   onMapFailure,
+  onRetryMap,
+  onUseList,
   onSelectEvent,
 }: {
   page: EventPage | null;
@@ -40,6 +44,7 @@ export function EventResults({
   error: DiscoveryErrorKind;
   mode: "list" | "map";
   mapStyleURL: string;
+  mapAttempt: number;
   bounds?: MapBounds;
   selectedEventId?: string | null;
   onRetry: () => void;
@@ -47,6 +52,8 @@ export function EventResults({
   onLoadMore: () => void;
   onBoundsChange: (bounds: MapBounds) => void;
   onMapFailure: () => void;
+  onRetryMap: () => void;
+  onUseList: () => void;
   onSelectEvent: (eventId: string) => void;
 }) {
   const { t } = useI18n();
@@ -56,27 +63,45 @@ export function EventResults({
   if (!page) return <DiscoveryLoading />;
 
   const hasItems = page.items.length > 0;
+  const selectedEvent = selectedEventId
+    ? page.items.find((event) => event.id === selectedEventId)
+    : undefined;
   return (
     <>
       {refreshing ? <p className={styles.liveStatus} role="status">{t("discover.refreshing")}</p> : null}
       {error === "stale" ? <p className={styles.liveStatus} role="status">{t("discover.staleError")}</p> : null}
-      {error === "map" ? <p className={styles.liveStatus} role="status">{t("discover.mapError")}</p> : null}
       {error === "pagination" ? <p className={styles.contractError} role="alert">{t("discover.paginationError")}</p> : null}
 
       {!hasItems && error === "pagination" ? null : !hasItems ? (
         <DiscoveryEmpty onReset={onReset} />
       ) : mode === "map" && mapStyleURL ? (
         <div className={styles.mapLayout}>
-          <EventMap
-            events={page.items}
-            styleURL={mapStyleURL}
-            bounds={bounds}
-            mapLabel={t("discover.mapRegion")}
-            approximateLabel={t("discover.approximate")}
-            onBoundsChange={onBoundsChange}
-            onFailure={onMapFailure}
-            onSelect={onSelectEvent}
-          />
+          <div className={styles.mapStage}>
+            {error === "map" ? (
+              <div className={styles.mapFallback} role="alert" aria-live="assertive">
+                <span className={styles.mapFallbackMark} aria-hidden="true">⌁</span>
+                <strong>{t("discover.mapError")}</strong>
+                <div className={styles.mapFallbackActions}>
+                  <button type="button" onClick={onRetryMap}>{t("discover.retryMap")}</button>
+                  <button type="button" onClick={onUseList}>{t("discover.useList")}</button>
+                </div>
+              </div>
+            ) : (
+              <EventMap
+                key={mapAttempt}
+                events={page.items}
+                styleURL={mapStyleURL}
+                bounds={bounds}
+                selectedEventId={selectedEventId}
+                mapLabel={t("discover.mapRegion")}
+                approximateLabel={t("discover.approximate")}
+                onBoundsChange={onBoundsChange}
+                onFailure={onMapFailure}
+                onSelect={onSelectEvent}
+              />
+            )}
+            {error !== "map" && selectedEvent ? <MapEventPreview event={selectedEvent} /> : null}
+          </div>
           <EventList events={page.items} selectedEventId={selectedEventId} />
         </div>
       ) : (
@@ -94,5 +119,25 @@ export function EventResults({
         </button>
       ) : null}
     </>
+  );
+}
+
+export function MapEventPreview({ event }: { event: EventSummary }) {
+  const { t } = useI18n();
+  const label = t("discover.mapPreview", { title: event.title });
+  return (
+    <section
+      id={`map-preview-${event.id}`}
+      className={styles.mapPreview}
+      role="region"
+      aria-label={label}
+      aria-live="polite"
+    >
+      <div>
+        <strong>{event.title}</strong>
+        <span>{event.publicArea || t("event.areaTBA")}</span>
+      </div>
+      <Link href={`/e/${event.publicSlug}`}>{t("discover.viewDetails")}</Link>
+    </section>
   );
 }

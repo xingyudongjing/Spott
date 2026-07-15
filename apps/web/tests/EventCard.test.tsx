@@ -79,4 +79,31 @@ describe("premium event result", () => {
     expect(card).toHaveTextContent("已满");
     expect(card).not.toHaveTextContent("可候补");
   });
+
+  test.each([
+    ["pending", "报名待确认"],
+    ["confirmed", "已报名"],
+    ["waitlisted", "候补中"],
+    ["offered", "候补名额已释放"],
+    ["checked_in", "已签到"],
+  ] as const)("prioritizes the viewer registration state %s over generic capacity", (status, label) => {
+    renderWithI18n(
+      <EventResultCard
+        event={{
+          ...eventFixture,
+          registrationStatus: status,
+          viewerRegistration: {
+            id: "019b0000-0000-7000-8100-000000000090",
+            status,
+            partySize: 1,
+            offerExpiresAt: status === "offered" ? "2026-07-17T00:00:00.000Z" : null,
+          },
+        }}
+      />,
+    );
+
+    const card = screen.getByRole("article", { name: eventFixture.title });
+    expect(card).toHaveTextContent(label);
+    expect(card).not.toHaveTextContent("余 13");
+  });
 });

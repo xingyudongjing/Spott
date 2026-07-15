@@ -13,8 +13,8 @@ test("renders the real discovery product instead of starter content", async () =
   const response = await render("/discover");
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /SPOTT/);
-  assert.match(html, /找到兴趣相投的人/);
+  assert.match(html, />Spott</);
+  assert.match(html, /遇见真正想参加的活动/);
   assert.match(html, /搜索活动、地点、主办方或兴趣/);
   assert.doesNotMatch(html, /Codex is working|Your site is taking shape|codex-preview/);
 });
@@ -24,7 +24,9 @@ test("uses the locale cookie for Japanese server rendering", async () => {
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /lang="ja"/);
-  assert.match(html, /同じ興味を持つ人/);
+  assert.match(html, /本当に参加したいイベントに出会う/);
+  assert.match(html, /<title>[^<]*[\u3040-\u30ff][^<]*<\/title>/);
+  assert.match(html, /<meta name="description" content="[^"]*[\u3040-\u30ff][^"]*"\/>/);
 });
 
 test("ships installable PWA metadata and a privacy-safe service worker", async () => {
@@ -42,19 +44,19 @@ test("exposes real API-driven group and host surfaces", async () => {
   const [groups, studio, discovery] = await Promise.all([
     readFile(new URL("../app/groups/GroupsDirectory.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/studio/events/StudioEventsClient.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/components/DiscoverExperience.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/discovery/DiscoveryShell.tsx", import.meta.url), "utf8"),
   ]);
   assert.match(groups, /apiRequest<\{ items: GroupView\[\] \}>\("\/groups\?limit=60"\)/);
   assert.match(studio, /\/me\/hosted-events/);
   assert.match(studio, /\/checkin-codes/);
-  assert.match(discovery, /\/events\/search\?/);
+  assert.match(discovery, /searchEvents\(/);
   assert.doesNotMatch(studio, /eventRows\s*=/);
 });
 
 test("keeps the fixed mobile dock outside the filtered site header", async () => {
   const source = await readFile(new URL("../app/components/SiteHeader.tsx", import.meta.url), "utf8");
   const headerClose = source.indexOf("</header>");
-  const dockStart = source.indexOf('<nav className="mobile-dock"');
+  const dockStart = source.search(/<nav\s+className=\{styles\.mobileDock\}/);
   assert.ok(headerClose >= 0 && dockStart > headerClose, "mobile dock must be a sibling after the header");
 });
 
@@ -143,7 +145,7 @@ test("exposes cross-device account, media, transfer, and poster recovery contrac
 test("sends the same privacy-gated core funnel analytics from Web", async () => {
   const [analytics, discovery, eventActions, registration, composer, settings] = await Promise.all([
     readFile(new URL("../app/lib/analytics.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/components/DiscoverExperience.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/discovery/DiscoveryShell.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/e/[slug]/EventActions.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/register/[slug]/RegistrationFlow.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/create/EventComposer.tsx", import.meta.url), "utf8"),

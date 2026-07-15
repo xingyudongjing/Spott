@@ -1,5 +1,7 @@
 "use client";
 
+import { useCallback, useId, useRef, useState } from "react";
+
 import {
   resolveDateShortcut,
   type EventDiscoveryQuery,
@@ -33,6 +35,10 @@ export function DiscoveryFilters({
   onReset: () => void;
 }) {
   const { t } = useI18n();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const openerRef = useRef<HTMLButtonElement>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const dialogTitleId = useId();
   const hasDate = Boolean(query.startsAfter || query.startsBefore);
   const toggleWeekend = () => {
     if (hasDate) {
@@ -41,6 +47,23 @@ export function DiscoveryFilters({
     }
     onPatch(resolveDateShortcut("this_weekend", "Asia/Tokyo"));
   };
+  const closeDialog = useCallback(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (typeof dialog.close === "function") dialog.close();
+    else dialog.removeAttribute("open");
+    setDialogOpen(false);
+    openerRef.current?.focus();
+  }, []);
+  const openDialog = useCallback(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    setDialogOpen(true);
+  }, []);
+  const startDate = dateInputValue(query.startsAfter);
+  const endDate = dateInputValue(query.startsBefore, true);
 
   return (
     <div className={styles.filters}>
@@ -95,9 +118,63 @@ export function DiscoveryFilters({
         </label>
       </div>
 
-      <details className={styles.moreFilters}>
-        <summary><SlidersIcon />{t("discover.moreFilters")}</summary>
-        <div className={styles.advancedPanel}>
+      <div className={styles.moreFilters}>
+        <button
+          ref={openerRef}
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded={dialogOpen}
+          onClick={openDialog}
+        >
+          <SlidersIcon />{t("discover.moreFilters")}
+        </button>
+        <dialog
+          ref={dialogRef}
+          className={styles.filterDialog}
+          aria-labelledby={dialogTitleId}
+          aria-modal="true"
+          onClose={() => {
+            setDialogOpen(false);
+            openerRef.current?.focus();
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            closeDialog();
+          }}
+        >
+          <div className={styles.dialogHeader}>
+            <strong id={dialogTitleId}>{t("discover.moreFilters")}</strong>
+            <button type="button" onClick={closeDialog} aria-label={t("common.close")}>×</button>
+          </div>
+          <div className={styles.advancedPanel}>
+            <div className={styles.dateFields}>
+              <label>
+                <span>{t("discover.startDate")}</span>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(event) => {
+                    const startsAfter = dateBoundary(event.target.value, false);
+                    onPatch({
+                      startsAfter,
+                      ...(startsAfter && query.startsBefore && Date.parse(startsAfter) > Date.parse(query.startsBefore)
+                        ? { startsBefore: undefined }
+                        : {}),
+                    });
+                  }}
+                />
+              </label>
+              <label>
+                <span>{t("discover.endDate")}</span>
+                <input
+                  type="date"
+                  min={startDate || undefined}
+                  value={endDate}
+                  onChange={(event) => onPatch({ startsBefore: dateBoundary(event.target.value, true) })}
+                />
+              </label>
+            </div>
           <label>
             <span>{t("discover.category")}</span>
             <select
@@ -110,12 +187,27 @@ export function DiscoveryFilters({
               ))}
             </select>
           </label>
-          <button type="button" onClick={onReset}>{t("common.clear")}</button>
-        </div>
-      </details>
+            <button type="button" onClick={onReset}>{t("common.clear")}</button>
+          </div>
+        </dialog>
+      </div>
       <button className={styles.desktopClear} type="button" onClick={onReset}>
         {t("common.clear")}
       </button>
     </div>
   );
+}
+
+function dateBoundary(value: string, exclusiveEnd: boolean) {
+  if (!value) return undefined;
+  const [year, month, day] = value.split("-").map(Number);
+  if (!year || !month || !day) return undefined;
+  return new Date(Date.UTC(year, month - 1, day + (exclusiveEnd ? 1 : 0), -9)).toISOString();
+}
+
+function dateInputValue(value: string | undefined, exclusiveEnd = false) {
+  if (!value) return "";
+  const local = new Date(Date.parse(value) + 9 * 60 * 60 * 1000);
+  if (exclusiveEnd) local.setUTCDate(local.getUTCDate() - 1);
+  return local.toISOString().slice(0, 10);
 }

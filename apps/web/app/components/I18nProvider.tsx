@@ -34,10 +34,10 @@ export function useI18n(): I18nValue {
 }
 
 export function LanguageSwitcher({ compact = false }: { compact?: boolean }) {
-  const { locale, setLocale } = useI18n();
+  const { locale, setLocale, t } = useI18n();
   return <label className={`language-switcher${compact ? " compact-language" : ""}`}>
-    <span className="sr-only">Language</span>
-    <select value={locale} onChange={(event) => setLocale(event.target.value as Locale)} aria-label="Language">
+    <span className="sr-only">{t("nav.language")}</span>
+    <select value={locale} onChange={(event) => setLocale(event.target.value as Locale)} aria-label={t("nav.language")}>
       {locales.map((value) => <option key={value} value={value}>{localeNames[value]}</option>)}
     </select>
   </label>;

@@ -81,5 +81,6 @@ describe('buildDiscoveryStatement', () => {
     expect(statement.text).toContain("attendance_rate_band");
     expect(statement.text).toContain('offer_expires_at');
     expect(statement.text).toContain('registration_party_size');
+    expect(statement.text).not.toContain('events.registration_questions');
   });
 });

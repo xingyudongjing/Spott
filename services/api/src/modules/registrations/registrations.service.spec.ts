@@ -260,5 +260,8 @@ describe('RegistrationsService offered capacity accounting', () => {
     const update = queries.find(({ text }) => text.includes('confirmed_count = GREATEST'));
     expect(update?.text).toContain("offered_count = GREATEST(0, offered_count - CASE WHEN $2 = 'offered' THEN $3 ELSE 0 END)");
     expect(update?.values).toEqual([eventId, 'offered', 3]);
+    const promotion = queries.find(({ text }) => text.includes('UPDATE events.waitlist_promotions'));
+    expect(promotion?.values).toEqual([registrationId]);
+    expect(promotion?.text).toContain('accepted_at IS NULL AND expired_at IS NULL');
   });
 });

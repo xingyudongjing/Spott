@@ -294,6 +294,7 @@ export class EventsService {
        LEFT JOIN events.event_fees f ON f.event_id = e.id
        LEFT JOIN events.event_capacity c ON c.event_id = e.id
        LEFT JOIN events.registrations r ON r.event_id = e.id AND r.user_id = $1
+         AND r.deleted_at IS NULL
          AND r.status IN ('pending','confirmed','waitlisted','offered','checked_in')
        LEFT JOIN LATERAL (
          SELECT offer.expires_at FROM events.waitlist_promotions offer
@@ -663,6 +664,7 @@ export class EventsService {
        LEFT JOIN events.event_fees f ON f.event_id = e.id
        LEFT JOIN events.event_capacity c ON c.event_id = e.id
        LEFT JOIN events.registrations r ON r.event_id = e.id AND r.user_id = $2
+         AND r.deleted_at IS NULL
          AND r.status IN ('pending','confirmed','waitlisted','offered','checked_in')
        LEFT JOIN LATERAL (
          SELECT offer.expires_at FROM events.waitlist_promotions offer
@@ -696,6 +698,16 @@ export class EventsService {
   }
 
   private toView(row: EventRow, viewer: AuthenticatedUser | undefined, includeDetail: boolean): Record<string, unknown> {
+    if (
+      ['published', 'registration_closed', 'in_progress'].includes(row.status)
+      && (!row.region_id || !row.public_area || row.is_free === null || row.is_free === undefined)
+    ) {
+      throw new DomainError(
+        'EVENT_DATA_INCOMPLETE',
+        'Published event is missing required location or fee facts.',
+        500,
+      );
+    }
     const capacity = row.capacity ?? 0;
     const occupied = row.confirmed_count + (row.pending_count ?? 0) + (row.offered_count ?? 0);
     const actions = availableEventActions(
@@ -741,14 +753,16 @@ export class EventsService {
     const coordinate = includeDetail && canSeeAddress && exactCoordinate
       ? exactCoordinate
       : approximateCoordinate;
-    const fee = {
-      isFree: row.is_free ?? true,
-      amountJPY: row.amount_jpy ? Number(row.amount_jpy) : null,
-      collectorName: row.collector_name,
-      method: row.method,
-      paymentDeadlineText: row.payment_deadline_text,
-      refundPolicy: row.refund_policy,
-    };
+    const fee = row.is_free === null || row.is_free === undefined
+      ? null
+      : {
+          isFree: row.is_free,
+          amountJPY: row.amount_jpy ? Number(row.amount_jpy) : null,
+          collectorName: row.collector_name,
+          method: row.method,
+          paymentDeadlineText: row.payment_deadline_text,
+          refundPolicy: row.refund_policy,
+        };
     const view: Record<string, unknown> = {
       id: row.id,
       publicSlug: row.public_slug,
@@ -761,8 +775,8 @@ export class EventsService {
       endsAt: row.ends_at?.toISOString() ?? null,
       deadlineAt: row.deadline_at?.toISOString() ?? null,
       displayTimeZone: row.display_time_zone ?? 'Asia/Tokyo',
-      region: row.region_id ?? 'tokyo',
-      publicArea: row.public_area ?? '地点待定',
+      region: row.region_id,
+      publicArea: row.public_area,
       capacity,
       confirmedCount: row.confirmed_count,
       availableCapacity: row.available_capacity ?? Math.max(0, capacity - occupied),
@@ -797,17 +811,6 @@ export class EventsService {
       primaryLocale: row.primary_locale ?? 'ja',
       supportedLocales: row.supported_locales ?? ['ja'],
       localeConfirmed: Boolean(row.locale_confirmed_at),
-      attendeeRequirements: row.attendee_requirements,
-      riskFlags: row.risk_flags,
-      riskDetails: row.risk_details,
-      groupId: row.group_id,
-      checkinMode: row.checkin_mode,
-      commentPermission: row.comment_permission,
-      posterEnabled: row.poster_enabled,
-      exactAddressVisibility: row.exact_address_visibility ?? 'confirmed',
-      registrationQuestions: row.registration_questions,
-      media: row.media_items,
-      mediaCount: Number(row.media_count),
       availableActions: actions,
       version: Number(row.version),
       updatedAt: row.updated_at.toISOString(),
@@ -815,6 +818,17 @@ export class EventsService {
     if (includeDetail) {
       Object.assign(view, {
         exactAddress,
+        attendeeRequirements: row.attendee_requirements,
+        riskFlags: row.risk_flags,
+        riskDetails: row.risk_details,
+        groupId: row.group_id,
+        checkinMode: row.checkin_mode,
+        commentPermission: row.comment_permission,
+        posterEnabled: row.poster_enabled,
+        exactAddressVisibility: row.exact_address_visibility ?? 'confirmed',
+        registrationQuestions: row.registration_questions,
+        media: row.media_items,
+        mediaCount: Number(row.media_count),
       });
     }
     return view;
@@ -832,7 +846,7 @@ export class EventsService {
         `INSERT INTO events.event_locations(
            event_id, region_id, public_area, exact_address_cipher, exact_address_visibility, point
          ) VALUES (
-           $1, COALESCE($2, 'tokyo'), COALESCE($3, '地点待定'), $4, COALESCE($5, 'confirmed'),
+           $1, $2, $3, $4, COALESCE($5, 'confirmed'),
            CASE WHEN $6::double precision IS NULL OR $7::double precision IS NULL THEN NULL
              ELSE ST_SetSRID(ST_MakePoint($6, $7), 4326)::geography END
          )
@@ -1058,12 +1072,16 @@ export class EventsService {
   private decodeCursor(cursor?: string): { date: string; id: string } | null {
     if (!cursor) return null;
     try {
-      const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as {
-        date: string;
-        id: string;
-      };
-      if (!parsed.date || !parsed.id) throw new Error('invalid');
-      return parsed;
+      const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown;
+      if (!parsed || typeof parsed !== 'object') throw new Error('invalid');
+      const candidate = parsed as { date?: unknown; id?: unknown };
+      if (typeof candidate.date !== 'string' || typeof candidate.id !== 'string') {
+        throw new Error('invalid');
+      }
+      const date = new Date(candidate.date);
+      const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (Number.isNaN(date.getTime()) || !uuid.test(candidate.id)) throw new Error('invalid');
+      return { date: date.toISOString(), id: candidate.id };
     } catch {
       throw new DomainError('CURSOR_INVALID', '分页游标无效。', 400);
     }

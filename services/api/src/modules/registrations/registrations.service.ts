@@ -465,6 +465,11 @@ export class RegistrationsService {
         [registration.id],
       );
       await client.query(
+        `UPDATE events.waitlist_promotions SET expired_at = clock_timestamp()
+         WHERE registration_id = $1 AND accepted_at IS NULL AND expired_at IS NULL`,
+        [registration.id],
+      );
+      await client.query(
         `UPDATE events.event_capacity SET
            confirmed_count = GREATEST(0, confirmed_count - CASE WHEN $2 = 'confirmed' THEN $3 ELSE 0 END),
            pending_count = GREATEST(0, pending_count - CASE WHEN $2 = 'pending' THEN $3 ELSE 0 END),

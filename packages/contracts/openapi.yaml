@@ -2523,12 +2523,15 @@ components:
         endsAt: { type: [string, 'null'], format: date-time }
         deadlineAt: { type: [string, 'null'], format: date-time }
         displayTimeZone: { type: string, default: Asia/Tokyo }
-        region: { type: string }
-        publicArea: { type: string }
+        region: { type: [string, 'null'] }
+        publicArea: { type: [string, 'null'] }
         capacity: { type: integer, minimum: 0 }
         confirmedCount: { type: integer, minimum: 0 }
         availableCapacity: { type: integer, minimum: 0 }
-        fee: { $ref: '#/components/schemas/EventFee' }
+        fee:
+          oneOf:
+            - $ref: '#/components/schemas/EventFee'
+            - type: 'null'
         coverURL: { type: [string, 'null'], format: uri }
         tags: { type: array, maxItems: 5, items: { type: string } }
         organizer: { $ref: '#/components/schemas/EventOrganizer' }

@@ -177,6 +177,13 @@ describe('EventsService event contract', () => {
     });
     expect(view).not.toHaveProperty('categoryLabel');
     expect(view).not.toHaveProperty('priceLabel');
+    expect(view).not.toHaveProperty('registrationQuestions');
+    expect(view).not.toHaveProperty('riskFlags');
+    expect(view).not.toHaveProperty('riskDetails');
+    expect(view).not.toHaveProperty('media');
+    expect(view).not.toHaveProperty('mediaCount');
+    expect(view).not.toHaveProperty('checkinMode');
+    expect(view).not.toHaveProperty('commentPermission');
     expect(JSON.stringify(view)).not.toContain('手机号已验证');
     expect(JSON.stringify(view)).not.toContain('本活动免费');
   });
@@ -286,6 +293,63 @@ describe('EventsService event contract', () => {
     const values = locationCall?.[1] ?? [];
     expect(values.indexOf(139.767125)).toBeLessThan(values.indexOf(35.681236));
     expect(locationCall?.[0]).toContain('events.event_locations.point');
+    expect(locationCall?.[0]).not.toContain("COALESCE($2, 'tokyo')");
+    expect(locationCall?.[0]).not.toContain("COALESCE($3, '地点待定')");
+  });
+
+  it('keeps incomplete draft facts null and rejects incomplete published views', () => {
+    const service = new EventsService({} as never, {} as never, {} as never, {} as never);
+    const mapper = service as unknown as {
+      toView: (
+        row: ReturnType<typeof eventRow>,
+        viewer: typeof publisher,
+        includeDetail: boolean,
+      ) => Record<string, unknown>;
+    };
+    const missingFacts = {
+      region_id: null,
+      public_area: null,
+      is_free: null,
+      amount_jpy: null,
+      collector_name: null,
+      method: null,
+      payment_deadline_text: null,
+      refund_policy: null,
+    };
+
+    expect(mapper.toView(eventRow({ status: 'draft', ...missingFacts }), publisher, true)).toMatchObject({
+      region: null,
+      publicArea: null,
+      fee: null,
+    });
+    let publishedError: unknown;
+    try {
+      mapper.toView(eventRow({ status: 'published', ...missingFacts }), publisher, true);
+    } catch (error) {
+      publishedError = error;
+    }
+    expect(publishedError).toMatchObject({ code: 'EVENT_DATA_INCOMPLETE', status: 500 });
+  });
+
+  it.each([
+    Buffer.from(JSON.stringify({
+      date: 'not-a-date',
+      id: '019b0000-0000-7000-8100-000000000001',
+    })).toString('base64url'),
+    Buffer.from(JSON.stringify({
+      date: '2030-08-10T03:00:00.000Z',
+      id: 'not-a-uuid',
+    })).toString('base64url'),
+    Buffer.from(JSON.stringify({ date: 123, id: null })).toString('base64url'),
+  ])('rejects an invalid cursor before querying PostgreSQL', async (cursor) => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const service = new EventsService({ query } as never, {} as never, {} as never, {} as never);
+
+    await expect(service.discovery(undefined, { cursor, limit: 20 })).rejects.toMatchObject({
+      code: 'CURSOR_INVALID',
+      status: 400,
+    });
+    expect(query).not.toHaveBeenCalled();
   });
 
   it('preserves an answered registration question id when the host edits its prompt', async () => {

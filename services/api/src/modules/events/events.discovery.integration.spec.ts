@@ -8,6 +8,7 @@ const offeredViewerId = '10000000-0000-7000-8000-000000000002';
 const confirmedViewerId = '10000000-0000-7000-8000-000000000003';
 const pendingViewerId = '10000000-0000-7000-8000-000000000004';
 const unrelatedViewerId = '10000000-0000-7000-8000-000000000005';
+const deletedRegistrationViewerId = '10000000-0000-7000-8000-000000000006';
 const matchEventId = '20000000-0000-7000-8000-000000000001';
 const publicEventId = '20000000-0000-7000-8000-000000000002';
 const noPointEventId = '20000000-0000-7000-8000-000000000003';
@@ -121,6 +122,7 @@ beforeAll(async () => {
     [confirmedViewerId, 'integration_confirmed', true],
     [pendingViewerId, 'integration_pending', true],
     [unrelatedViewerId, 'integration_unrelated', false],
+    [deletedRegistrationViewerId, 'integration_deleted_reg', true],
   ] as const) {
     await client.query(
       `INSERT INTO identity.users(id,public_handle,phone_verified_at)
@@ -151,6 +153,15 @@ beforeAll(async () => {
     [matchEventId],
   );
   await client.query(
+    `INSERT INTO events.registrations(
+       id,event_id,user_id,status,party_size,confirmed_at,deleted_at
+     ) VALUES (
+       '30000000-0000-7000-8000-000000000004',$1,$2,'confirmed',1,
+       clock_timestamp(),clock_timestamp()
+     )`,
+    [matchEventId, deletedRegistrationViewerId],
+  );
+  await client.query(
     `INSERT INTO events.registrations(id,event_id,user_id,status,party_size,waitlist_joined_at,confirmed_at)
      VALUES
        ('30000000-0000-7000-8000-000000000001',$1,$2,'offered',3,clock_timestamp(),NULL),
@@ -166,6 +177,10 @@ beforeAll(async () => {
   await client.query(
     'INSERT INTO events.event_favorites(user_id,event_id) VALUES ($1,$2)',
     [offeredViewerId, matchEventId],
+  );
+  await client.query(
+    'INSERT INTO events.event_favorites(user_id,event_id) VALUES ($1,$2)',
+    [deletedRegistrationViewerId, matchEventId],
   );
 
   await insertEvent({ id: publicEventId, slug: 'integration-public', startsAt: '2030-08-11T03:00:00.000Z' });
@@ -206,6 +221,7 @@ beforeAll(async () => {
       category: 'pagination',
       startsAt: '2030-09-01T03:00:00.000Z',
     });
+    await insertLocation(id, 'confirmed');
     await insertFee(id, true);
   }
 
@@ -275,6 +291,20 @@ describe('PostGIS discovery integration', () => {
       { id: completedEventId, completed: true },
       { id: cancelledEventId, completed: false },
       { id: legacyArchivedEventId, completed: false },
+    ]);
+    const completedAt = initial.rows[0]!.completed_at;
+    await client.query('UPDATE events.events SET completed_at=NULL WHERE id=$1', [completedEventId]);
+    await client.query(
+      "UPDATE events.events SET completed_at='2000-01-01T00:00:00.000Z' WHERE id=$1",
+      [legacyArchivedEventId],
+    );
+    const protectedFacts = await client.query<{ id: string; completed_at: Date | null }>(
+      'SELECT id,completed_at FROM events.events WHERE id=ANY($1::uuid[]) ORDER BY id',
+      [[completedEventId, legacyArchivedEventId]],
+    );
+    expect(protectedFacts.rows).toEqual([
+      { id: completedEventId, completed_at: completedAt },
+      { id: legacyArchivedEventId, completed_at: null },
     ]);
   });
 
@@ -391,6 +421,14 @@ describe('PostGIS discovery integration', () => {
       availableCapacity: 3,
       viewerRegistration: { status: 'offered', partySize: 3 },
     });
+    const deletedFavorite = await service.favorites(viewer(deletedRegistrationViewerId)) as {
+      items: Array<Record<string, unknown>>;
+    };
+    expect(deletedFavorite.items).toEqual([expect.objectContaining({
+      id: matchEventId,
+      viewerRegistration: null,
+      registrationStatus: null,
+    })]);
   });
 
   it('does not match an unconfirmed legacy locale and never fabricates missing points', async () => {
@@ -419,6 +457,11 @@ describe('PostGIS discovery integration', () => {
     const confirmedRow = await internals.loadEvent(client, matchEventId, confirmedViewerId);
     const hostRow = await internals.loadEvent(client, matchEventId, hostId);
     const publicRow = await internals.loadEvent(client, publicEventId, unrelatedViewerId);
+    const deletedRegistrationRow = await internals.loadEvent(
+      client,
+      matchEventId,
+      deletedRegistrationViewerId,
+    );
 
     expect(internals.toView(offeredRow, viewer(offeredViewerId), true)).toMatchObject({
       coordinate: { precision: 'approximate' }, exactAddress: null,
@@ -434,6 +477,15 @@ describe('PostGIS discovery integration', () => {
       coordinate: { latitude: 35.612345, longitude: 139.701234, precision: 'exact' },
       exactAddress: '東京都渋谷区1-2-3',
     });
+    expect(internals.toView(
+      deletedRegistrationRow,
+      viewer(deletedRegistrationViewerId),
+      true,
+    )).toMatchObject({
+      coordinate: { precision: 'approximate' },
+      exactAddress: null,
+      viewerRegistration: null,
+    });
   });
 
   it('writes a real point and preserves it when a later draft update omits coordinates', async () => {
@@ -447,13 +499,20 @@ describe('PostGIS discovery integration', () => {
     await internals.upsertDetails(client, coordinateDraftId, {
       coordinate: { latitude: 35.6895, longitude: 139.6917 },
     });
+    const hosted = await service.hosted(viewer(hostId)) as { items: Array<Record<string, unknown>> };
+    expect(hosted.items.find((item) => item.id === coordinateDraftId)).toMatchObject({
+      region: null,
+      publicArea: null,
+      fee: null,
+      coordinate: { latitude: 35.6895, longitude: 139.6917, precision: 'exact' },
+    });
+
     await internals.upsertDetails(client, coordinateDraftId, { publicArea: '新宿' });
     const point = await client.query<{ longitude: number; latitude: number }>(
       `SELECT ST_X(point::geometry) AS longitude, ST_Y(point::geometry) AS latitude
        FROM events.event_locations WHERE event_id=$1`,
       [coordinateDraftId],
     );
-
     expect(point.rows[0]).toEqual({ longitude: 139.6917, latitude: 35.6895 });
   });
 });

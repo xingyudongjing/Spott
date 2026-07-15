@@ -2352,12 +2352,12 @@ export interface components {
             deadlineAt: string | null;
             /** @default Asia/Tokyo */
             displayTimeZone: string;
-            region: string;
-            publicArea: string;
+            region: string | null;
+            publicArea: string | null;
             capacity: number;
             confirmedCount: number;
             availableCapacity: number;
-            fee: components["schemas"]["EventFee"];
+            fee: components["schemas"]["EventFee"] | null;
             /** Format: uri */
             coverURL: string | null;
             tags: string[];

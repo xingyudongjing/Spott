@@ -96,14 +96,6 @@ export function buildDiscoveryStatement(
        END AS longitude,
        COALESCE((
          SELECT jsonb_agg(jsonb_build_object(
-           'id', question.id, 'prompt', question.prompt, 'kind', question.kind,
-           'required', question.required, 'options', question.options
-         ) ORDER BY question.sort_order)
-         FROM events.registration_questions question WHERE question.event_id = e.id
-       ), '[]'::jsonb) AS registration_questions,
-       (SELECT count(*)::text FROM events.event_media media WHERE media.event_id = e.id) AS media_count,
-       COALESCE((
-         SELECT jsonb_agg(jsonb_build_object(
            'id', media.id, 'assetId', media.media_asset_id,
            'sortOrder', media.sort_order, 'state', asset.state,
            'moderationState', asset.moderation_state,

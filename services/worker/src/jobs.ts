@@ -272,7 +272,8 @@ export class WorkerJobs {
         `WITH due AS (
            SELECT p.id, p.registration_id, r.event_id, r.party_size
            FROM events.waitlist_promotions p JOIN events.registrations r ON r.id = p.registration_id
-           WHERE p.accepted_at IS NULL AND p.expired_at IS NULL AND p.expires_at <= clock_timestamp()
+           WHERE p.accepted_at IS NULL AND p.expired_at IS NULL
+             AND p.expires_at <= clock_timestamp() AND r.status = 'offered'
            ORDER BY p.expires_at FOR UPDATE OF p, r SKIP LOCKED LIMIT $1
          ), marked AS (
            UPDATE events.waitlist_promotions p SET expired_at = clock_timestamp()
@@ -296,7 +297,7 @@ export class WorkerJobs {
         `SELECT c.event_id, e.title FROM events.event_capacity c JOIN events.events e ON e.id = c.event_id
          WHERE e.status = 'published' AND c.confirmed_count + c.pending_count + c.offered_count < e.capacity
            AND EXISTS (SELECT 1 FROM events.registrations r WHERE r.event_id = c.event_id AND r.status = 'waitlisted')
-         ORDER BY c.updated_at FOR UPDATE OF c SKIP LOCKED LIMIT $1`,
+         ORDER BY c.updated_at LIMIT $1`,
         [this.config.WORKER_BATCH_SIZE],
       );
       let promoted = 0;
@@ -307,11 +308,28 @@ export class WorkerJobs {
            JOIN events.event_capacity c ON c.event_id = r.event_id
            WHERE r.event_id = $1 AND r.status = 'waitlisted'
              AND c.confirmed_count + c.pending_count + c.offered_count + r.party_size <= e.capacity
-           ORDER BY r.waitlist_joined_at, r.id FOR UPDATE OF r LIMIT 1`,
+           ORDER BY r.waitlist_joined_at, r.id FOR UPDATE OF r SKIP LOCKED LIMIT 1`,
           [event.event_id],
         );
         const row = registration.rows[0];
         if (!row) continue;
+        const capacity = await client.query<{
+          capacity: number;
+          confirmed_count: number;
+          pending_count: number;
+          offered_count: number;
+        }>(
+          `SELECT e.capacity, c.confirmed_count, c.pending_count, c.offered_count
+           FROM events.events e JOIN events.event_capacity c ON c.event_id = e.id
+           WHERE e.id = $1 AND e.status = 'published' FOR UPDATE OF c`,
+          [event.event_id],
+        );
+        const lockedCapacity = capacity.rows[0];
+        if (
+          !lockedCapacity
+          || lockedCapacity.confirmed_count + lockedCapacity.pending_count
+            + lockedCapacity.offered_count + row.party_size > lockedCapacity.capacity
+        ) continue;
         await client.query("UPDATE events.registrations SET status = 'offered' WHERE id = $1", [row.id]);
         const promotion = await client.query<{ id: string; expires_at: Date }>(
           `INSERT INTO events.waitlist_promotions(registration_id, expires_at)

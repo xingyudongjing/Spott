@@ -97,8 +97,10 @@ describe('worker job registry', () => {
     let promoted = false;
     const noticeKeys: unknown[] = [];
     const capacityUpdates: Array<{ text: string; values: readonly unknown[] }> = [];
+    const queryOrder: string[] = [];
     const client = {
       query: async (text: string, values: readonly unknown[] = []) => {
+        queryOrder.push(text);
         if (text.includes('WITH due AS')) return result([]);
         if (text.includes('SELECT c.event_id')) return result(promoted ? [] : [{
           event_id: '70000000-0000-0000-0000-000000000001', title: 'Coffee walk',
@@ -107,6 +109,12 @@ describe('worker job registry', () => {
           id: '50000000-0000-0000-0000-000000000001',
           user_id: '60000000-0000-0000-0000-000000000001',
           party_size: 3,
+        }]);
+        if (text.includes('SELECT e.capacity, c.confirmed_count')) return result([{
+          capacity: 10,
+          confirmed_count: 4,
+          pending_count: 1,
+          offered_count: 1,
         }]);
         if (text.includes('INSERT INTO events.waitlist_promotions')) return result([{
           id: '80000000-0000-0000-0000-000000000001', expires_at: new Date('2026-07-16T10:00:00.000Z'),
@@ -135,17 +143,24 @@ describe('worker job registry', () => {
       '70000000-0000-0000-0000-000000000001',
       3,
     ]);
+    const registrationLock = queryOrder.findIndex((text) => text.includes('FOR UPDATE OF r'));
+    const capacityLock = queryOrder.findIndex((text) => text.includes('FOR UPDATE OF c'));
+    expect(registrationLock).toBeGreaterThanOrEqual(0);
+    expect(capacityLock).toBeGreaterThan(registrationLock);
   });
 
   it('releases the complete offered party size when an offer expires', async () => {
     const capacityUpdates: Array<{ text: string; values: readonly unknown[] }> = [];
     const client = {
       query: async (text: string, values: readonly unknown[] = []) => {
-        if (text.includes('WITH due AS')) return result([{
+        if (text.includes('WITH due AS')) {
+          expect(text).toContain("r.status = 'offered'");
+          return result([{
           registration_id: '50000000-0000-0000-0000-000000000001',
           event_id: '70000000-0000-0000-0000-000000000001',
           party_size: 3,
-        }]);
+          }]);
+        }
         if (text.includes('UPDATE events.event_capacity')) {
           capacityUpdates.push({ text, values });
           return result([], 1);
@@ -166,5 +181,39 @@ describe('worker job registry', () => {
       '70000000-0000-0000-0000-000000000001',
       3,
     ]);
+  });
+
+  it('rechecks locked capacity and skips a stale promotion that no longer fits', async () => {
+    const mutations: string[] = [];
+    const client = {
+      query: async (text: string) => {
+        if (text.includes('WITH due AS')) return result([]);
+        if (text.includes('SELECT c.event_id')) return result([{
+          event_id: '70000000-0000-0000-0000-000000000001',
+          title: 'Coffee walk',
+        }]);
+        if (text.includes('SELECT r.id, r.user_id, r.party_size')) return result([{
+          id: '50000000-0000-0000-0000-000000000001',
+          user_id: '60000000-0000-0000-0000-000000000001',
+          party_size: 3,
+        }]);
+        if (text.includes('SELECT e.capacity, c.confirmed_count')) return result([{
+          capacity: 10,
+          confirmed_count: 7,
+          pending_count: 1,
+          offered_count: 1,
+        }]);
+        mutations.push(text);
+        return result([], 1);
+      },
+    };
+    const database = { transaction: async <T>(work: (value: typeof client) => Promise<T>) => work(client) };
+    const jobs = new WorkerJobs(database as never, config);
+
+    await expect(jobs.expireAndPromoteWaitlist()).resolves.toMatchObject({
+      processed: 0,
+      metadata: { promoted: 0 },
+    });
+    expect(mutations).toEqual([]);
   });
 });

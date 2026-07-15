@@ -14,7 +14,10 @@ export default function manifest(): MetadataRoute.Manifest {
     theme_color: "#F7F6F2",
     lang: "zh-Hans",
     categories: ["social", "lifestyle", "events"],
-    icons: [{ src: "/spott-icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any maskable" }],
+    icons: [
+      { src: "/spott-icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
+      { src: "/spott-icon.svg", sizes: "any", type: "image/svg+xml", purpose: "maskable" },
+    ],
     shortcuts: [
       { name: "Discover", short_name: "Discover", url: "/discover", icons: [{ src: "/spott-icon.svg", sizes: "any", type: "image/svg+xml" }] },
       { name: "My events", short_name: "My events", url: "/me/events", icons: [{ src: "/spott-icon.svg", sizes: "any", type: "image/svg+xml" }] },

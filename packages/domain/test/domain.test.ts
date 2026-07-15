@@ -91,11 +91,56 @@ describe('server-driven policy', () => {
     ).not.toContain('register');
   });
 
-  it('never exposes exact address to unauthorized or removed views', () => {
-    expect(canReadExactAddress('confirmed', 'published')).toBe(true);
-    expect(canReadExactAddress('pending', 'published')).toBe(false);
-    expect(canReadExactAddress('confirmed', 'removed')).toBe(false);
-  });
+  it.each([
+    ['organizer', 'public', undefined, 'published', true],
+    ['organizer', 'confirmed', undefined, 'published', true],
+    ['viewer', 'public', undefined, 'published', true],
+    ['viewer', 'confirmed', undefined, 'published', false],
+    ['viewer', 'public', 'pending', 'published', true],
+    ['viewer', 'confirmed', 'pending', 'published', false],
+    ['viewer', 'public', 'waitlisted', 'published', true],
+    ['viewer', 'confirmed', 'waitlisted', 'published', false],
+    ['viewer', 'public', 'offered', 'published', true],
+    ['viewer', 'confirmed', 'offered', 'published', false],
+    ['viewer', 'public', 'confirmed', 'published', true],
+    ['viewer', 'confirmed', 'confirmed', 'published', true],
+    ['viewer', 'public', 'checked_in', 'published', true],
+    ['viewer', 'confirmed', 'checked_in', 'published', true],
+  ] as const)(
+    'applies exact-address policy for %s with %s visibility and %s registration',
+    (viewerKind, visibility, registrationStatus, eventStatus, expected) => {
+      expect(canReadExactAddress({
+        isOrganizer: viewerKind === 'organizer',
+        visibility,
+        registrationStatus,
+        eventStatus,
+      })).toBe(expected);
+    },
+  );
+
+  it.each(['removed', 'cancelled'] as const)(
+    'blocks non-organizer exact addresses after an event is %s',
+    (eventStatus) => {
+      expect(canReadExactAddress({
+        isOrganizer: false,
+        visibility: 'public',
+        registrationStatus: 'confirmed',
+        eventStatus,
+      })).toBe(false);
+    },
+  );
+
+  it.each(['removed', 'cancelled'] as const)(
+    'continues to allow the organizer to read exact addresses after %s',
+    (eventStatus) => {
+      expect(canReadExactAddress({
+        isOrganizer: true,
+        visibility: 'confirmed',
+        registrationStatus: undefined,
+        eventStatus,
+      })).toBe(true);
+    },
+  );
 
   it('replaces registration actions with ticket actions for participants', () => {
     expect(

@@ -9,6 +9,73 @@ const publisher = {
   roles: ['host'],
 };
 
+function eventRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: '019b0000-0000-7000-8100-000000000001',
+    public_slug: 'event-contract',
+    organizer_id: publisher.id,
+    status: 'published',
+    title: '活动标题',
+    description: '活动介绍',
+    category_id: 'walk',
+    starts_at: new Date('2026-08-02T03:00:00.000Z'),
+    ends_at: new Date('2026-08-02T05:00:00.000Z'),
+    deadline_at: new Date('2026-08-01T03:00:00.000Z'),
+    display_time_zone: 'Asia/Tokyo',
+    capacity: 10,
+    registration_mode: 'approval',
+    waitlist_enabled: true,
+    format: 'hybrid',
+    primary_locale: 'ja',
+    supported_locales: ['ja', 'en'],
+    locale_confirmed_at: new Date('2026-07-15T00:00:00.000Z'),
+    version: '3',
+    created_at: new Date('2026-07-01T00:00:00.000Z'),
+    updated_at: new Date('2026-07-15T00:00:00.000Z'),
+    region_id: 'tokyo',
+    public_area: '涩谷',
+    exact_address_cipher: Buffer.from('cipher'),
+    is_free: true,
+    amount_jpy: null,
+    collector_name: null,
+    method: null,
+    payment_deadline_text: null,
+    refund_policy: null,
+    confirmed_count: 2,
+    pending_count: 3,
+    offered_count: 2,
+    available_capacity: 3,
+    registration_id: '019b0000-0000-7000-8200-000000000001',
+    registration_status: 'offered',
+    registration_party_size: 2,
+    offer_expires_at: new Date('2026-08-01T01:00:00.000Z'),
+    organizer_name: '主办方',
+    organizer_handle: 'host',
+    phone_verified: true,
+    completed_event_count: 8,
+    attendance_rate_band: '90_plus',
+    favorited: false,
+    tags: [],
+    attendee_requirements: null,
+    risk_flags: [],
+    risk_details: {},
+    group_id: null,
+    checkin_mode: 'dynamic_qr',
+    comment_permission: 'participants',
+    poster_enabled: true,
+    exact_address_visibility: 'confirmed',
+    latitude: 35.68,
+    longitude: 139.77,
+    exact_latitude: 35.681236,
+    exact_longitude: 139.767125,
+    registration_questions: [],
+    media_count: '1',
+    media_items: [],
+    organizer_followed: false,
+    ...overrides,
+  };
+}
+
 describe('serializeRegistrationQuestionOptions', () => {
   it('serializes an empty option list as a JSON array instead of a PostgreSQL array', () => {
     const parameter = serializeRegistrationQuestionOptions([]);
@@ -48,51 +115,15 @@ describe('EventsService event contract', () => {
 
   it('returns registration controls required by web and iOS clients', async () => {
     const deadline = new Date('2026-08-01T03:00:00.000Z');
-    const row = {
-      id: '019b0000-0000-7000-8100-000000000001',
-      public_slug: 'event-contract',
-      organizer_id: '019b0000-0000-7000-8000-000000000002',
-      status: 'published',
-      title: '活动标题',
-      description: '活动介绍',
-      category_id: 'walk',
-      starts_at: new Date('2026-08-02T03:00:00.000Z'),
-      ends_at: new Date('2026-08-02T05:00:00.000Z'),
+    const row = eventRow({
       deadline_at: deadline,
       capacity: 20,
-      registration_mode: 'approval',
-      waitlist_enabled: true,
-      version: '3',
-      created_at: new Date('2026-07-01T00:00:00.000Z'),
-      updated_at: new Date('2026-07-15T00:00:00.000Z'),
-      region_id: 'tokyo',
-      public_area: '涩谷',
       exact_address_cipher: null,
-      is_free: true,
-      amount_jpy: null,
-      collector_name: null,
-      method: null,
-      payment_deadline_text: null,
-      refund_policy: null,
-      confirmed_count: 2,
+      registration_id: null,
       registration_status: null,
-      organizer_name: '主办方',
-      organizer_handle: 'host',
-      favorited: false,
-      tags: [],
-      attendee_requirements: null,
-      risk_flags: [],
-      risk_details: {},
-      group_id: null,
-      checkin_mode: 'dynamic_qr',
-      comment_permission: 'participants',
-      poster_enabled: true,
-      exact_address_visibility: 'confirmed',
-      registration_questions: [],
-      media_count: '1',
-      media_items: [],
-      organizer_followed: false,
-    };
+      registration_party_size: null,
+      offer_expires_at: null,
+    });
     const release = vi.fn();
     const database = {
       pool: {
@@ -112,6 +143,149 @@ describe('EventsService event contract', () => {
       deadlineAt: deadline.toISOString(),
     });
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('maps real capacity, coordinate, registration and organizer trust facts without display copy', () => {
+    const service = new EventsService({} as never, { decrypt: vi.fn() } as never, {} as never, {} as never);
+    const mapper = service as unknown as {
+      toView: (row: ReturnType<typeof eventRow>, viewer: undefined, includeDetail: boolean) => Record<string, unknown>;
+    };
+
+    const view = mapper.toView(eventRow(), undefined, false);
+
+    expect(view).toMatchObject({
+      availableCapacity: 3,
+      coordinate: { latitude: 35.68, longitude: 139.77, precision: 'approximate' },
+      fee: { isFree: true },
+      format: 'hybrid',
+      primaryLocale: 'ja',
+      supportedLocales: ['ja', 'en'],
+      localeConfirmed: true,
+      viewerRegistration: {
+        id: '019b0000-0000-7000-8200-000000000001',
+        status: 'offered',
+        partySize: 2,
+        offerExpiresAt: '2026-08-01T01:00:00.000Z',
+      },
+      organizer: {
+        trust: {
+          phoneVerified: true,
+          completedEventCount: 8,
+          attendanceRateBand: '90_plus',
+        },
+      },
+    });
+    expect(view).not.toHaveProperty('categoryLabel');
+    expect(view).not.toHaveProperty('priceLabel');
+    expect(JSON.stringify(view)).not.toContain('手机号已验证');
+    expect(JSON.stringify(view)).not.toContain('本活动免费');
+  });
+
+  it('returns exact detail coordinates and address only when the explicit policy permits them', () => {
+    const fieldCrypto = { decrypt: vi.fn().mockReturnValue('東京都渋谷区1-2-3') };
+    const service = new EventsService({} as never, fieldCrypto as never, {} as never, {} as never);
+    const mapper = service as unknown as {
+      toView: (
+        row: ReturnType<typeof eventRow>,
+        viewer: typeof publisher | undefined,
+        includeDetail: boolean,
+      ) => Record<string, unknown>;
+    };
+    const unrelated = { ...publisher, id: '019b0000-0000-7000-8000-000000000099' };
+
+    expect(mapper.toView(eventRow({ registration_status: null }), unrelated, true)).toMatchObject({
+      coordinate: { latitude: 35.68, longitude: 139.77, precision: 'approximate' },
+      exactAddress: null,
+    });
+    expect(mapper.toView(eventRow({ registration_status: 'confirmed' }), unrelated, true)).toMatchObject({
+      coordinate: { latitude: 35.681236, longitude: 139.767125, precision: 'exact' },
+      exactAddress: '東京都渋谷区1-2-3',
+    });
+    expect(mapper.toView(eventRow({
+      registration_status: null,
+      exact_address_visibility: 'public',
+    }), unrelated, true)).toMatchObject({
+      coordinate: { latitude: 35.681236, longitude: 139.767125, precision: 'exact' },
+      exactAddress: '東京都渋谷区1-2-3',
+    });
+    expect(mapper.toView(eventRow({ status: 'cancelled' }), unrelated, true)).toMatchObject({
+      coordinate: { latitude: 35.68, longitude: 139.77, precision: 'approximate' },
+      exactAddress: null,
+    });
+    expect(mapper.toView(eventRow({ status: 'cancelled', registration_status: null }), publisher, true)).toMatchObject({
+      coordinate: { latitude: 35.681236, longitude: 139.767125, precision: 'exact' },
+      exactAddress: '東京都渋谷区1-2-3',
+    });
+  });
+
+  it('returns null rather than fabricating a coordinate when an event has no point', () => {
+    const service = new EventsService({} as never, {} as never, {} as never, {} as never);
+    const mapper = service as unknown as {
+      toView: (row: ReturnType<typeof eventRow>, viewer: undefined, includeDetail: boolean) => Record<string, unknown>;
+    };
+
+    expect(mapper.toView(eventRow({
+      latitude: null,
+      longitude: null,
+      exact_latitude: null,
+      exact_longitude: null,
+    }), undefined, false)).toMatchObject({ coordinate: null });
+  });
+
+  it('treats pending and offered party sizes as occupied when choosing the CTA', () => {
+    const service = new EventsService({} as never, {} as never, {} as never, {} as never);
+    const mapper = service as unknown as {
+      toView: (
+        row: ReturnType<typeof eventRow>,
+        viewer: typeof publisher,
+        includeDetail: boolean,
+      ) => Record<string, unknown>;
+    };
+    const unrelated = { ...publisher, id: '019b0000-0000-7000-8000-000000000099' };
+
+    const view = mapper.toView(eventRow({
+      registration_id: null,
+      registration_status: null,
+      registration_party_size: null,
+      confirmed_count: 2,
+      pending_count: 5,
+      offered_count: 3,
+      available_capacity: 0,
+    }), unrelated, false) as { availableActions: string[] };
+
+    expect(view.availableActions).toContain('joinWaitlist');
+    expect(view.availableActions).not.toContain('register');
+  });
+
+  it('writes draft coordinates to PostGIS with longitude before latitude', async () => {
+    const client = {
+      query: vi.fn(async (_sql: string, _values: readonly unknown[] = []) => {
+        void _sql;
+        void _values;
+        return { rows: [], rowCount: 1 };
+      }),
+    };
+    const service = new EventsService({} as never, {} as never, {} as never, {} as never);
+    const details = service as unknown as {
+      upsertDetails: (
+        transactionClient: typeof client,
+        eventId: string,
+        input: { coordinate: { latitude: number; longitude: number } },
+      ) => Promise<void>;
+    };
+
+    await details.upsertDetails(client, '019b0000-0000-7000-8100-000000000001', {
+      coordinate: { latitude: 35.681236, longitude: 139.767125 },
+    });
+
+    expect(client.query).toHaveBeenCalledWith(
+      expect.stringContaining('ST_SetSRID(ST_MakePoint'),
+      expect.arrayContaining([139.767125, 35.681236]),
+    );
+    const locationCall = client.query.mock.calls[0];
+    const values = locationCall?.[1] ?? [];
+    expect(values.indexOf(139.767125)).toBeLessThan(values.indexOf(35.681236));
+    expect(locationCall?.[0]).toContain('events.event_locations.point');
   });
 
   it('preserves an answered registration question id when the host edits its prompt', async () => {

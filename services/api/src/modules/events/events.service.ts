@@ -16,6 +16,7 @@ import { IdempotencyService } from '../../platform/idempotency.js';
 import type { AuthenticatedUser } from '../../platform/request-context.js';
 import { PointsService } from '../points/points.service.js';
 import type { DiscoveryQuery, EventFormat, EventLocale } from './events.discovery-query.js';
+import { buildDiscoveryStatement } from './events.discovery-sql.js';
 
 export interface EventDraftInput {
   title?: string | undefined;
@@ -74,12 +75,17 @@ interface EventRow {
   starts_at: Date | null;
   ends_at: Date | null;
   deadline_at: Date | null;
+  display_time_zone: string;
   capacity: number | null;
   registration_mode: string;
   waitlist_enabled: boolean;
   version: string;
   created_at: Date;
   updated_at: Date;
+  format: EventFormat;
+  primary_locale: EventLocale;
+  supported_locales: EventLocale[];
+  locale_confirmed_at: Date | null;
   region_id: string | null;
   public_area: string | null;
   exact_address_cipher: Buffer | null;
@@ -90,9 +96,18 @@ interface EventRow {
   payment_deadline_text: string | null;
   refund_policy: string | null;
   confirmed_count: number;
+  pending_count: number;
+  offered_count: number;
+  available_capacity: number | null;
+  registration_id: string | null;
   registration_status: string | null;
+  registration_party_size: number | null;
+  offer_expires_at: Date | null;
   organizer_name: string | null;
   organizer_handle: string;
+  phone_verified: boolean;
+  completed_event_count: number;
+  attendance_rate_band: 'unavailable' | 'under_70' | '70_89' | '90_plus';
   favorited: boolean;
   tags: string[];
   attendee_requirements: string | null;
@@ -103,6 +118,10 @@ interface EventRow {
   comment_permission: string;
   poster_enabled: boolean;
   exact_address_visibility: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  exact_latitude: number | null;
+  exact_longitude: number | null;
   registration_questions: Array<{
     id: string;
     prompt: string;
@@ -141,50 +160,8 @@ export class EventsService {
   ): Promise<unknown> {
     const limit = Math.min(Math.max(options.limit ?? 20, 1), 100);
     const cursor = this.decodeCursor(options.cursor);
-    const values: unknown[] = [viewer?.id ?? null, options.region ?? null, options.query ?? null, options.category ?? null];
-    const result = await this.database.query<EventRow>(
-      `SELECT e.*, l.region_id, l.public_area, NULL::bytea AS exact_address_cipher,
-         f.is_free, f.amount_jpy, f.collector_name, f.method, f.payment_deadline_text,
-         f.refund_policy, COALESCE(c.confirmed_count, 0) AS confirmed_count,
-         r.status::text AS registration_status, p.nickname AS organizer_name,
-         u.public_handle AS organizer_handle,
-         (fav.event_id IS NOT NULL) AS favorited,
-         EXISTS(SELECT 1 FROM identity.follows follow
-           WHERE follow.follower_id = $1 AND follow.target_type = 'user'
-             AND follow.target_id = e.organizer_id AND follow.deleted_at IS NULL) AS organizer_followed,
-         l.exact_address_visibility,
-         COALESCE((SELECT jsonb_agg(jsonb_build_object('id', q.id, 'prompt', q.prompt, 'kind', q.kind,
-           'required', q.required, 'options', q.options) ORDER BY q.sort_order)
-           FROM events.registration_questions q WHERE q.event_id = e.id), '[]'::jsonb) AS registration_questions,
-         (SELECT count(*)::text FROM events.event_media media WHERE media.event_id = e.id) AS media_count,
-         COALESCE((SELECT jsonb_agg(jsonb_build_object('id', media.id, 'assetId', media.media_asset_id,
-           'sortOrder', media.sort_order, 'state', asset.state, 'moderationState', asset.moderation_state,
-           'url', asset.derivatives->'card'->>'url')
-           ORDER BY media.sort_order) FROM events.event_media media
-           LEFT JOIN media.assets asset ON asset.id = media.media_asset_id
-           WHERE media.event_id = e.id), '[]'::jsonb) AS media_items
-       FROM events.events e
-       JOIN identity.users u ON u.id = e.organizer_id
-       LEFT JOIN identity.profiles p ON p.user_id = e.organizer_id AND p.deleted_at IS NULL
-       LEFT JOIN events.event_locations l ON l.event_id = e.id
-       LEFT JOIN events.event_fees f ON f.event_id = e.id
-       LEFT JOIN events.event_capacity c ON c.event_id = e.id
-       LEFT JOIN events.registrations r ON r.event_id = e.id AND r.user_id = $1
-         AND r.status IN ('pending','confirmed','waitlisted','offered','checked_in')
-       LEFT JOIN events.event_favorites fav ON fav.event_id = e.id AND fav.user_id = $1
-         AND fav.deleted_at IS NULL
-       WHERE e.status IN ('published','registration_closed','in_progress')
-         AND e.deleted_at IS NULL
-         AND e.starts_at >= clock_timestamp() - interval '6 hours'
-         AND ($2::text IS NULL OR l.region_id = $2)
-         AND ($3::text IS NULL OR e.title ILIKE '%' || $3 || '%'
-           OR e.description ILIKE '%' || $3 || '%' OR similarity(e.title, $3) > 0.15)
-         AND ($4::text IS NULL OR e.category_id = $4)
-         AND ($5::timestamptz IS NULL OR (e.starts_at, e.id) > ($5, $6::uuid))
-       ORDER BY e.starts_at, e.id
-       LIMIT $7`,
-      [...values, cursor?.date ?? null, cursor?.id ?? null, limit + 1],
-    );
+    const statement = buildDiscoveryStatement(viewer?.id ?? null, options, cursor);
+    const result = await this.database.query<EventRow>(statement.text, statement.values);
     const hasMore = result.rows.length > limit;
     const page = result.rows.slice(0, limit);
     const last = page.at(-1);
@@ -209,13 +186,31 @@ export class EventsService {
 
   async hosted(user: AuthenticatedUser): Promise<unknown> {
     const result = await this.database.query<EventRow>(
-      `SELECT e.*, l.region_id, l.public_area, NULL::bytea AS exact_address_cipher,
+      `SELECT e.*, l.region_id, l.public_area, l.exact_address_cipher,
          f.is_free, f.amount_jpy, f.collector_name, f.method, f.payment_deadline_text,
-         f.refund_policy, COALESCE(c.confirmed_count, 0) AS confirmed_count,
-         NULL::text AS registration_status, p.nickname AS organizer_name,
-         u.public_handle AS organizer_handle, false AS favorited,
+         f.refund_policy, COALESCE(c.confirmed_count, 0)::int AS confirmed_count,
+         COALESCE(c.pending_count, 0)::int AS pending_count,
+         COALESCE(c.offered_count, 0)::int AS offered_count,
+         GREATEST(0, COALESCE(e.capacity, 0) - COALESCE(c.confirmed_count, 0)
+           - COALESCE(c.pending_count, 0) - COALESCE(c.offered_count, 0))::int AS available_capacity,
+         NULL::uuid AS registration_id, NULL::text AS registration_status,
+         NULL::int AS registration_party_size, NULL::timestamptz AS offer_expires_at,
+         p.nickname AS organizer_name,
+         u.public_handle AS organizer_handle, u.phone_verified_at IS NOT NULL AS phone_verified,
+         COALESCE(trust.completed_event_count, 0)::int AS completed_event_count,
+         CASE
+           WHEN COALESCE(trust.attendance_sample, 0) < 5 THEN 'unavailable'
+           WHEN trust.checked_in_party_count::numeric / NULLIF(trust.attendance_sample, 0) < 0.70 THEN 'under_70'
+           WHEN trust.checked_in_party_count::numeric / NULLIF(trust.attendance_sample, 0) < 0.90 THEN '70_89'
+           ELSE '90_plus'
+         END AS attendance_rate_band,
+         false AS favorited,
          false AS organizer_followed,
          l.exact_address_visibility,
+         CASE WHEN l.point IS NULL THEN NULL ELSE ST_Y(ST_SnapToGrid(l.point::geometry, 0.01)) END AS latitude,
+         CASE WHEN l.point IS NULL THEN NULL ELSE ST_X(ST_SnapToGrid(l.point::geometry, 0.01)) END AS longitude,
+         CASE WHEN l.point IS NULL THEN NULL ELSE ST_Y(l.point::geometry) END AS exact_latitude,
+         CASE WHEN l.point IS NULL THEN NULL ELSE ST_X(l.point::geometry) END AS exact_longitude,
          COALESCE((SELECT jsonb_agg(jsonb_build_object('id', q.id, 'prompt', q.prompt, 'kind', q.kind,
            'required', q.required, 'options', q.options) ORDER BY q.sort_order)
            FROM events.registration_questions q WHERE q.event_id = e.id), '[]'::jsonb) AS registration_questions,
@@ -232,6 +227,19 @@ export class EventsService {
        LEFT JOIN events.event_locations l ON l.event_id = e.id
        LEFT JOIN events.event_fees f ON f.event_id = e.id
        LEFT JOIN events.event_capacity c ON c.event_id = e.id
+       LEFT JOIN LATERAL (
+         SELECT count(DISTINCT completed.id)::int AS completed_event_count,
+           COALESCE(sum(attendance.party_size) FILTER (WHERE attendance.status = 'checked_in'), 0)::int
+             AS checked_in_party_count,
+           COALESCE(sum(attendance.party_size) FILTER (
+             WHERE attendance.status IN ('checked_in','no_show')
+           ), 0)::int AS attendance_sample
+         FROM events.events completed
+         LEFT JOIN events.registrations attendance
+           ON attendance.event_id = completed.id AND attendance.deleted_at IS NULL
+         WHERE completed.organizer_id = e.organizer_id
+           AND completed.completed_at IS NOT NULL AND completed.deleted_at IS NULL
+       ) trust ON true
        WHERE e.organizer_id = $1 AND e.deleted_at IS NULL
        ORDER BY e.created_at DESC, e.id DESC`,
       [user.id],
@@ -243,13 +251,31 @@ export class EventsService {
     const result = await this.database.query<EventRow>(
       `SELECT e.*, l.region_id, l.public_area, NULL::bytea AS exact_address_cipher,
          f.is_free, f.amount_jpy, f.collector_name, f.method, f.payment_deadline_text,
-         f.refund_policy, COALESCE(c.confirmed_count, 0) AS confirmed_count,
-         r.status::text AS registration_status, p.nickname AS organizer_name,
-         u.public_handle AS organizer_handle, true AS favorited,
+         f.refund_policy, COALESCE(c.confirmed_count, 0)::int AS confirmed_count,
+         COALESCE(c.pending_count, 0)::int AS pending_count,
+         COALESCE(c.offered_count, 0)::int AS offered_count,
+         GREATEST(0, COALESCE(e.capacity, 0) - COALESCE(c.confirmed_count, 0)
+           - COALESCE(c.pending_count, 0) - COALESCE(c.offered_count, 0))::int AS available_capacity,
+         r.id AS registration_id, r.status::text AS registration_status,
+         r.party_size::int AS registration_party_size, promotion.expires_at AS offer_expires_at,
+         p.nickname AS organizer_name,
+         u.public_handle AS organizer_handle, u.phone_verified_at IS NOT NULL AS phone_verified,
+         COALESCE(trust.completed_event_count, 0)::int AS completed_event_count,
+         CASE
+           WHEN COALESCE(trust.attendance_sample, 0) < 5 THEN 'unavailable'
+           WHEN trust.checked_in_party_count::numeric / NULLIF(trust.attendance_sample, 0) < 0.70 THEN 'under_70'
+           WHEN trust.checked_in_party_count::numeric / NULLIF(trust.attendance_sample, 0) < 0.90 THEN '70_89'
+           ELSE '90_plus'
+         END AS attendance_rate_band,
+         true AS favorited,
          EXISTS(SELECT 1 FROM identity.follows follow
            WHERE follow.follower_id = $1 AND follow.target_type = 'user'
              AND follow.target_id = e.organizer_id AND follow.deleted_at IS NULL) AS organizer_followed,
          l.exact_address_visibility,
+         CASE WHEN l.point IS NULL THEN NULL ELSE ST_Y(ST_SnapToGrid(l.point::geometry, 0.01)) END AS latitude,
+         CASE WHEN l.point IS NULL THEN NULL ELSE ST_X(ST_SnapToGrid(l.point::geometry, 0.01)) END AS longitude,
+         NULL::double precision AS exact_latitude,
+         NULL::double precision AS exact_longitude,
          COALESCE((SELECT jsonb_agg(jsonb_build_object('id', q.id, 'prompt', q.prompt, 'kind', q.kind,
            'required', q.required, 'options', q.options) ORDER BY q.sort_order)
            FROM events.registration_questions q WHERE q.event_id = e.id), '[]'::jsonb) AS registration_questions,
@@ -269,6 +295,24 @@ export class EventsService {
        LEFT JOIN events.event_capacity c ON c.event_id = e.id
        LEFT JOIN events.registrations r ON r.event_id = e.id AND r.user_id = $1
          AND r.status IN ('pending','confirmed','waitlisted','offered','checked_in')
+       LEFT JOIN LATERAL (
+         SELECT offer.expires_at FROM events.waitlist_promotions offer
+         WHERE offer.registration_id = r.id AND offer.accepted_at IS NULL AND offer.expired_at IS NULL
+         ORDER BY offer.offered_at DESC, offer.id DESC LIMIT 1
+       ) promotion ON true
+       LEFT JOIN LATERAL (
+         SELECT count(DISTINCT completed.id)::int AS completed_event_count,
+           COALESCE(sum(attendance.party_size) FILTER (WHERE attendance.status = 'checked_in'), 0)::int
+             AS checked_in_party_count,
+           COALESCE(sum(attendance.party_size) FILTER (
+             WHERE attendance.status IN ('checked_in','no_show')
+           ), 0)::int AS attendance_sample
+         FROM events.events completed
+         LEFT JOIN events.registrations attendance
+           ON attendance.event_id = completed.id AND attendance.deleted_at IS NULL
+         WHERE completed.organizer_id = e.organizer_id
+           AND completed.completed_at IS NOT NULL AND completed.deleted_at IS NULL
+       ) trust ON true
        WHERE fav.user_id = $1 AND fav.deleted_at IS NULL AND e.deleted_at IS NULL
        ORDER BY fav.created_at DESC`,
       [user.id],
@@ -576,14 +620,32 @@ export class EventsService {
     const result = await client.query<EventRow>(
       `SELECT e.*, l.region_id, l.public_area, l.exact_address_cipher,
          f.is_free, f.amount_jpy, f.collector_name, f.method, f.payment_deadline_text,
-         f.refund_policy, COALESCE(c.confirmed_count, 0) AS confirmed_count,
-         r.status::text AS registration_status, p.nickname AS organizer_name,
-         u.public_handle AS organizer_handle,
+         f.refund_policy, COALESCE(c.confirmed_count, 0)::int AS confirmed_count,
+         COALESCE(c.pending_count, 0)::int AS pending_count,
+         COALESCE(c.offered_count, 0)::int AS offered_count,
+         GREATEST(0, COALESCE(e.capacity, 0) - COALESCE(c.confirmed_count, 0)
+           - COALESCE(c.pending_count, 0) - COALESCE(c.offered_count, 0))::int AS available_capacity,
+         r.id AS registration_id, r.status::text AS registration_status,
+         r.party_size::int AS registration_party_size,
+         promotion.expires_at AS offer_expires_at,
+         p.nickname AS organizer_name,
+         u.public_handle AS organizer_handle, u.phone_verified_at IS NOT NULL AS phone_verified,
+         COALESCE(trust.completed_event_count, 0)::int AS completed_event_count,
+         CASE
+           WHEN COALESCE(trust.attendance_sample, 0) < 5 THEN 'unavailable'
+           WHEN trust.checked_in_party_count::numeric / NULLIF(trust.attendance_sample, 0) < 0.70 THEN 'under_70'
+           WHEN trust.checked_in_party_count::numeric / NULLIF(trust.attendance_sample, 0) < 0.90 THEN '70_89'
+           ELSE '90_plus'
+         END AS attendance_rate_band,
          (fav.event_id IS NOT NULL) AS favorited,
          EXISTS(SELECT 1 FROM identity.follows follow
            WHERE follow.follower_id = $2 AND follow.target_type = 'user'
              AND follow.target_id = e.organizer_id AND follow.deleted_at IS NULL) AS organizer_followed,
          l.exact_address_visibility,
+         CASE WHEN l.point IS NULL THEN NULL ELSE ST_Y(ST_SnapToGrid(l.point::geometry, 0.01)) END AS latitude,
+         CASE WHEN l.point IS NULL THEN NULL ELSE ST_X(ST_SnapToGrid(l.point::geometry, 0.01)) END AS longitude,
+         CASE WHEN l.point IS NULL THEN NULL ELSE ST_Y(l.point::geometry) END AS exact_latitude,
+         CASE WHEN l.point IS NULL THEN NULL ELSE ST_X(l.point::geometry) END AS exact_longitude,
          COALESCE((SELECT jsonb_agg(jsonb_build_object('id', q.id, 'prompt', q.prompt, 'kind', q.kind,
            'required', q.required, 'options', q.options) ORDER BY q.sort_order)
            FROM events.registration_questions q WHERE q.event_id = e.id), '[]'::jsonb) AS registration_questions,
@@ -602,8 +664,26 @@ export class EventsService {
        LEFT JOIN events.event_capacity c ON c.event_id = e.id
        LEFT JOIN events.registrations r ON r.event_id = e.id AND r.user_id = $2
          AND r.status IN ('pending','confirmed','waitlisted','offered','checked_in')
+       LEFT JOIN LATERAL (
+         SELECT offer.expires_at FROM events.waitlist_promotions offer
+         WHERE offer.registration_id = r.id AND offer.accepted_at IS NULL AND offer.expired_at IS NULL
+         ORDER BY offer.offered_at DESC, offer.id DESC LIMIT 1
+       ) promotion ON true
        LEFT JOIN events.event_favorites fav ON fav.event_id = e.id AND fav.user_id = $2
          AND fav.deleted_at IS NULL
+       LEFT JOIN LATERAL (
+         SELECT count(DISTINCT completed.id)::int AS completed_event_count,
+           COALESCE(sum(attendance.party_size) FILTER (WHERE attendance.status = 'checked_in'), 0)::int
+             AS checked_in_party_count,
+           COALESCE(sum(attendance.party_size) FILTER (
+             WHERE attendance.status IN ('checked_in','no_show')
+           ), 0)::int AS attendance_sample
+         FROM events.events completed
+         LEFT JOIN events.registrations attendance
+           ON attendance.event_id = completed.id AND attendance.deleted_at IS NULL
+         WHERE completed.organizer_id = e.organizer_id
+           AND completed.completed_at IS NOT NULL AND completed.deleted_at IS NULL
+       ) trust ON true
        WHERE (e.id::text = $1 OR e.public_slug = $1) AND e.deleted_at IS NULL
        ${lock ? 'FOR UPDATE OF e' : ''}`,
       [identifier, viewerId ?? null],
@@ -617,6 +697,7 @@ export class EventsService {
 
   private toView(row: EventRow, viewer: AuthenticatedUser | undefined, includeDetail: boolean): Record<string, unknown> {
     const capacity = row.capacity ?? 0;
+    const occupied = row.confirmed_count + (row.pending_count ?? 0) + (row.offered_count ?? 0);
     const actions = availableEventActions(
       {
         authenticated: Boolean(viewer),
@@ -631,12 +712,16 @@ export class EventsService {
         registrationOpen:
           row.status === 'published' && (!row.deadline_at || row.deadline_at.getTime() > Date.now()),
         waitlistEnabled: row.waitlist_enabled,
-        isFull: capacity > 0 && row.confirmed_count >= capacity,
+        isFull: capacity > 0 && occupied >= capacity,
         registrationStatus: row.registration_status,
       },
     );
-    const canSeeAddress =
-      viewer?.id === row.organizer_id || canReadExactAddress(row.registration_status ?? undefined, row.status);
+    const canSeeAddress = canReadExactAddress({
+      isOrganizer: viewer?.id === row.organizer_id,
+      visibility: row.exact_address_visibility === 'public' ? 'public' : 'confirmed',
+      registrationStatus: row.registration_status ?? undefined,
+      eventStatus: row.status,
+    });
     let exactAddress: string | null = null;
     if (includeDetail && canSeeAddress && row.exact_address_cipher) {
       try {
@@ -645,6 +730,25 @@ export class EventsService {
         exactAddress = null;
       }
     }
+    const approximateCoordinate = row.latitude === null || row.latitude === undefined
+      || row.longitude === null || row.longitude === undefined
+      ? null
+      : { latitude: row.latitude, longitude: row.longitude, precision: 'approximate' as const };
+    const exactCoordinate = row.exact_latitude === null || row.exact_latitude === undefined
+      || row.exact_longitude === null || row.exact_longitude === undefined
+      ? null
+      : { latitude: row.exact_latitude, longitude: row.exact_longitude, precision: 'exact' as const };
+    const coordinate = includeDetail && canSeeAddress && exactCoordinate
+      ? exactCoordinate
+      : approximateCoordinate;
+    const fee = {
+      isFree: row.is_free ?? true,
+      amountJPY: row.amount_jpy ? Number(row.amount_jpy) : null,
+      collectorName: row.collector_name,
+      method: row.method,
+      paymentDeadlineText: row.payment_deadline_text,
+      refundPolicy: row.refund_policy,
+    };
     const view: Record<string, unknown> = {
       id: row.id,
       publicSlug: row.public_slug,
@@ -653,29 +757,46 @@ export class EventsService {
       title: row.title,
       description: row.description,
       category: row.category_id ?? 'other',
-      categoryLabel: this.categoryLabel(row.category_id),
       startsAt: row.starts_at?.toISOString() ?? null,
       endsAt: row.ends_at?.toISOString() ?? null,
       deadlineAt: row.deadline_at?.toISOString() ?? null,
-      displayTimeZone: 'Asia/Tokyo',
+      displayTimeZone: row.display_time_zone ?? 'Asia/Tokyo',
       region: row.region_id ?? 'tokyo',
       publicArea: row.public_area ?? '地点待定',
       capacity,
       confirmedCount: row.confirmed_count,
-      priceLabel: row.is_free === false ? `¥${Number(row.amount_jpy ?? 0).toLocaleString('ja-JP')}` : '免费',
+      availableCapacity: row.available_capacity ?? Math.max(0, capacity - occupied),
+      fee,
+      coordinate,
       coverURL: row.media_items.find((item) => item.sortOrder === 0)?.url ?? null,
       tags: row.tags.length ? row.tags : (row.category_id ? [row.category_id] : []),
       organizer: {
         id: row.organizer_id,
         name: row.organizer_name ?? `@${row.organizer_handle}`,
         handle: row.organizer_handle,
-        reliability: '手机号已验证',
         viewerFollowing: row.organizer_followed,
+        trust: {
+          phoneVerified: row.phone_verified ?? false,
+          completedEventCount: row.completed_event_count ?? 0,
+          attendanceRateBand: row.attendance_rate_band ?? 'unavailable',
+        },
       },
       favorited: row.favorited,
       registrationStatus: row.registration_status,
+      viewerRegistration: row.registration_id && row.registration_status && row.registration_party_size
+        ? {
+            id: row.registration_id,
+            status: row.registration_status,
+            partySize: row.registration_party_size,
+            offerExpiresAt: row.offer_expires_at?.toISOString() ?? null,
+          }
+        : null,
       registrationMode: row.registration_mode,
       waitlistEnabled: row.waitlist_enabled,
+      format: row.format ?? 'in_person',
+      primaryLocale: row.primary_locale ?? 'ja',
+      supportedLocales: row.supported_locales ?? ['ja'],
+      localeConfirmed: Boolean(row.locale_confirmed_at),
       attendeeRequirements: row.attendee_requirements,
       riskFlags: row.risk_flags,
       riskDetails: row.risk_details,
@@ -694,51 +815,34 @@ export class EventsService {
     if (includeDetail) {
       Object.assign(view, {
         exactAddress,
-        fee: {
-          isFree: row.is_free ?? true,
-          amountJPY: row.amount_jpy ? Number(row.amount_jpy) : null,
-          collectorName: row.collector_name,
-          method: row.method,
-          paymentDeadlineText: row.payment_deadline_text,
-          refundPolicy: row.refund_policy,
-          boundaryStatement:
-            row.is_free === false ? '费用由组织者自行收取，Spott 不经手活动款。' : '本活动免费。',
-        },
       });
     }
     return view;
   }
 
-  private categoryLabel(category: string | null): string {
-    const labels: Record<string, string> = {
-      walk: '城市漫步',
-      'city-walk': '城市探索',
-      music: '音乐',
-      outdoor: '户外',
-      art: '创作',
-      language: '语言交换',
-      food: '美食与咖啡',
-      sports: '运动',
-      games: '桌游',
-      learning: '学习',
-      wellness: '身心健康',
-      networking: '职业交流',
-      volunteering: '志愿活动',
-    };
-    return category ? (labels[category] ?? category) : '其他';
-  }
-
   private async upsertDetails(client: PoolClient, eventId: string, input: EventDraftInput): Promise<void> {
-    if (input.regionId || input.publicArea || input.exactAddress !== undefined || input.exactAddressVisibility) {
+    if (
+      input.regionId
+      || input.publicArea
+      || input.exactAddress !== undefined
+      || input.exactAddressVisibility
+      || input.coordinate
+    ) {
       await client.query(
         `INSERT INTO events.event_locations(
-           event_id, region_id, public_area, exact_address_cipher, exact_address_visibility
-         ) VALUES ($1, COALESCE($2, 'tokyo'), COALESCE($3, '地点待定'), $4, COALESCE($5, 'confirmed'))
+           event_id, region_id, public_area, exact_address_cipher, exact_address_visibility, point
+         ) VALUES (
+           $1, COALESCE($2, 'tokyo'), COALESCE($3, '地点待定'), $4, COALESCE($5, 'confirmed'),
+           CASE WHEN $6::double precision IS NULL OR $7::double precision IS NULL THEN NULL
+             ELSE ST_SetSRID(ST_MakePoint($6, $7), 4326)::geography END
+         )
          ON CONFLICT (event_id) DO UPDATE SET
            region_id = COALESCE(EXCLUDED.region_id, events.event_locations.region_id),
            public_area = COALESCE(EXCLUDED.public_area, events.event_locations.public_area),
            exact_address_cipher = COALESCE(EXCLUDED.exact_address_cipher, events.event_locations.exact_address_cipher),
            exact_address_visibility = COALESCE(EXCLUDED.exact_address_visibility, events.event_locations.exact_address_visibility),
+           point = CASE WHEN $6::double precision IS NULL OR $7::double precision IS NULL
+             THEN events.event_locations.point ELSE EXCLUDED.point END,
            updated_at = clock_timestamp()`,
         [
           eventId,
@@ -746,6 +850,8 @@ export class EventsService {
           input.publicArea ?? null,
           input.exactAddress ? this.fieldCrypto.encrypt(input.exactAddress) : null,
           input.exactAddressVisibility ?? null,
+          input.coordinate?.longitude ?? null,
+          input.coordinate?.latitude ?? null,
         ],
       );
     }

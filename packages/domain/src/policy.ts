@@ -54,13 +54,16 @@ export function availableEventActions(
   return actions;
 }
 
-export function canReadExactAddress(
-  registrationStatus: string | undefined,
-  eventStatus: EventStatus,
-): boolean {
-  return (
-    (registrationStatus === 'confirmed' || registrationStatus === 'checked_in') &&
-    eventStatus !== 'removed' &&
-    eventStatus !== 'cancelled'
-  );
+export interface ExactAddressPolicyInput {
+  isOrganizer: boolean;
+  visibility: 'public' | 'confirmed';
+  registrationStatus: string | undefined;
+  eventStatus: EventStatus;
+}
+
+export function canReadExactAddress(input: ExactAddressPolicyInput): boolean {
+  if (input.isOrganizer) return true;
+  if (input.eventStatus === 'removed' || input.eventStatus === 'cancelled') return false;
+  if (input.visibility === 'public') return true;
+  return input.registrationStatus === 'confirmed' || input.registrationStatus === 'checked_in';
 }

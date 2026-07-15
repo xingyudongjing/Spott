@@ -96,6 +96,7 @@ describe('worker job registry', () => {
   it('promotes one waitlist record once and keys the notice by offer id', async () => {
     let promoted = false;
     const noticeKeys: unknown[] = [];
+    const capacityUpdates: Array<{ text: string; values: readonly unknown[] }> = [];
     const client = {
       query: async (text: string, values: readonly unknown[] = []) => {
         if (text.includes('WITH due AS')) return result([]);
@@ -105,7 +106,7 @@ describe('worker job registry', () => {
         if (text.includes('SELECT r.id, r.user_id, r.party_size')) return result([{
           id: '50000000-0000-0000-0000-000000000001',
           user_id: '60000000-0000-0000-0000-000000000001',
-          party_size: 1,
+          party_size: 3,
         }]);
         if (text.includes('INSERT INTO events.waitlist_promotions')) return result([{
           id: '80000000-0000-0000-0000-000000000001', expires_at: new Date('2026-07-16T10:00:00.000Z'),
@@ -115,7 +116,11 @@ describe('worker job registry', () => {
           noticeKeys.push(values.at(-1));
           return result([{ id: 'notification' }]);
         }
-        if (text.includes('UPDATE events.registrations') || text.includes('UPDATE events.event_capacity')) return result([], 1);
+        if (text.includes('UPDATE events.event_capacity')) {
+          capacityUpdates.push({ text, values });
+          return result([], 1);
+        }
+        if (text.includes('UPDATE events.registrations')) return result([], 1);
         throw new Error(`Unexpected SQL: ${text}`);
       },
     };
@@ -125,5 +130,41 @@ describe('worker job registry', () => {
     expect(await jobs.expireAndPromoteWaitlist()).toMatchObject({ processed: 1, metadata: { promoted: 1 } });
     expect(await jobs.expireAndPromoteWaitlist()).toMatchObject({ processed: 0, metadata: { promoted: 0 } });
     expect(noticeKeys).toEqual(['waitlist-offer:80000000-0000-0000-0000-000000000001']);
+    expect(capacityUpdates[0]?.text).toContain('offered_count = offered_count + $2');
+    expect(capacityUpdates[0]?.values).toEqual([
+      '70000000-0000-0000-0000-000000000001',
+      3,
+    ]);
+  });
+
+  it('releases the complete offered party size when an offer expires', async () => {
+    const capacityUpdates: Array<{ text: string; values: readonly unknown[] }> = [];
+    const client = {
+      query: async (text: string, values: readonly unknown[] = []) => {
+        if (text.includes('WITH due AS')) return result([{
+          registration_id: '50000000-0000-0000-0000-000000000001',
+          event_id: '70000000-0000-0000-0000-000000000001',
+          party_size: 3,
+        }]);
+        if (text.includes('UPDATE events.event_capacity')) {
+          capacityUpdates.push({ text, values });
+          return result([], 1);
+        }
+        if (text.includes('SELECT c.event_id')) return result([]);
+        throw new Error(`Unexpected SQL: ${text}`);
+      },
+    };
+    const database = { transaction: async <T>(work: (value: typeof client) => Promise<T>) => work(client) };
+    const jobs = new WorkerJobs(database as never, config);
+
+    expect(await jobs.expireAndPromoteWaitlist()).toMatchObject({
+      processed: 1,
+      metadata: { expired: 1, promoted: 0 },
+    });
+    expect(capacityUpdates[0]?.text).toContain('offered_count = GREATEST(0, offered_count - $2)');
+    expect(capacityUpdates[0]?.values).toEqual([
+      '70000000-0000-0000-0000-000000000001',
+      3,
+    ]);
   });
 });

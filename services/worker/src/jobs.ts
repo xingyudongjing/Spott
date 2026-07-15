@@ -268,26 +268,27 @@ export class WorkerJobs {
 
   async expireAndPromoteWaitlist(): Promise<JobResult> {
     return this.database.transaction(async (client) => {
-      const expired = await client.query<{ registration_id: string; event_id: string }>(
+      const expired = await client.query<{ registration_id: string; event_id: string; party_size: number }>(
         `WITH due AS (
-           SELECT p.id, p.registration_id, r.event_id
+           SELECT p.id, p.registration_id, r.event_id, r.party_size
            FROM events.waitlist_promotions p JOIN events.registrations r ON r.id = p.registration_id
            WHERE p.accepted_at IS NULL AND p.expired_at IS NULL AND p.expires_at <= clock_timestamp()
            ORDER BY p.expires_at FOR UPDATE OF p, r SKIP LOCKED LIMIT $1
          ), marked AS (
            UPDATE events.waitlist_promotions p SET expired_at = clock_timestamp()
-           FROM due WHERE p.id = due.id RETURNING due.registration_id, due.event_id
+           FROM due WHERE p.id = due.id
+           RETURNING due.registration_id, due.event_id, due.party_size
          )
          UPDATE events.registrations r SET status = 'waitlisted', waitlist_joined_at = COALESCE(waitlist_joined_at, clock_timestamp())
          FROM marked WHERE r.id = marked.registration_id
-         RETURNING r.id AS registration_id, r.event_id`,
+         RETURNING r.id AS registration_id, r.event_id, marked.party_size`,
         [this.config.WORKER_BATCH_SIZE],
       );
       for (const row of expired.rows) {
         await client.query(
-          `UPDATE events.event_capacity SET offered_count = GREATEST(0, offered_count - 1),
+          `UPDATE events.event_capacity SET offered_count = GREATEST(0, offered_count - $2),
              waitlist_count = waitlist_count + 1, updated_at = clock_timestamp() WHERE event_id = $1`,
-          [row.event_id],
+          [row.event_id, row.party_size],
         );
       }
 
@@ -319,8 +320,8 @@ export class WorkerJobs {
         );
         await client.query(
           `UPDATE events.event_capacity SET waitlist_count = GREATEST(0, waitlist_count - 1),
-             offered_count = offered_count + 1, updated_at = clock_timestamp() WHERE event_id = $1`,
-          [event.event_id],
+             offered_count = offered_count + $2, updated_at = clock_timestamp() WHERE event_id = $1`,
+          [event.event_id, row.party_size],
         );
         await this.createNotification(client, row.user_id, 'waitlist.offered', 'event', event.event_id, {
           eventId: event.event_id,

@@ -164,3 +164,101 @@ describe('RegistrationsService host correction queue', () => {
     });
   });
 });
+
+describe('RegistrationsService offered capacity accounting', () => {
+  const user = {
+    id: '019b0000-0000-7000-8000-000000000003',
+    sessionId: 'session',
+    phoneVerified: true,
+    restrictions: [],
+    roles: ['verified'],
+  };
+  const eventId = '019b0000-0000-7000-8100-000000000001';
+  const registrationId = '019b0000-0000-7000-8200-000000000001';
+  const offered = {
+    id: registrationId,
+    event_id: eventId,
+    user_id: user.id,
+    status: 'offered',
+    party_size: 3,
+    attendee_note: null,
+    version: '1',
+    waitlist_joined_at: new Date('2026-07-15T00:00:00.000Z'),
+    updated_at: new Date('2026-07-16T00:00:00.000Z'),
+    offer_expires_at: new Date('2026-08-01T00:00:00.000Z'),
+  };
+
+  function idempotency() {
+    return {
+      requestHash: vi.fn().mockReturnValue(Buffer.alloc(32)),
+      claim: vi.fn().mockResolvedValue(null),
+      complete: vi.fn(),
+    };
+  }
+
+  it('moves all offered people to confirmed capacity when an offer is accepted', async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (text: string, values: readonly unknown[] = []) => {
+        queries.push({ text, values });
+        if (text.includes('SELECT e.capacity')) {
+          return { rows: [{ capacity: 10, confirmed_count: 4, offered_count: 3 }] };
+        }
+        return { rows: [], rowCount: 1 };
+      }),
+    };
+    const database = {
+      transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const points = {
+      configBigInt: vi.fn().mockResolvedValue(10n),
+      spend: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new RegistrationsService(database as never, idempotency() as never, points as never);
+    Object.assign(service, {
+      load: vi.fn()
+        .mockResolvedValueOnce(offered)
+        .mockResolvedValueOnce({ ...offered, status: 'confirmed', version: '2' }),
+      recordChange: vi.fn(),
+    });
+
+    await service.acceptWaitlist(user, registrationId, '019b0000-0000-7000-9000-000000000001');
+
+    const update = queries.find(({ text }) => text.includes('UPDATE events.event_capacity'));
+    expect(update?.text).toContain('offered_count = GREATEST(0, offered_count - $2)');
+    expect(update?.values).toEqual([eventId, 3]);
+  });
+
+  it('releases all offered people when the registration is cancelled', async () => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (text: string, values: readonly unknown[] = []) => {
+        queries.push({ text, values });
+        if (text.includes('SELECT starts_at')) {
+          return { rows: [{ starts_at: new Date('2026-08-10T00:00:00.000Z') }] };
+        }
+        return { rows: [], rowCount: 1 };
+      }),
+    };
+    const database = {
+      transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const points = {
+      wallet: vi.fn().mockResolvedValue({ totalBalance: 0 }),
+      configBigInt: vi.fn().mockResolvedValue(24n),
+    };
+    const service = new RegistrationsService(database as never, idempotency() as never, points as never);
+    Object.assign(service, {
+      load: vi.fn()
+        .mockResolvedValueOnce(offered)
+        .mockResolvedValueOnce({ ...offered, status: 'cancelled', version: '2' }),
+      recordChange: vi.fn(),
+    });
+
+    await service.cancel(user, registrationId, '019b0000-0000-7000-9000-000000000002');
+
+    const update = queries.find(({ text }) => text.includes('confirmed_count = GREATEST'));
+    expect(update?.text).toContain("offered_count = GREATEST(0, offered_count - CASE WHEN $2 = 'offered' THEN $3 ELSE 0 END)");
+    expect(update?.values).toEqual([eventId, 'offered', 3]);
+  });
+});

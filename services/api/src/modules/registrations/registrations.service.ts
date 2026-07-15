@@ -433,7 +433,7 @@ export class RegistrationsService {
       );
       await client.query(
         `UPDATE events.event_capacity SET confirmed_count = confirmed_count + $2,
-           offered_count = GREATEST(0, offered_count - 1), updated_at = clock_timestamp()
+           offered_count = GREATEST(0, offered_count - $2), updated_at = clock_timestamp()
          WHERE event_id = $1`,
         [registration.event_id, registration.party_size],
       );
@@ -469,7 +469,7 @@ export class RegistrationsService {
            confirmed_count = GREATEST(0, confirmed_count - CASE WHEN $2 = 'confirmed' THEN $3 ELSE 0 END),
            pending_count = GREATEST(0, pending_count - CASE WHEN $2 = 'pending' THEN $3 ELSE 0 END),
            waitlist_count = GREATEST(0, waitlist_count - CASE WHEN $2 = 'waitlisted' THEN 1 ELSE 0 END),
-           offered_count = GREATEST(0, offered_count - CASE WHEN $2 = 'offered' THEN 1 ELSE 0 END),
+           offered_count = GREATEST(0, offered_count - CASE WHEN $2 = 'offered' THEN $3 ELSE 0 END),
            updated_at = clock_timestamp()
          WHERE event_id = $1`,
         [registration.event_id, registration.status, registration.party_size],

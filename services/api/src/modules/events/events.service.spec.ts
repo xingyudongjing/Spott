@@ -168,4 +168,124 @@ describe('EventsService event contract', () => {
       expect.arrayContaining([questionId, '019b0000-0000-7000-8100-000000000001']),
     );
   });
+
+  it('only confirms locale fields supplied when creating a draft', async () => {
+    const id = '019b0000-0000-7000-8100-000000000001';
+    const client = {
+      query: vi.fn(async (...args: [sql: string, values?: readonly unknown[]]) => (
+        args[0].includes('SELECT uuidv7()')
+          ? { rows: [{ id }] }
+          : { rows: [], rowCount: 1 }
+      )),
+    };
+    const database = {
+      transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const idempotency = {
+      requestHash: vi.fn().mockReturnValue(Buffer.alloc(32)),
+      claim: vi.fn().mockResolvedValue(null),
+      complete: vi.fn(),
+    };
+    const service = new EventsService(database as never, {} as never, idempotency as never, {} as never);
+    Object.assign(service, {
+      upsertDetails: vi.fn(),
+      recordChange: vi.fn(),
+      loadEvent: vi.fn().mockResolvedValue({ id }),
+      toView: vi.fn().mockReturnValue({ id }),
+    });
+
+    await service.createDraft(
+      publisher,
+      '019b0000-0000-7000-9000-000000000001',
+      {
+        format: 'hybrid',
+        primaryLocale: 'ja',
+        supportedLocales: ['ja', 'en'],
+      } as never,
+    );
+
+    const insert = client.query.mock.calls.find(([sql]) => sql.includes('INSERT INTO events.events('));
+    expect(insert?.[0]).toContain('format');
+    expect(insert?.[0]).toContain('primary_locale');
+    expect(insert?.[0]).toContain('supported_locales');
+    expect(insert?.[0]).toContain('locale_confirmed_at');
+    expect(insert?.[0]).toContain('clock_timestamp()');
+    expect(insert?.[1]).toEqual(expect.arrayContaining(['hybrid', 'ja', ['ja', 'en']]));
+
+    client.query.mockClear();
+    await service.createDraft(
+      publisher,
+      '019b0000-0000-7000-9000-000000000002',
+      {},
+    );
+
+    const defaultInsert = client.query.mock.calls.find(([sql]) => sql.includes('INSERT INTO events.events('));
+    expect(defaultInsert?.[0]).not.toContain('format');
+    expect(defaultInsert?.[0]).not.toContain('primary_locale');
+    expect(defaultInsert?.[0]).not.toContain('supported_locales');
+    expect(defaultInsert?.[0]).not.toContain('locale_confirmed_at');
+  });
+
+  it('atomically confirms supplied locale fields when updating a draft', async () => {
+    const id = '019b0000-0000-7000-8100-000000000001';
+    const before = {
+      id,
+      organizer_id: publisher.id,
+      status: 'draft',
+      version: '1',
+    };
+    const after = { ...before, version: '2' };
+    const client = {
+      query: vi.fn(async (...args: [sql: string, values?: readonly unknown[]]) => {
+        void args;
+        return { rows: [], rowCount: 1 };
+      }),
+    };
+    const database = {
+      transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const idempotency = {
+      requestHash: vi.fn().mockReturnValue(Buffer.alloc(32)),
+      claim: vi.fn().mockResolvedValue(null),
+      complete: vi.fn(),
+    };
+    const service = new EventsService(database as never, {} as never, idempotency as never, {} as never);
+    const loadEvent = vi.fn().mockResolvedValueOnce(before).mockResolvedValueOnce(after);
+    Object.assign(service, {
+      upsertDetails: vi.fn(),
+      recordChange: vi.fn(),
+      loadEvent,
+      toView: vi.fn().mockReturnValue({ id }),
+    });
+
+    await service.update(
+      publisher,
+      id,
+      '019b0000-0000-7000-9000-000000000001',
+      1,
+      { primaryLocale: 'ja', supportedLocales: ['ja', 'en'] } as never,
+    );
+
+    const update = client.query.mock.calls.find(([sql]) => sql.startsWith('UPDATE events.events SET'));
+    expect(update?.[0]).toContain('primary_locale =');
+    expect(update?.[0]).toContain('supported_locales =');
+    expect(update?.[0]).toContain('locale_confirmed_at = clock_timestamp()');
+    expect(update?.[1]).toEqual(expect.arrayContaining(['ja', ['ja', 'en']]));
+
+    client.query.mockClear();
+    loadEvent.mockReset().mockResolvedValueOnce(before).mockResolvedValueOnce(after);
+    await service.update(
+      publisher,
+      id,
+      '019b0000-0000-7000-9000-000000000002',
+      1,
+      { format: 'online' },
+    );
+
+    const formatOnlyUpdate = client.query.mock.calls.find(([sql]) => sql.startsWith('UPDATE events.events SET'));
+    expect(formatOnlyUpdate?.[0]).toContain('format =');
+    expect(formatOnlyUpdate?.[0]).not.toContain('primary_locale =');
+    expect(formatOnlyUpdate?.[0]).not.toContain('supported_locales =');
+    expect(formatOnlyUpdate?.[0]).not.toContain('locale_confirmed_at =');
+  });
 });

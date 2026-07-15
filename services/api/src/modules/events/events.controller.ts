@@ -20,9 +20,10 @@ import {
   type AuthenticatedUser,
   type SpottRequest,
 } from '../../platform/request-context.js';
+import { parseDiscoveryQuery } from './events.discovery-query.js';
 import { EventsService } from './events.service.js';
 
-const draftSchema = z.object({
+export const draftSchema = z.object({
   title: z.string().min(1).max(120).optional(),
   description: z.string().max(10_000).optional(),
   categoryId: z.string().max(80).optional(),
@@ -44,6 +45,13 @@ const draftSchema = z.object({
   commentPermission: z.enum(['disabled', 'participants', 'group_members']).optional(),
   posterEnabled: z.boolean().optional(),
   exactAddressVisibility: z.enum(['public', 'confirmed']).optional(),
+  format: z.enum(['in_person', 'online', 'hybrid']).optional(),
+  primaryLocale: z.enum(['zh-Hans', 'ja', 'en']).optional(),
+  supportedLocales: z.array(z.enum(['zh-Hans', 'ja', 'en'])).min(1).max(3).optional(),
+  coordinate: z.object({
+    latitude: z.number().min(-90).max(90),
+    longitude: z.number().min(-180).max(180),
+  }).optional(),
   registrationQuestions: z.array(z.object({
     id: z.string().uuid().optional(),
     prompt: z.string().min(1).max(240),
@@ -61,6 +69,28 @@ const draftSchema = z.object({
       refundPolicy: z.string().max(2000).optional(),
     })
     .optional(),
+}).superRefine((input, context) => {
+  if ((input.primaryLocale === undefined) !== (input.supportedLocales === undefined)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['primaryLocale'],
+      message: 'primaryLocale and supportedLocales must be provided together',
+    });
+  }
+  if (
+    input.primaryLocale !== undefined
+    && input.supportedLocales !== undefined
+    && (
+      !input.supportedLocales.includes(input.primaryLocale)
+      || new Set(input.supportedLocales).size !== input.supportedLocales.length
+    )
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['supportedLocales'],
+      message: 'supportedLocales must be unique and contain primaryLocale',
+    });
+  }
 });
 
 @Controller()
@@ -71,30 +101,18 @@ export class EventsController {
   @Get('discovery/feed')
   discovery(
     @Req() request: SpottRequest,
-    @Query('region') region?: string,
-    @Query('cursor') cursor?: string,
-    @Query('limit') limit?: string,
+    @Query() query: Record<string, string | undefined>,
   ) {
-    return this.events.discovery(request.user, { region, cursor, limit: limit ? Number(limit) : 20 });
+    return this.events.discovery(request.user, parseDiscoveryQuery(query));
   }
 
   @Public()
   @Get('events/search')
   search(
     @Req() request: SpottRequest,
-    @Query('q') query?: string,
-    @Query('region') region?: string,
-    @Query('category') category?: string,
-    @Query('cursor') cursor?: string,
-    @Query('limit') limit?: string,
+    @Query() query: Record<string, string | undefined>,
   ) {
-    return this.events.discovery(request.user, {
-      query,
-      region,
-      category,
-      cursor,
-      limit: limit ? Number(limit) : 20,
-    });
+    return this.events.discovery(request.user, parseDiscoveryQuery(query));
   }
 
   @Public()

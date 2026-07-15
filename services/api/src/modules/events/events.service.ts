@@ -15,6 +15,7 @@ import { FieldCrypto } from '../../platform/crypto.js';
 import { IdempotencyService } from '../../platform/idempotency.js';
 import type { AuthenticatedUser } from '../../platform/request-context.js';
 import { PointsService } from '../points/points.service.js';
+import type { DiscoveryQuery, EventFormat, EventLocale } from './events.discovery-query.js';
 
 export interface EventDraftInput {
   title?: string | undefined;
@@ -38,6 +39,13 @@ export interface EventDraftInput {
   commentPermission?: 'disabled' | 'participants' | 'group_members' | undefined;
   posterEnabled?: boolean | undefined;
   exactAddressVisibility?: 'public' | 'confirmed' | undefined;
+  format?: EventFormat | undefined;
+  primaryLocale?: EventLocale | undefined;
+  supportedLocales?: EventLocale[] | undefined;
+  coordinate?: {
+    latitude: number;
+    longitude: number;
+  } | undefined;
   registrationQuestions?: Array<{
     id?: string | undefined;
     prompt: string;
@@ -129,13 +137,7 @@ export class EventsService {
 
   async discovery(
     viewer: AuthenticatedUser | undefined,
-    options: {
-      region?: string | undefined;
-      query?: string | undefined;
-      category?: string | undefined;
-      cursor?: string | undefined;
-      limit?: number | undefined;
-    },
+    options: DiscoveryQuery,
   ): Promise<unknown> {
     const limit = Math.min(Math.max(options.limit ?? 20, 1), 100);
     const cursor = this.decodeCursor(options.cursor);
@@ -288,35 +290,55 @@ export class EventsService {
       const idResult = await client.query<{ id: string }>('SELECT uuidv7() AS id');
       const id = idResult.rows[0]!.id;
       const slug = `e-${id.replaceAll('-', '').slice(0, 18)}`;
+      const eventColumns = [
+        'id', 'public_slug', 'organizer_id', 'title', 'description', 'category_id',
+        'starts_at', 'ends_at', 'deadline_at', 'capacity', 'registration_mode',
+        'waitlist_enabled', 'tags', 'attendee_requirements', 'risk_flags', 'risk_details',
+        'group_id', 'checkin_mode', 'comment_permission', 'poster_enabled', 'created_by', 'updated_by',
+      ];
+      const eventValues: unknown[] = [
+        id,
+        slug,
+        user.id,
+        title,
+        input.description ?? '',
+        input.categoryId ?? null,
+        input.startsAt ?? null,
+        input.endsAt ?? null,
+        input.deadlineAt ?? null,
+        input.capacity ?? null,
+        input.registrationMode ?? 'automatic',
+        input.waitlistEnabled ?? true,
+        input.tags ?? [],
+        input.attendeeRequirements ?? null,
+        input.riskFlags ?? [],
+        input.riskDetails ?? {},
+        input.groupId ?? null,
+        input.checkinMode ?? 'dynamic_qr',
+        input.commentPermission ?? 'participants',
+        input.posterEnabled ?? true,
+      ];
+      const eventExpressions = eventValues.map((_, index) => `$${index + 1}`);
+      eventExpressions.push('$3', '$3');
+      if (input.format !== undefined) {
+        eventColumns.push('format');
+        eventValues.push(input.format);
+        eventExpressions.push(`$${eventValues.length}`);
+      }
+      if (input.primaryLocale !== undefined && input.supportedLocales !== undefined) {
+        eventColumns.push('primary_locale');
+        eventValues.push(input.primaryLocale);
+        eventExpressions.push(`$${eventValues.length}`);
+        eventColumns.push('supported_locales');
+        eventValues.push(input.supportedLocales);
+        eventExpressions.push(`$${eventValues.length}`);
+        eventColumns.push('locale_confirmed_at');
+        eventExpressions.push('clock_timestamp()');
+      }
       await client.query(
-        `INSERT INTO events.events(
-           id, public_slug, organizer_id, title, description, category_id,
-           starts_at, ends_at, deadline_at, capacity, registration_mode,
-           waitlist_enabled, tags, attendee_requirements, risk_flags, risk_details,
-           group_id, checkin_mode, comment_permission, poster_enabled, created_by, updated_by
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$3,$3)`,
-        [
-          id,
-          slug,
-          user.id,
-          title,
-          input.description ?? '',
-          input.categoryId ?? null,
-          input.startsAt ?? null,
-          input.endsAt ?? null,
-          input.deadlineAt ?? null,
-          input.capacity ?? null,
-          input.registrationMode ?? 'automatic',
-          input.waitlistEnabled ?? true,
-          input.tags ?? [],
-          input.attendeeRequirements ?? null,
-          input.riskFlags ?? [],
-          input.riskDetails ?? {},
-          input.groupId ?? null,
-          input.checkinMode ?? 'dynamic_qr',
-          input.commentPermission ?? 'participants',
-          input.posterEnabled ?? true,
-        ],
+        `INSERT INTO events.events(${eventColumns.join(', ')})
+         VALUES (${eventExpressions.join(', ')})`,
+        eventValues,
       );
       await client.query('INSERT INTO events.event_capacity(event_id) VALUES ($1)', [id]);
       await this.upsertDetails(client, id, input);
@@ -372,6 +394,10 @@ export class EventsService {
         commentPermission: 'comment_permission',
         posterEnabled: 'poster_enabled',
         exactAddressVisibility: '',
+        format: 'format',
+        primaryLocale: '',
+        supportedLocales: '',
+        coordinate: '',
         registrationQuestions: '',
         fee: '',
       };
@@ -383,6 +409,13 @@ export class EventsService {
           values.push(value);
           sets.push(`${column} = $${values.length}`);
         }
+      }
+      if (input.primaryLocale !== undefined && input.supportedLocales !== undefined) {
+        values.push(input.primaryLocale);
+        sets.push(`primary_locale = $${values.length}`);
+        values.push(input.supportedLocales);
+        sets.push(`supported_locales = $${values.length}`);
+        sets.push('locale_confirmed_at = clock_timestamp()');
       }
       values.push(user.id, before.id, baseVersion);
       if (sets.length > 0) {

@@ -2298,34 +2298,109 @@ export interface components {
             hasMore: boolean;
             nextCursor: string | null;
         };
-        EventSummary: {
+        EventCoordinate: {
+            /** Format: double */
+            latitude: number;
+            /** Format: double */
+            longitude: number;
+            /** @enum {string} */
+            precision: "approximate" | "exact";
+        };
+        OrganizerTrust: {
+            phoneVerified: boolean;
+            completedEventCount: number;
+            /** @enum {string} */
+            attendanceRateBand: "unavailable" | "under_70" | "70_89" | "90_plus";
+        };
+        EventFee: {
+            isFree: boolean;
+            /** Format: int64 */
+            amountJPY: number | null;
+            collectorName: string | null;
+            method: string | null;
+            paymentDeadlineText: string | null;
+            refundPolicy: string | null;
+        };
+        EventOrganizer: {
+            id: components["schemas"]["UUID"];
+            name: string;
+            handle: string;
+            viewerFollowing: boolean;
+            trust: components["schemas"]["OrganizerTrust"];
+        };
+        ViewerRegistration: {
+            id: components["schemas"]["UUID"];
+            /** @enum {string} */
+            status: "pending" | "confirmed" | "waitlisted" | "offered" | "checked_in";
+            partySize: number;
+            /** Format: date-time */
+            offerExpiresAt: string | null;
+        };
+        EventSummaryBase: {
             id: components["schemas"]["UUID"];
             publicSlug: string;
+            organizerId: components["schemas"]["UUID"];
             status: components["schemas"]["EventStatus"];
             title: string;
+            description: string;
+            category: string;
             /** Format: date-time */
-            startsAt: string;
+            startsAt: string | null;
             /** Format: date-time */
-            endsAt: string;
+            endsAt: string | null;
+            /** Format: date-time */
+            deadlineAt: string | null;
             /** @default Asia/Tokyo */
             displayTimeZone: string;
             region: string;
             publicArea: string;
             capacity: number;
             confirmedCount: number;
-            priceLabel: string;
+            availableCapacity: number;
+            fee: components["schemas"]["EventFee"];
             /** Format: uri */
-            coverURL?: string | null;
+            coverURL: string | null;
             tags: string[];
-            registrationStatus?: string | null;
+            organizer: components["schemas"]["EventOrganizer"];
+            favorited: boolean;
+            registrationStatus: components["schemas"]["RegistrationStatus"] | null;
+            viewerRegistration: components["schemas"]["ViewerRegistration"] | null;
             /** @enum {string} */
-            registrationMode?: "automatic" | "approval" | "invite_only";
-            waitlistEnabled?: boolean;
-            attendeeRequirements?: string | null;
-            riskFlags?: string[];
-            riskDetails?: {
+            registrationMode: "automatic" | "approval" | "invite_only";
+            waitlistEnabled: boolean;
+            /** @enum {string} */
+            format: "in_person" | "online" | "hybrid";
+            primaryLocale: components["schemas"]["Locale"];
+            supportedLocales: components["schemas"]["Locale"][];
+            localeConfirmed: boolean;
+            availableActions: components["schemas"]["AvailableAction"][];
+            /** Format: int64 */
+            version: number;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        EventSummary: components["schemas"]["EventSummaryBase"] & {
+            /** @description Public discovery coordinates are approximate or null. */
+            coordinate: null | (components["schemas"]["EventCoordinate"] & {
+                /** @constant */
+                precision?: "approximate";
+            });
+        };
+        EventDetail: components["schemas"]["EventSummaryBase"] & {
+            /** @description Exact precision is returned only when the viewer may read the exact address; otherwise approximate or null. */
+            coordinate: null | components["schemas"]["EventCoordinate"];
+            /** @description Null unless policy authorizes the viewer. */
+            exactAddress: string | null;
+            attendeeRequirements: string | null;
+            riskFlags: string[];
+            riskDetails: {
                 [key: string]: string;
             };
+            /** @enum {string} */
+            exactAddressVisibility: "public" | "confirmed";
+            registrationQuestions: components["schemas"]["RegistrationQuestion"][];
+            media: components["schemas"]["EventMedia"][];
+            mediaCount: number;
             /** Format: uuid */
             groupId?: string | null;
             /** @enum {string} */
@@ -2333,33 +2408,6 @@ export interface components {
             /** @enum {string} */
             commentPermission?: "disabled" | "participants" | "group_members";
             posterEnabled?: boolean;
-            /** @enum {string} */
-            exactAddressVisibility?: "public" | "confirmed";
-            registrationQuestions?: components["schemas"]["RegistrationQuestion"][];
-            media?: components["schemas"]["EventMedia"][];
-            mediaCount?: number;
-            availableActions: components["schemas"]["AvailableAction"][];
-            /** Format: int64 */
-            version: number;
-            /** Format: date-time */
-            updatedAt?: string;
-        };
-        EventDetail: components["schemas"]["EventSummary"] & {
-            description: string;
-            organizer: {
-                [key: string]: unknown;
-            };
-            /** @description Omitted/null unless policy authorizes */
-            exactAddress?: string | null;
-            fee: {
-                isFree: boolean;
-                /** Format: int64 */
-                amountJPY?: number | null;
-                collectorName?: string | null;
-                method?: string | null;
-                refundPolicy?: string | null;
-                boundaryStatement: string;
-            };
         };
         EventItems: {
             items: components["schemas"]["EventDetail"][];
@@ -2387,7 +2435,7 @@ export interface components {
             hasMore: boolean;
             /** Format: date-time */
             serverTime: string;
-            queryExplanationId?: string;
+            queryExplanationId: string;
         };
         EventDraftInput: {
             title?: string;
@@ -2421,6 +2469,16 @@ export interface components {
             posterEnabled?: boolean;
             /** @enum {string} */
             exactAddressVisibility?: "public" | "confirmed";
+            /** @enum {string} */
+            format?: "in_person" | "online" | "hybrid";
+            primaryLocale?: components["schemas"]["Locale"];
+            supportedLocales?: components["schemas"]["Locale"][];
+            coordinate?: {
+                /** Format: double */
+                latitude: number;
+                /** Format: double */
+                longitude: number;
+            };
             fee?: {
                 [key: string]: unknown;
             };
@@ -2436,7 +2494,7 @@ export interface components {
                 required: boolean;
                 options?: string[];
             }[];
-        };
+        } & (unknown & unknown & unknown);
         /** @enum {string} */
         EventStatus: "draft" | "pending_review" | "needs_changes" | "published" | "registration_closed" | "in_progress" | "ended" | "cancelled" | "removed" | "appeal_pending" | "archived" | "deleted" | "rejected";
         /** @enum {string} */
@@ -3938,9 +3996,19 @@ export interface operations {
     getDiscoveryFeed: {
         parameters: {
             query?: {
+                q?: string;
+                region?: string;
+                category?: string;
+                startsAfter?: string;
+                startsBefore?: string;
+                availableOnly?: boolean;
+                format?: "in_person" | "online" | "hybrid";
+                language?: components["schemas"]["Locale"];
+                price?: "free" | "paid";
+                /** @description west,south,east,north */
+                bounds?: string;
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
-                region?: string;
             };
             header?: never;
             path?: never;
@@ -3967,6 +4035,11 @@ export interface operations {
                 region?: string;
                 category?: string;
                 startsAfter?: string;
+                startsBefore?: string;
+                availableOnly?: boolean;
+                format?: "in_person" | "online" | "hybrid";
+                language?: components["schemas"]["Locale"];
+                price?: "free" | "paid";
                 /** @description west,south,east,north */
                 bounds?: string;
                 cursor?: components["parameters"]["Cursor"];

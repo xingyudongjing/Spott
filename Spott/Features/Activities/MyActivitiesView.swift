@@ -255,6 +255,7 @@ private struct ActivityCard: View {
                 .padding(14)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("activity.event.\(item.event.publicSlug)")
 
             Divider().padding(.horizontal, 14)
 

@@ -42,35 +42,35 @@ struct AppRootView: View {
         return TabView(selection: selection) {
             NavigationStack(path: model.router.binding(for: .discovery)) {
                 DiscoveryView()
-                    .appRouteDestinations()
+                    .appRouteDestinations(in: .discovery)
             }
             .tabItem { Label("发现", systemImage: "safari") }
             .tag(AppTab.discovery)
 
             NavigationStack(path: model.router.binding(for: .groups)) {
                 GroupsHomeView()
-                    .appRouteDestinations()
+                    .appRouteDestinations(in: .groups)
             }
             .tabItem { Label("社群", systemImage: "person.2") }
             .tag(AppTab.groups)
 
             NavigationStack(path: model.router.binding(for: .create)) {
                 EventComposerView()
-                    .appRouteDestinations()
+                    .appRouteDestinations(in: .create)
             }
             .tabItem { Label("创建", systemImage: "plus") }
             .tag(AppTab.create)
 
             NavigationStack(path: model.router.binding(for: .activities)) {
                 MyActivitiesView()
-                    .appRouteDestinations()
+                    .appRouteDestinations(in: .activities)
             }
             .tabItem { Label("行程", systemImage: "calendar") }
             .tag(AppTab.activities)
 
             NavigationStack(path: model.router.binding(for: .profile)) {
                 ProfileHomeView()
-                    .appRouteDestinations()
+                    .appRouteDestinations(in: .profile)
             }
             .tabItem { Label("我的", systemImage: "person") }
             .tag(AppTab.profile)
@@ -90,10 +90,11 @@ private struct GatePresentationView: View {
 
 private struct RouteView: View {
     let route: AppRoute
+    let sourceTab: AppTab
 
     var body: some View {
         switch route {
-        case .event(let reference): RoutedEventView(reference: reference)
+        case .event(let reference): RoutedEventView(reference: reference, sourceTab: sourceTab)
         case .wallet: WalletView()
         case .notifications: NotificationsView()
         case .hostStudio: HostStudioView()
@@ -105,9 +106,9 @@ private struct RouteView: View {
 }
 
 private extension View {
-    func appRouteDestinations() -> some View {
+    func appRouteDestinations(in sourceTab: AppTab) -> some View {
         navigationDestination(for: AppRoute.self) { route in
-            RouteView(route: route)
+            RouteView(route: route, sourceTab: sourceTab)
         }
     }
 }
@@ -115,13 +116,19 @@ private extension View {
 private struct RoutedEventView: View {
     @Environment(AppModel.self) private var model
     let reference: EventRouteReference
+    let sourceTab: AppTab
     @State private var event: EventSummary?
     @State private var error: UserFacingError?
+    @State private var refreshEventOnAppear = true
 
     var body: some View {
         Group {
             if let event {
-                EventDetailView(event: event)
+                EventDetailView(
+                    event: event,
+                    sourceTab: sourceTab,
+                    refreshOnAppear: refreshEventOnAppear
+                )
             } else if let error {
                 SpottStateCard(
                     icon: "calendar.badge.exclamationmark",
@@ -144,6 +151,9 @@ private struct RoutedEventView: View {
     private func load(force: Bool) async {
         if !force, let cached = model.router.cachedEvent(for: reference) {
             event = cached
+            error = nil
+            refreshEventOnAppear = !model.usesNavigationUITestFixture
+            return
         }
         guard !reference.identifier.isEmpty else {
             error = .init(id: "EVENT_ROUTE_INVALID", message: "活动链接无效。", retryable: false)
@@ -154,6 +164,7 @@ private struct RoutedEventView: View {
             model.router.cache(event: current)
             event = current
             error = nil
+            refreshEventOnAppear = false
         } catch {
             if event == nil { self.error = AppModel.map(error) }
         }

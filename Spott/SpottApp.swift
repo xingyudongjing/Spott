@@ -4,6 +4,7 @@ import SwiftUI
 @main
 struct SpottApp: App {
     @UIApplicationDelegateAdaptor(SpottAppDelegate.self) private var appDelegate
+    @State private var router: AppRouter
     @State private var model: AppModel
     @AppStorage("app.language") private var appLanguage = AppLanguage.system.rawValue
     private let persistence: PersistenceStore
@@ -17,12 +18,15 @@ struct SpottApp: App {
         )
         let analytics = AnalyticsClient(environment: .default)
         let sync = SyncEngine(api: api, persistence: persistence)
+        let router = AppRouter()
         self.persistence = persistence
+        _router = State(initialValue: router)
         _model = State(initialValue: AppModel(
             api: api,
             analytics: analytics,
             persistence: persistence,
-            sync: sync
+            sync: sync,
+            router: router
         ))
     }
 
@@ -30,6 +34,7 @@ struct SpottApp: App {
         WindowGroup {
             AppRootView()
                 .environment(model)
+                .environment(router)
                 .environment(\.locale, (AppLanguage(rawValue: appLanguage) ?? .system).locale)
                 .task { await model.bootstrap() }
                 .onReceive(NotificationCenter.default.publisher(for: .spottPushTokenUpdated)) { _ in

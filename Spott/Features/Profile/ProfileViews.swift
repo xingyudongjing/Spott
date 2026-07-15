@@ -127,6 +127,7 @@ struct ProfileHomeView: View {
             sectionTitle("我的 Spott")
             VStack(spacing: 0) {
                 NavigationLink { FavoritesView() } label: { ProfileRow(icon: "heart", title: "收藏", subtitle: "稍后想参加的活动") }
+                    .accessibilityIdentifier("profile.favorites")
                 Divider().padding(.leading, 58)
                 NavigationLink { WalletView() } label: { ProfileRow(icon: "circle.hexagongrid", title: "积分钱包", subtitle: "免费与付费积分分开记录") }
                 Divider().padding(.leading, 58)
@@ -530,8 +531,9 @@ struct FavoritesView: View {
                     SpottStateCard(icon: "heart", title: "还没有收藏", message: "收藏让你稍后再决定，不会占用活动名额。", actionTitle: nil) {}
                 } else {
                     ForEach(events) { event in
-                        NavigationLink { EventDetailView(event: event) } label: { CompactEventRow(event: event) }
+                        Button { model.router.show(event: event) } label: { CompactEventRow(event: event) }
                             .buttonStyle(.plain)
+                            .accessibilityIdentifier("favorite.event.\(event.publicSlug)")
                     }
                 }
             }
@@ -539,7 +541,12 @@ struct FavoritesView: View {
         }
         .background(SpottColor.canvas.ignoresSafeArea())
         .navigationTitle("收藏")
-        .task { events = (try? await model.api.favoriteEvents().items) ?? []; loading = false }
+        .task { await load() }
+    }
+
+    private func load() async {
+        events = (try? await model.api.favoriteEvents().items) ?? []
+        loading = false
     }
 }
 
@@ -1286,11 +1293,13 @@ private struct AccountMergeView: View {
                 (emailChallenge != nil && code.count != 6)
             )
 
+#if DEBUG
             if let developmentCode = emailChallenge?.developmentCode {
                 Label("本地开发验证码：\(developmentCode)", systemImage: "hammer")
                     .font(.caption.monospaced())
                     .foregroundStyle(SpottColor.amber)
             }
+#endif
         }
         .padding(18)
         .spottGlassPanel(shape: RoundedRectangle(cornerRadius: 24, style: .continuous))
@@ -1395,10 +1404,16 @@ private struct AccountMergeView: View {
                         credential: .email(challengeId: emailChallenge.challengeId, code: code)
                     )
                 } else {
-                    emailChallenge = try await model.api.requestEmailCode(
+                    let response = try await model.api.requestEmailCode(
                         email: email.trimmingCharacters(in: .whitespacesAndNewlines),
                         deviceID: DeviceIdentity.current
                     )
+                    emailChallenge = response
+#if DEBUG
+                    if let developmentCode = response.developmentCode {
+                        code = developmentCode
+                    }
+#endif
                 }
             } catch {
                 self.error = AppModel.map(error)
@@ -1935,7 +1950,7 @@ struct HostStudioView: View {
                 else {
                     ForEach(events) { event in
                         VStack(spacing: 0) {
-                            NavigationLink { EventDetailView(event: event) } label: {
+                            Button { model.router.show(event: event) } label: {
                                 CompactEventRow(event: event)
                             }
                             .buttonStyle(.plain)

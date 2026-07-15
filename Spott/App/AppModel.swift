@@ -38,22 +38,54 @@ final class AppModel {
     let analytics: AnalyticsClient
     let persistence: PersistenceStore
     let sync: SyncEngine
-    let router: AppRouter
+    @ObservationIgnored let router: AppRouter
 
     init(
         api: SpottAPIClient,
         analytics: AnalyticsClient,
         persistence: PersistenceStore,
-        sync: SyncEngine
+        sync: SyncEngine,
+        router: AppRouter
     ) {
         self.api = api
         self.analytics = analytics
         self.persistence = persistence
         self.sync = sync
-        router = AppRouter()
+        self.router = router
+    }
+
+    var usesNavigationUITestFixture: Bool {
+#if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-spott-ui-test-navigation-fixture")
+#else
+        false
+#endif
+    }
+
+    private var navigationUITestRouteTab: AppTab? {
+#if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let keyIndex = arguments.firstIndex(of: "-spott-ui-test-route-tab"),
+              arguments.indices.contains(keyIndex + 1) else { return nil }
+        switch arguments[keyIndex + 1] {
+        case "activities": return .activities
+        case "profile": return .profile
+        default: return nil
+        }
+#else
+        nil
+#endif
     }
 
     func bootstrap() async {
+        if usesNavigationUITestFixture {
+            eventState = .content(EventSummary.samples)
+            if let targetTab = navigationUITestRouteTab {
+                router.selectedTab = targetTab
+                router.show(event: EventSummary.samples[0])
+            }
+            return
+        }
         if case .loading = eventState { return }
         eventState = .loading
         if let cached = try? await persistence.cachedEvents(), !cached.isEmpty {
@@ -140,19 +172,17 @@ final class AppModel {
     func open(url: URL) {
         Task { @MainActor in
             do {
-                if await router.open(url: url) { return }
-                guard router.isTrustedDeepLink(url) else { return }
-                let components = url.pathComponents.filter { $0 != "/" }
-                guard components.count >= 2 else { return }
-                switch components[0] {
-                case "g":
-                    let group = try await api.group(identifier: components[1])
-                    router.push(.group(group.id), in: .groups, selectingExplicitTab: true)
-                case "s":
-                    let resolution = try await api.resolveShareLink(code: components[1])
+                switch router.route(url: url) {
+                case .opened, .rejected:
+                    return
+                case .requiresResolution(.group(let identifier, let targetTab)):
+                    let group = try await api.group(identifier: identifier)
+                    router.push(.group(group.id), in: targetTab, selectingExplicitTab: true)
+                case .requiresResolution(.share(let code)):
+                    let resolution = try await api.resolveShareLink(code: code)
                     await openShareResolution(resolution)
-                default:
-                    break
+                case .requiresResolution:
+                    return
                 }
             } catch {
                 banner = .init(title: Self.map(error).message, tone: .warning)
@@ -282,7 +312,8 @@ final class AppModel {
             api: api,
             analytics: AnalyticsClient(environment: .preview),
             persistence: persistence,
-            sync: SyncEngine(api: api, persistence: persistence)
+            sync: SyncEngine(api: api, persistence: persistence),
+            router: AppRouter()
         )
         model.eventState = .content(EventSummary.samples)
         model.session = .preview

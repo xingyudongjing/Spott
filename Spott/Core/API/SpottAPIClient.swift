@@ -985,7 +985,14 @@ actor SpottAPIClient {
 struct EmptyResponse: Codable, Sendable {}
 private struct EmptyRequest: Codable, Sendable {}
 private struct MediaAttachment: Codable, Sendable { let id: UUID; let eventId: UUID; let assetId: UUID; let kind: String }
-struct EmailChallenge: Codable, Sendable { let challengeId: UUID; let expiresAt: Date; let retryAfterSeconds: Int; let developmentCode: String? }
+struct EmailChallenge: Codable, Sendable {
+    let challengeId: UUID
+    let expiresAt: Date
+    let retryAfterSeconds: Int
+#if DEBUG
+    let developmentCode: String?
+#endif
+}
 typealias PhoneChallenge = EmailChallenge
 struct PhoneVerification: Codable, Sendable { let verifiedAt: Date; let reward: WalletSnapshot }
 struct Quote: Codable, Sendable { let id: UUID; let amount: Int; let currency: String; let expiresAt: Date }

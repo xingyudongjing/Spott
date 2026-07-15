@@ -4,6 +4,8 @@ import UIKit
 
 struct EventDetailView: View {
     @Environment(AppModel.self) private var model
+    private let sourceTab: AppTab
+    private let refreshOnAppear: Bool
     @State private var detail: EventSummary
     @State private var registrationPresented = false
     @State private var registrationDraft = DeferredRegistrationDraft()
@@ -17,7 +19,9 @@ struct EventDetailView: View {
     @State private var shareItem: EventShareItem?
     @State private var posterPresented = false
 
-    init(event: EventSummary) {
+    init(event: EventSummary, sourceTab: AppTab, refreshOnAppear: Bool = true) {
+        self.sourceTab = sourceTab
+        self.refreshOnAppear = refreshOnAppear
         _detail = State(initialValue: event)
         _favorited = State(initialValue: event.favorited)
     }
@@ -131,14 +135,15 @@ struct EventDetailView: View {
             Text("拉黑会取消互相关注，并限制你们进入同一受控互动空间。")
         }
         .task {
+            if model.usesNavigationUITestFixture { return }
             model.trackAnalytics(.eventDetailViewed(
                 eventID: detail.id,
                 publicSlug: detail.publicSlug,
                 category: detail.tags.first
             ))
-            async let eventRequest = try? model.api.event(identifier: detail.publicSlug)
             async let feedbackRequest = try? model.api.feedbackSummary(eventID: detail.id)
-            if let current = await eventRequest {
+            if refreshOnAppear,
+               let current = try? await model.api.event(identifier: detail.publicSlug) {
                 detail = current
                 favorited = current.favorited
             }
@@ -146,7 +151,10 @@ struct EventDetailView: View {
         }
         .task(id: model.router.pendingRegistrationPresentation?.id) {
             let reference = EventRouteReference(event: detail)
-            guard let intent = model.router.takeRegistrationPresentation(for: reference) else { return }
+            guard let intent = model.router.takeRegistrationPresentation(
+                for: reference,
+                in: sourceTab
+            ) else { return }
             registrationDraft = intent.draft
             registrationPresented = true
         }
@@ -169,6 +177,7 @@ struct EventDetailView: View {
                 .font(.system(size: 31, weight: .bold, design: .rounded))
                 .tracking(-1)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("event.detail.title")
             if !detail.tags.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 7) {

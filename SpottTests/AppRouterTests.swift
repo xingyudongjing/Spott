@@ -59,6 +59,59 @@ final class AppRouterTests: XCTestCase {
         )
     }
 
+    func testCustomSchemeGroupAndShareLinksUseTheSameStrictParser() throws {
+        let router = AppRouter()
+
+        XCTAssertEqual(
+            router.route(
+                url: try XCTUnwrap(URL(string: "spott://g/tokyo-weekend"))
+            ),
+            .requiresResolution(.group(identifier: "tokyo-weekend", targetTab: .groups))
+        )
+        XCTAssertEqual(
+            router.route(
+                url: try XCTUnwrap(URL(string: "spott://s/share_code-42"))
+            ),
+            .requiresResolution(.share(code: "share_code-42"))
+        )
+        XCTAssertTrue(router.path(for: .groups).isEmpty)
+    }
+
+    func testDeepLinksRejectExtraSegmentsAndEncodedSeparators() throws {
+        let router = AppRouter()
+
+        XCTAssertEqual(
+            router.route(
+                url: try XCTUnwrap(URL(string: "https://spott.jp/g/tokyo-weekend/extra"))
+            ),
+            .rejected
+        )
+        XCTAssertEqual(
+            router.route(
+                url: try XCTUnwrap(URL(string: "https://spott.jp/e/private%2Fsegment"))
+            ),
+            .rejected
+        )
+        for rawURL in [
+            "https://spott.jp/e/%2Fprivate",
+            "https://spott.jp/e/private%2f",
+            "https://spott.jp/e//private"
+        ] {
+            XCTAssertEqual(
+                router.route(url: try XCTUnwrap(URL(string: rawURL))),
+                .rejected,
+                "encoded or empty path segments must never be normalized into a trusted route"
+            )
+        }
+        XCTAssertEqual(
+            router.route(
+                url: try XCTUnwrap(URL(string: "spott://s/%20"))
+            ),
+            .rejected
+        )
+        XCTAssertTrue(AppTab.allCases.allSatisfy { router.path(for: $0).isEmpty })
+    }
+
     func testMalformedAndExternalURLsDoNotMutateNavigation() async throws {
         let router = AppRouter()
         router.setPath([.notifications], for: .discovery)
@@ -124,6 +177,31 @@ final class AppRouterTests: XCTestCase {
 
         XCTAssertNil(router.resumeDeferredIntent(after: .login))
         XCTAssertNotNil(router.resumeDeferredIntent(after: .phoneVerification))
+    }
+
+    func testPendingRegistrationPresentationCanOnlyBeTakenFromItsSourceTab() {
+        let router = AppRouter()
+        router.selectedTab = .activities
+        router.setPath([.event(.init(event: firstEvent))], for: .activities)
+        router.setPath([.event(.init(event: firstEvent))], for: .profile)
+        router.deferRegistration(for: firstEvent, action: .register, requiring: .login)
+
+        XCTAssertNotNil(router.resumeDeferredIntent(after: .login))
+
+        XCTAssertNil(
+            router.takeRegistrationPresentation(
+                for: .init(event: firstEvent),
+                in: .profile
+            )
+        )
+        XCTAssertNotNil(router.pendingRegistrationPresentation)
+        XCTAssertNotNil(
+            router.takeRegistrationPresentation(
+                for: .init(event: firstEvent),
+                in: .activities
+            )
+        )
+        XCTAssertNil(router.pendingRegistrationPresentation)
     }
 
     func testAccountResetClearsSensitivePathsAndRegistrationIntent() {

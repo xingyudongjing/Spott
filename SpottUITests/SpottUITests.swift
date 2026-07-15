@@ -48,14 +48,18 @@ final class SpottUITests: XCTestCase {
     @MainActor
     func testEachSystemTabRetainsItsOwnNavigationPath() throws {
         let app = XCUIApplication()
+        app.launchArguments = ["-spott-ui-test-navigation-fixture"]
         app.launch()
 
         XCTAssertTrue(app.buttons["通知"].waitForExistence(timeout: 5))
         app.buttons["通知"].tap()
         XCTAssertTrue(app.navigationBars["通知"].waitForExistence(timeout: 3))
 
-        app.tabBars.buttons["社群"].tap()
-        XCTAssertFalse(app.navigationBars["通知"].exists)
+        for tab in ["社群", "创建", "行程", "我的"] {
+            app.tabBars.buttons[tab].tap()
+            XCTAssertTrue(app.tabBars.buttons[tab].isSelected, "\(tab) 应使用自己的系统 Tab")
+            XCTAssertFalse(app.navigationBars["通知"].exists)
+        }
 
         app.tabBars.buttons["发现"].tap()
         XCTAssertTrue(
@@ -63,6 +67,36 @@ final class SpottUITests: XCTestCase {
             "切换 Tab 后，发现 Tab 的原生 NavigationStack 应保留自己的路径"
         )
         XCTAssertEqual(app.tabBars.count, 1)
+
+        try assertPublicEventRouteStaysIn(tab: "行程", routeTab: "activities", app: app)
+        try assertPublicEventRouteStaysIn(tab: "我的", routeTab: "profile", app: app)
+    }
+
+    @MainActor
+    private func assertPublicEventRouteStaysIn(
+        tab: String,
+        routeTab: String,
+        app: XCUIApplication
+    ) throws {
+        app.terminate()
+        app.launchArguments = [
+            "-spott-ui-test-navigation-fixture",
+            "-spott-ui-test-route-tab",
+            routeTab
+        ]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["event.detail.title"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["event.detail.title"].label, "东京余光 · 隅田川蓝调散步")
+        try tapNativeBackButton(in: app)
+        XCTAssertTrue(app.tabBars.buttons[tab].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.tabBars.buttons[tab].isSelected)
+    }
+
+    @MainActor
+    private func tapNativeBackButton(in app: XCUIApplication) throws {
+        let backButton = app.navigationBars.buttons.element(boundBy: 0)
+        XCTAssertTrue(backButton.waitForExistence(timeout: 3), "活动详情必须保留系统返回按钮")
+        backButton.tap()
     }
 
     @MainActor

@@ -39,6 +39,19 @@ enum AppRoute: Hashable, Sendable {
     case profile(String)
 }
 
+enum AppDeepLink: Equatable, Sendable {
+    case event(identifier: String, targetTab: AppTab)
+    case group(identifier: String, targetTab: AppTab)
+    case profile(identifier: String, targetTab: AppTab)
+    case share(code: String)
+}
+
+enum AppDeepLinkRoutingResult: Equatable, Sendable {
+    case opened
+    case requiresResolution(AppDeepLink)
+    case rejected
+}
+
 enum AppGate: String, Identifiable, Sendable {
     case login
     case phoneVerification
@@ -146,32 +159,32 @@ final class AppRouter {
 
     @discardableResult
     func open(url: URL) async -> Bool {
-        guard let segments = trustedSegments(for: url), segments.count == 2 else { return false }
-        let identifier = segments[1].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !identifier.isEmpty else { return false }
-        let requestedTab = deepLinkTab(from: url)
-
-        switch segments[0] {
-        case "e":
-            let target = requestedTab ?? .discovery
-            push(.event(.init(id: nil, slug: identifier)), in: target, selectingExplicitTab: true)
-            return true
-        case "g":
-            guard let id = UUID(uuidString: identifier) else { return false }
-            let target = requestedTab ?? .groups
-            push(.group(id), in: target, selectingExplicitTab: true)
-            return true
-        case "u":
-            let target = requestedTab ?? .profile
-            push(.profile(identifier), in: target, selectingExplicitTab: true)
-            return true
-        default:
-            return false
-        }
+        route(url: url) == .opened
     }
 
-    func isTrustedDeepLink(_ url: URL) -> Bool {
-        trustedSegments(for: url) != nil
+    @discardableResult
+    func route(url: URL) -> AppDeepLinkRoutingResult {
+        guard let deepLink = validatedDeepLink(from: url) else { return .rejected }
+        switch deepLink {
+        case .event(let identifier, let targetTab):
+            push(
+                .event(.init(id: nil, slug: identifier)),
+                in: targetTab,
+                selectingExplicitTab: true
+            )
+            return .opened
+        case .group(let identifier, let targetTab):
+            guard let id = UUID(uuidString: identifier) else {
+                return .requiresResolution(deepLink)
+            }
+            push(.group(id), in: targetTab, selectingExplicitTab: true)
+            return .opened
+        case .profile(let identifier, let targetTab):
+            push(.profile(identifier), in: targetTab, selectingExplicitTab: true)
+            return .opened
+        case .share:
+            return .requiresResolution(deepLink)
+        }
     }
 
     func deferRegistration(
@@ -207,8 +220,13 @@ final class AppRouter {
         return intent
     }
 
-    func takeRegistrationPresentation(for event: EventRouteReference) -> DeferredRegistrationIntent? {
-        guard let intent = pendingRegistrationPresentation, intent.event == event else { return nil }
+    func takeRegistrationPresentation(
+        for event: EventRouteReference,
+        in sourceTab: AppTab
+    ) -> DeferredRegistrationIntent? {
+        guard let intent = pendingRegistrationPresentation,
+              intent.event == event,
+              intent.sourceTab == sourceTab else { return nil }
         pendingRegistrationPresentation = nil
         return intent
     }
@@ -226,21 +244,55 @@ final class AppRouter {
         eventSnapshots.removeAll()
     }
 
+    private func validatedDeepLink(from url: URL) -> AppDeepLink? {
+        guard let segments = trustedSegments(for: url), segments.count == 2 else { return nil }
+        let identifier = segments[1]
+        guard isValidDeepLinkIdentifier(identifier) else { return nil }
+        let requestedTab = deepLinkTab(from: url)
+        switch segments[0].lowercased() {
+        case "e": return .event(identifier: identifier, targetTab: requestedTab ?? .discovery)
+        case "g": return .group(identifier: identifier, targetTab: requestedTab ?? .groups)
+        case "u": return .profile(identifier: identifier, targetTab: requestedTab ?? .profile)
+        case "s": return .share(code: identifier)
+        default: return nil
+        }
+    }
+
     private func trustedSegments(for url: URL) -> [String]? {
-        let raw: [String]
+        guard url.user == nil, url.password == nil, url.port == nil else { return nil }
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        var pathSegments = components.percentEncodedPath
+            .split(separator: "/", omittingEmptySubsequences: false)
+            .map(String.init)
+        if pathSegments.first == "" { pathSegments.removeFirst() }
+        guard !pathSegments.isEmpty, !pathSegments.contains("") else { return nil }
+        let encoded: [String]
         switch url.scheme?.lowercased() {
         case "https":
             guard let host = url.host?.lowercased(), ["spott.jp", "www.spott.jp"].contains(host) else {
                 return nil
             }
-            raw = url.pathComponents.filter { $0 != "/" }
+            encoded = pathSegments
         case "spott":
             guard let host = url.host, !host.isEmpty else { return nil }
-            raw = [host] + url.pathComponents.filter { $0 != "/" }
+            encoded = [host] + pathSegments
         default:
             return nil
         }
-        return raw.compactMap { $0.removingPercentEncoding }
+        var decoded: [String] = []
+        for segment in encoded {
+            guard let value = segment.removingPercentEncoding else { return nil }
+            decoded.append(value)
+        }
+        return decoded
+    }
+
+    private func isValidDeepLinkIdentifier(_ value: String) -> Bool {
+        guard !value.isEmpty,
+              value.count <= 128,
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        return value.unicodeScalars.allSatisfy(allowed.contains)
     }
 
     private func deepLinkTab(from url: URL) -> AppTab? {

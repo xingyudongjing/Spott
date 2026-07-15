@@ -48,7 +48,7 @@ const orderedKeys = [
 ] as const;
 
 export function serializeDiscoveryQuery(query: EventDiscoveryQuery): URLSearchParams {
-  validateQuery(query);
+  validateDiscoveryQuery(query);
   const values: Partial<Record<(typeof orderedKeys)[number], string>> = {
     q: query.q,
     region: query.region,
@@ -111,7 +111,7 @@ export function parseDiscoveryQuery(source: string | URLSearchParams): EventDisc
     }
     query.limit = parsed;
   }
-  validateQuery(query);
+  validateDiscoveryQuery(query);
   return query;
 }
 
@@ -138,7 +138,7 @@ export function resolveDateShortcut(
   };
 }
 
-function validateQuery(query: EventDiscoveryQuery): void {
+export function validateDiscoveryQuery(query: EventDiscoveryQuery): void {
   for (const [name, value] of [["startsAfter", query.startsAfter], ["startsBefore", query.startsBefore]] as const) {
     if (value !== undefined && (!Number.isFinite(Date.parse(value)) || !/[zZ]|[+-]\d\d:\d\d$/.test(value))) {
       throw new DiscoveryQueryError(`${name} must be an ISO date-time with an explicit offset`);

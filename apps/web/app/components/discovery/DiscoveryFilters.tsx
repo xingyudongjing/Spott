@@ -3,8 +3,10 @@
 import { useCallback, useId, useRef, useState } from "react";
 
 import {
+  DiscoveryQueryError,
   resolveDateShortcut,
   type EventDiscoveryQuery,
+  validateDiscoveryQuery,
 } from "../../lib/discovery-query";
 import { useI18n } from "../I18nProvider";
 import { GlobeIcon, PinIcon, SlidersIcon, TicketIcon } from "../icons";
@@ -39,7 +41,13 @@ export function DiscoveryFilters({
   const openerRef = useRef<HTMLButtonElement>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const dialogTitleId = useId();
+  const dateErrorId = useId();
   const hasDate = Boolean(query.startsAfter || query.startsBefore);
+  const startDate = dateInputValue(query.startsAfter);
+  const endDate = dateInputValue(query.startsBefore, true);
+  const [endDateDraft, setEndDateDraft] = useState(endDate);
+  const [dateRangeInvalid, setDateRangeInvalid] = useState(false);
+
   const toggleWeekend = () => {
     if (hasDate) {
       onPatch({ startsAfter: undefined, startsBefore: undefined });
@@ -58,12 +66,17 @@ export function DiscoveryFilters({
   const openDialog = useCallback(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
+    setEndDateDraft(endDate);
+    setDateRangeInvalid(false);
     if (typeof dialog.showModal === "function") dialog.showModal();
     else dialog.setAttribute("open", "");
     setDialogOpen(true);
-  }, []);
-  const startDate = dateInputValue(query.startsAfter);
-  const endDate = dateInputValue(query.startsBefore, true);
+  }, [endDate]);
+  const resetFilters = () => {
+    setEndDateDraft("");
+    setDateRangeInvalid(false);
+    onReset();
+  };
 
   return (
     <div className={styles.filters}>
@@ -155,7 +168,12 @@ export function DiscoveryFilters({
                   type="date"
                   value={startDate}
                   onChange={(event) => {
-                    const startsAfter = dateBoundary(event.target.value, false);
+                    const value = event.target.value;
+                    const startsAfter = dateBoundary(value, false);
+                    setDateRangeInvalid(false);
+                    if (startsAfter && query.startsBefore && Date.parse(startsAfter) > Date.parse(query.startsBefore)) {
+                      setEndDateDraft("");
+                    }
                     onPatch({
                       startsAfter,
                       ...(startsAfter && query.startsBefore && Date.parse(startsAfter) > Date.parse(query.startsBefore)
@@ -170,28 +188,47 @@ export function DiscoveryFilters({
                 <input
                   type="date"
                   min={startDate || undefined}
-                  value={endDate}
-                  onChange={(event) => onPatch({ startsBefore: dateBoundary(event.target.value, true) })}
+                  value={dateRangeInvalid ? endDateDraft : endDate}
+                  aria-invalid={dateRangeInvalid}
+                  aria-describedby={dateRangeInvalid ? dateErrorId : undefined}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    const startsBefore = dateBoundary(value, true);
+                    setEndDateDraft(value);
+                    try {
+                      validateDiscoveryQuery({ ...query, startsBefore });
+                      setDateRangeInvalid(false);
+                      onPatch({ startsBefore });
+                    } catch (error) {
+                      if (!(error instanceof DiscoveryQueryError)) throw error;
+                      setDateRangeInvalid(true);
+                    }
+                  }}
                 />
               </label>
             </div>
-          <label>
-            <span>{t("discover.category")}</span>
-            <select
-              value={query.category ?? ""}
-              aria-label={t("discover.category")}
-              onChange={(event) => onPatch({ category: event.target.value || undefined })}
-            >
-              {categories.map(([value, key]) => (
-                <option key={value || "all"} value={value}>{t(key)}</option>
-              ))}
-            </select>
-          </label>
-            <button type="button" onClick={onReset}>{t("common.clear")}</button>
+            {dateRangeInvalid ? (
+              <p id={dateErrorId} className={styles.fieldError} role="alert">
+                {t("discover.dateRangeError")}
+              </p>
+            ) : null}
+            <label>
+              <span>{t("discover.category")}</span>
+              <select
+                value={query.category ?? ""}
+                aria-label={t("discover.category")}
+                onChange={(event) => onPatch({ category: event.target.value || undefined })}
+              >
+                {categories.map(([value, key]) => (
+                  <option key={value || "all"} value={value}>{t(key)}</option>
+                ))}
+              </select>
+            </label>
+            <button type="button" onClick={resetFilters}>{t("common.clear")}</button>
           </div>
         </dialog>
       </div>
-      <button className={styles.desktopClear} type="button" onClick={onReset}>
+      <button className={styles.desktopClear} type="button" onClick={resetFilters}>
         {t("common.clear")}
       </button>
     </div>

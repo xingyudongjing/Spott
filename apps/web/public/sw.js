@@ -1,5 +1,5 @@
-const CACHE = "spott-public-v3";
-const PUBLIC_ROUTES = ["/", "/discover", "/offline", "/safety", "/privacy", "/terms", "/manifest.webmanifest", "/favicon.svg", "/spott-icon.svg"];
+const CACHE = "spott-public-v4";
+const PUBLIC_ROUTES = ["/offline", "/safety", "/privacy", "/terms", "/manifest.webmanifest", "/favicon.svg", "/spott-icon.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(PUBLIC_ROUTES)).then(() => self.skipWaiting()));

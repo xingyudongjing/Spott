@@ -109,6 +109,58 @@ test.describe("rendered discovery safeguards", () => {
     await page.screenshot({ path: testInfo.outputPath("discovery-map-preview-mobile.png") });
   });
 
+  test("invalid typed date ranges stay local, announce the field error, and never throw", async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${baseURL}/discover`);
+    await page.getByRole("button", { name: "更多筛选", exact: true }).click();
+
+    await page.getByLabel("开始日期", { exact: true }).fill("2026-08-03");
+    await page.getByLabel("结束日期", { exact: true }).fill("2026-08-01");
+
+    await expect(page.getByLabel("结束日期", { exact: true })).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByText("结束日期不能早于开始日期。", { exact: true })).toBeVisible();
+    await expect(page).toHaveURL(/startsAfter=2026-08-02T15%3A00%3A00\.000Z/);
+    expect(new URL(page.url()).searchParams.has("startsBefore")).toBe(false);
+    expect(pageErrors).toEqual([]);
+
+    await page.getByLabel("结束日期", { exact: true }).fill("2026-08-05");
+    await expect(page.getByLabel("结束日期", { exact: true })).toHaveAttribute("aria-invalid", "false");
+    await expect(page.getByText("结束日期不能早于开始日期。", { exact: true })).toBeHidden();
+    await expect(page).toHaveURL(/startsBefore=2026-08-05T15%3A00%3A00\.000Z/);
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("never stores root or cookie-personalized discovery documents in the public offline cache", async ({ page }) => {
+    await page.goto(`${baseURL}/`);
+    await page.evaluate(() => navigator.serviceWorker.ready);
+    await page.reload();
+    await page.goto(`${baseURL}/discover`);
+
+    await expect.poll(() => page.evaluate(async () => {
+      const cacheNames = await caches.keys();
+      const protectedDocuments = (
+        await Promise.all(cacheNames.map(async (name) => {
+          const cache = await caches.open(name);
+          const entries = await Promise.all(["/", "/discover"].map(async (path) => (
+            await cache.match(path, { ignoreVary: true }) ? `${name}:${path}` : null
+          )));
+          return entries.filter(Boolean);
+        }))
+      ).flat();
+      return {
+        hasCurrentCache: cacheNames.includes("spott-public-v4"),
+        hasLegacyCache: cacheNames.some((name) => name.startsWith("spott-public-") && name !== "spott-public-v4"),
+        protectedDocuments,
+      };
+    })).toEqual({
+      hasCurrentCache: true,
+      hasLegacyCache: false,
+      protectedDocuments: [],
+    });
+  });
+
   test("map style failure preserves results and offers retry or list mode", async ({ page }, testInfo) => {
     await page.route("http://127.0.0.1:4201/**", (route) => route.abort("failed"));
     await page.setViewportSize({ width: 390, height: 844 });

@@ -36,6 +36,11 @@ test("ships installable PWA metadata and a privacy-safe service worker", async (
   ]);
   assert.match(manifest, /display:\s*"standalone"/);
   assert.match(manifest, /spott-icon\.svg/);
+  assert.match(worker, /spott-public-v4/);
+  const publicRoutes = worker.match(/PUBLIC_ROUTES\s*=\s*(\[[^\]]*\])/)?.[1];
+  assert.ok(publicRoutes, "service worker must declare its public precache allow-list");
+  assert.doesNotMatch(publicRoutes, /["']\/["']/, "the redirecting root document must never be publicly cached");
+  assert.doesNotMatch(publicRoutes, /["']\/discover["']/, "personalized discovery must never be publicly cached");
   assert.match(worker, /\/\(me\|studio\|create\|register\|notifications\|login\|phone-verification\)/);
   assert.match(worker, /caches\.match\("\/offline"\)/);
 });
@@ -49,7 +54,8 @@ test("exposes real API-driven group and host surfaces", async () => {
   assert.match(groups, /apiRequest<\{ items: GroupView\[\] \}>\("\/groups\?limit=60"\)/);
   assert.match(studio, /\/me\/hosted-events/);
   assert.match(studio, /\/checkin-codes/);
-  assert.match(discovery, /searchEvents\(/);
+  assert.match(discovery, /apiRequest<unknown>/);
+  assert.match(discovery, /\/events\/search/);
   assert.doesNotMatch(studio, /eventRows\s*=/);
 });
 

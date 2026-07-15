@@ -2,7 +2,7 @@
 
 import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 
-import { readSession } from "../../lib/client-api";
+import { apiRequest, readSession } from "../../lib/client-api";
 import { trackProductEvent } from "../../lib/analytics";
 import {
   parseDiscoveryQuery,
@@ -10,8 +10,7 @@ import {
   type EventDiscoveryQuery,
   type MapBounds,
 } from "../../lib/discovery-query";
-import type { EventPage } from "../../lib/event-contract";
-import { searchEvents } from "../../lib/events-api";
+import { parseEventPage, type EventPage } from "../../lib/event-contract";
 import { useI18n } from "../I18nProvider";
 import { DiscoveryFilters } from "./DiscoveryFilters";
 import { DiscoveryToolbar } from "./DiscoveryToolbar";
@@ -70,15 +69,11 @@ export function DiscoveryShell({
     setError(null);
 
     try {
-      const accessToken = currentAccessToken();
-      const result = await searchEvents({
+      const result = await searchEventsForViewer({
         ...nextQuery,
         cursor: options.cursor,
         limit: nextQuery.limit ?? PAGE_SIZE,
-      }, {
-        signal: controller.signal,
-        ...(accessToken ? { accessToken } : {}),
-      });
+      }, controller.signal);
       if (controller.signal.aborted || sequence !== requestSequence.current) return;
 
       startTransition(() => {
@@ -105,16 +100,16 @@ export function DiscoveryShell({
   }, [page]);
 
   useEffect(() => {
-    if (viewerRevalidated.current || !currentAccessToken()) return;
+    if (viewerRevalidated.current || !hasCurrentSession()) return;
     viewerRevalidated.current = true;
     void loadPage(query);
   }, [loadPage, query]);
 
   const commitQuery = useCallback((nextValue: EventDiscoveryQuery, history: "push" | "replace" = "push") => {
     const next = cleanQuery(nextValue);
+    const params = serializeDiscoveryQuery(next);
     setQuery(next);
     setSearchText(next.q ?? "");
-    const params = serializeDiscoveryQuery(next);
     const url = `${window.location.pathname}${params.size ? `?${params.toString()}` : ""}`;
     window.history[history === "push" ? "pushState" : "replaceState"](null, "", url);
     void loadPage(next);
@@ -244,11 +239,17 @@ function isAbortError(error: unknown) {
   return typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
 }
 
-function currentAccessToken() {
+function hasCurrentSession() {
   try {
-    return readSession()?.accessToken;
+    return Boolean(readSession());
   } catch {
     // Storage can be unavailable in hardened/private browsing contexts.
-    return undefined;
+    return false;
   }
+}
+
+async function searchEventsForViewer(query: EventDiscoveryQuery, signal: AbortSignal): Promise<EventPage> {
+  const params = serializeDiscoveryQuery(query);
+  const suffix = params.size ? `?${params.toString()}` : "";
+  return parseEventPage(await apiRequest<unknown>(`/events/search${suffix}`, { signal }));
 }

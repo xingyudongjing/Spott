@@ -20,6 +20,14 @@ export interface WebSession {
   user: SessionUser;
 }
 
+type APIRequestInit = RequestInit & {
+  authenticated?: boolean;
+  idempotent?: boolean;
+  ifMatch?: number;
+};
+
+let refreshInFlight: Promise<WebSession | null> | null = null;
+
 export interface APIErrorBody {
   code?: string;
   message?: string;
@@ -178,7 +186,17 @@ export function requireLogin(returnTo = window.location.pathname): never {
 
 export async function apiRequest<T>(
   path: string,
-  init: RequestInit & { authenticated?: boolean; idempotent?: boolean; ifMatch?: number } = {},
+  init: APIRequestInit = {},
+): Promise<T> {
+  const headers = new Headers(init.headers);
+  if (init.idempotent && !headers.has("Idempotency-Key")) headers.set("Idempotency-Key", crypto.randomUUID());
+  return apiRequestAttempt<T>(path, { ...init, headers }, true);
+}
+
+async function apiRequestAttempt<T>(
+  path: string,
+  init: APIRequestInit,
+  allowRefresh: boolean,
 ): Promise<T> {
   const session = readSession();
   if (init.authenticated && !session) requireLogin();
@@ -187,13 +205,22 @@ export async function apiRequest<T>(
   headers.set("X-Spott-Device-Id", deviceId());
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (session) headers.set("Authorization", `Bearer ${session.accessToken}`);
-  if (init.idempotent && !headers.has("Idempotency-Key")) headers.set("Idempotency-Key", crypto.randomUUID());
   if (init.ifMatch !== undefined) headers.set("If-Match", `\"${init.ifMatch}\"`);
 
   const response = await fetch(`${apiBase()}${path}`, { ...init, headers, credentials: "include" });
   if (response.status === 401 && session && path !== "/auth/refresh") {
-    const refreshed = await refreshSession(session);
-    if (refreshed) return apiRequest<T>(path, init);
+    if (allowRefresh) {
+      const latestSession = readSession();
+      if (latestSession && latestSession.accessToken !== session.accessToken) {
+        return apiRequestAttempt<T>(path, init, false);
+      }
+      if (latestSession) {
+        const refreshed = await refreshSessionOnce(latestSession);
+        if (refreshed) return apiRequestAttempt<T>(path, init, false);
+      }
+    } else {
+      clearSession();
+    }
   }
   if (!response.ok) {
     let body: APIErrorBody = {};
@@ -224,9 +251,18 @@ async function refreshSession(session: WebSession): Promise<WebSession | null> {
   return refreshed;
 }
 
+function refreshSessionOnce(session: WebSession): Promise<WebSession | null> {
+  if (!refreshInFlight) {
+    refreshInFlight = refreshSession(session).finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
 export async function refreshCurrentSession(): Promise<WebSession | null> {
   const session = readSession();
-  return session ? refreshSession(session) : null;
+  return session ? refreshSessionOnce(session) : null;
 }
 
 export function errorMessage(error: unknown): string {

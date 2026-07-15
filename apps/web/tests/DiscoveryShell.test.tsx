@@ -3,19 +3,26 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { DiscoveryShell } from "../app/components/discovery/DiscoveryShell";
-import { readSession } from "../app/lib/client-api";
+import { apiRequest, readSession } from "../app/lib/client-api";
+import { parseDiscoveryQuery } from "../app/lib/discovery-query";
 import { searchEvents } from "../app/lib/events-api";
 import { eventFixture, makeEvent, makePage, renderWithI18n } from "./event-fixtures";
 
 vi.mock("../app/lib/events-api", () => ({ searchEvents: vi.fn() }));
-vi.mock("../app/lib/client-api", () => ({ readSession: vi.fn() }));
+vi.mock("../app/lib/client-api", () => ({ apiRequest: vi.fn(), readSession: vi.fn() }));
 
 const searchEventsMock = vi.mocked(searchEvents);
+const apiRequestMock = vi.mocked(apiRequest);
 const readSessionMock = vi.mocked(readSession);
 
 beforeEach(() => {
   window.history.replaceState(null, "", "/discover");
   searchEventsMock.mockReset();
+  apiRequestMock.mockReset();
+  apiRequestMock.mockImplementation((path, init) => {
+    const query = parseDiscoveryQuery(path.split("?")[1] ?? "");
+    return searchEventsMock(query, { signal: init?.signal ?? undefined }) as ReturnType<typeof apiRequest>;
+  });
   readSessionMock.mockReset();
   readSessionMock.mockReturnValue(null);
 });
@@ -93,7 +100,25 @@ describe("URL-authoritative discovery", () => {
     expect(opener).toHaveFocus();
   });
 
-  test("revalidates once with the local access token so viewer registration facts are current", async () => {
+  test("rejects an end date before the start date without mutating the URL or issuing a request", async () => {
+    const user = userEvent.setup();
+    searchEventsMock.mockResolvedValue(makePage());
+    renderWithI18n(<DiscoveryShell initialQuery={{}} initialPage={makePage()} />);
+
+    await user.click(screen.getByRole("button", { name: "更多筛选" }));
+    await user.type(screen.getByLabelText("开始日期"), "2026-08-03");
+    await waitFor(() => expect(window.location.search).toContain("startsAfter=2026-08-02T15"));
+    const requestsAfterStart = searchEventsMock.mock.calls.length;
+
+    await user.type(screen.getByLabelText("结束日期"), "2026-08-01");
+
+    expect(screen.getByLabelText("结束日期")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("结束日期不能早于开始日期。", { selector: "p" })).toBeInTheDocument();
+    expect(window.location.search).not.toContain("startsBefore");
+    expect(searchEventsMock).toHaveBeenCalledTimes(requestsAfterStart);
+  });
+
+  test("revalidates once through the refresh-aware client path so viewer facts are current", async () => {
     readSessionMock.mockReturnValue({
       accessToken: "viewer-access-token",
       accessTokenExpiresAt: "2026-07-16T01:00:00.000Z",
@@ -106,15 +131,24 @@ describe("URL-authoritative discovery", () => {
         restrictions: [],
       },
     });
-    searchEventsMock.mockResolvedValue(makePage());
+    searchEventsMock.mockResolvedValue(makePage([makeEvent({
+      registrationStatus: "confirmed",
+      viewerRegistration: {
+        id: "019b0000-0000-7000-8100-000000000090",
+        status: "confirmed",
+        partySize: 1,
+        offerExpiresAt: null,
+      },
+    })]));
 
     renderWithI18n(<DiscoveryShell initialQuery={{}} initialPage={makePage()} />);
 
     await waitFor(() => expect(searchEventsMock).toHaveBeenCalledTimes(1));
-    expect(searchEventsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ limit: 24 }),
-      expect.objectContaining({ accessToken: "viewer-access-token", signal: expect.any(AbortSignal) }),
+    expect(apiRequestMock).toHaveBeenCalledWith(
+      "/events/search?limit=24",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+    expect(await screen.findByText("已报名")).toBeInTheDocument();
   });
 
   test("aborts older searches and ignores a late response", async () => {

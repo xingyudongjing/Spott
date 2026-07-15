@@ -2,6 +2,7 @@ import MapKit
 import SwiftUI
 
 struct DiscoveryMap: View {
+    @Environment(\.locale) private var locale
     let store: DiscoveryStore
     @Binding var selectedEventID: UUID?
     @Binding var showsResults: Bool
@@ -22,7 +23,7 @@ struct DiscoveryMap: View {
         ZStack(alignment: .bottomTrailing) {
             Map(position: $cameraPosition, selection: $selectedEventID) {
                 ForEach(store.mapEvents) { event in
-                    DiscoveryMapMarker(event: event)
+                    DiscoveryMapMarker(event: event, locale: locale)
                 }
             }
             .mapStyle(.standard)
@@ -78,6 +79,7 @@ private extension MapCameraPosition {
 
 private struct DiscoveryMapMarker: MapContent {
     let event: EventSummary
+    let locale: Locale
 
     var body: some MapContent {
         if let coordinate = event.coordinate {
@@ -100,8 +102,10 @@ private struct DiscoveryMapMarker: MapContent {
     }
 
     private var accessibilityLabel: Text {
-        let area = event.publicArea ?? String(localized: "地点待发布")
-        return Text(verbatim: "\(event.title), \(area), \(String(localized: "约略位置"))")
+        Text(verbatim: DiscoveryEventPresentation(
+            event: event,
+            locale: locale
+        ).approximateLocationAccessibilityLabel)
     }
 }
 

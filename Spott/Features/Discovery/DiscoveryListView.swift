@@ -68,62 +68,17 @@ private struct DiscoveryPaginationFooter: View {
     }
 
     private func retry() {
-        Task { await store.loadNextPage() }
+        Task { await store.retryPagination() }
     }
 }
 
 struct DiscoveryEventRow: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.locale) private var locale
     let event: EventSummary
 
-    private var locationText: String {
-        event.publicArea ?? String(localized: "地点待发布")
-    }
-
-    private var feeText: String {
-        guard let fee = event.fee else { return String(localized: "费用待发布") }
-        if fee.isFree { return String(localized: "免费") }
-        if let amount = fee.amountJPY { return "¥\(amount.formatted())" }
-        let method = [fee.collectorName, fee.method].compactMap { $0 }.joined(separator: " · ")
-        return method.isEmpty ? String(localized: "费用待发布") : method
-    }
-
-    private var capacityText: String {
-        if event.remaining > 0 { return String(localized: "余 \(event.remaining)") }
-        return event.waitlistEnabled ? String(localized: "候补中") : String(localized: "已满员")
-    }
-
-    private var capacitySymbol: String {
-        event.remaining > 0 ? "person.badge.plus" : (event.waitlistEnabled ? "hourglass" : "person.2.slash")
-    }
-
-    private var formatText: String {
-        let format: String = switch event.format {
-        case .inPerson: String(localized: "线下")
-        case .online: String(localized: "线上")
-        case .hybrid: String(localized: "混合")
-        }
-        guard event.localeConfirmed else {
-            return "\(format) · \(String(localized: "活动语言待确认"))"
-        }
-        return "\(format) · \(localeText(event.primaryLocale))"
-    }
-
-    private var formatSymbol: String {
-        switch event.format {
-        case .inPerson: "person.2"
-        case .online: "video"
-        case .hybrid: "person.2.wave.2"
-        }
-    }
-
-    private var accessibilitySummary: String {
-        [event.title, dateText, locationText, formatText, feeText, capacityText]
-            .joined(separator: ", ")
-    }
-
-    private var dateText: String {
-        event.startsAt?.formatted(date: .long, time: .shortened) ?? String(localized: "时间待定")
+    private var presentation: DiscoveryEventPresentation {
+        DiscoveryEventPresentation(event: event, locale: locale)
     }
 
     var body: some View {
@@ -144,58 +99,23 @@ struct DiscoveryEventRow: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: accessibilitySummary))
+        .accessibilityLabel(Text(verbatim: presentation.accessibilitySummary))
         .accessibilityHint("打开活动详情")
         .accessibilityIdentifier("discovery.event.\(event.id.uuidString.lowercased())")
-    }
-
-    private func localeText(_ locale: EventLocale) -> String {
-        switch locale {
-        case .zhHans: String(localized: "简体中文")
-        case .ja: String(localized: "日本語")
-        case .en: "English"
-        }
     }
 }
 
 private struct DiscoveryEventFacts: View {
+    @Environment(\.locale) private var locale
     let event: EventSummary
     let dynamicTypeSize: DynamicTypeSize
 
-    private var locationText: String { event.publicArea ?? String(localized: "地点待发布") }
-
-    private var feeText: String {
-        guard let fee = event.fee else { return String(localized: "费用待发布") }
-        if fee.isFree { return String(localized: "免费") }
-        if let amount = fee.amountJPY { return "¥\(amount.formatted())" }
-        let method = [fee.collectorName, fee.method].compactMap { $0 }.joined(separator: " · ")
-        return method.isEmpty ? String(localized: "费用待发布") : method
-    }
-
-    private var capacityText: String {
-        if event.remaining > 0 { return String(localized: "余 \(event.remaining)") }
-        return event.waitlistEnabled ? String(localized: "候补中") : String(localized: "已满员")
+    private var presentation: DiscoveryEventPresentation {
+        DiscoveryEventPresentation(event: event, locale: locale)
     }
 
     private var capacitySymbol: String {
         event.remaining > 0 ? "person.badge.plus" : (event.waitlistEnabled ? "hourglass" : "person.2.slash")
-    }
-
-    private var formatText: String {
-        let format: String = switch event.format {
-        case .inPerson: String(localized: "线下")
-        case .online: String(localized: "线上")
-        case .hybrid: String(localized: "混合")
-        }
-        guard event.localeConfirmed else {
-            return "\(format) · \(String(localized: "活动语言待确认"))"
-        }
-        let language: String = switch event.primaryLocale {
-        case .zhHans: String(localized: "简体中文")
-        case .ja: String(localized: "日本語")
-        case .en: "English"
-        }
-        return "\(format) · \(language)"
     }
 
     private var formatSymbol: String {
@@ -208,26 +128,26 @@ private struct DiscoveryEventFacts: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            EventStartLabel(startsAt: event.startsAt)
+            EventStartLabel(event: event)
             Text(verbatim: event.title)
                 .font(.headline)
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.leading)
                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
-            factLine(symbol: "mappin.and.ellipse", text: locationText)
-            factLine(symbol: formatSymbol, text: formatText)
+            factLine(symbol: "mappin.and.ellipse", text: presentation.locationText)
+            factLine(symbol: formatSymbol, text: presentation.formatText)
             if dynamicTypeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label(feeText, systemImage: "yensign.circle")
-                    Label(capacityText, systemImage: capacitySymbol)
+                    Label(presentation.feeText, systemImage: "yensign.circle")
+                    Label(presentation.capacityText, systemImage: capacitySymbol)
                 }
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
             } else {
                 HStack(spacing: 12) {
-                    Label(feeText, systemImage: "yensign.circle")
+                    Label(presentation.feeText, systemImage: "yensign.circle")
                     Spacer(minLength: 4)
-                    Label(capacityText, systemImage: capacitySymbol)
+                    Label(presentation.capacityText, systemImage: capacitySymbol)
                 }
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
@@ -249,11 +169,16 @@ private struct DiscoveryEventFacts: View {
 }
 
 private struct EventStartLabel: View {
-    let startsAt: Date?
+    @Environment(\.locale) private var locale
+    let event: EventSummary
+
+    private var presentation: DiscoveryEventPresentation {
+        DiscoveryEventPresentation(event: event, locale: locale)
+    }
 
     var body: some View {
-        if let startsAt {
-            Text(startsAt.formatted(date: .abbreviated, time: .shortened))
+        if event.startsAt != nil {
+            Text(verbatim: presentation.shortDateText)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(SpottColor.twilight)
         } else {

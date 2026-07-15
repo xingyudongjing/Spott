@@ -36,6 +36,7 @@ final class DiscoveryStore {
     var isRefreshing = false
     var isLoadingNextPage = false
     var hasMore = false
+    var locale: Locale
 
     var searchText = ""
     var region = "tokyo"
@@ -52,18 +53,23 @@ final class DiscoveryStore {
     @ObservationIgnored private let cache: any DiscoveryCaching
     @ObservationIgnored private let debounce: Duration
     @ObservationIgnored private var scheduledReload: Task<Void, Never>?
+    @ObservationIgnored private var replacementRequest: Task<DiscoveryPage, Error>?
+    @ObservationIgnored private var paginationRequest: Task<DiscoveryPage, Error>?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var nextCursor: String?
+    @ObservationIgnored private var paginationRecoveryRequiresReplacement = false
     @ObservationIgnored private var usesFixture = false
 
     init(
         service: any DiscoveryServing,
         cache: any DiscoveryCaching,
-        debounce: Duration = DiscoveryStore.defaultDebounce
+        debounce: Duration = DiscoveryStore.defaultDebounce,
+        locale: Locale = .autoupdatingCurrent
     ) {
         self.service = service
         self.cache = cache
         self.debounce = debounce
+        self.locale = locale
     }
 
     var mapEvents: [EventSummary] {
@@ -77,28 +83,30 @@ final class DiscoveryStore {
 
     func loadInitial() async {
         guard !usesFixture else { return }
-        scheduledReload?.cancel()
-        scheduledReload = nil
-        generation += 1
+        beginReplacement()
         let requestGeneration = generation
+        let requestQuery = query(cursor: nil)
 
         if items.isEmpty {
             phase = .loading
-            if let cached = try? await cache.cachedEvents(), requestGeneration == generation, !cached.isEmpty {
-                items = cached.map(\.discoverySafeSummary)
+            if isCanonicalCacheQuery(requestQuery),
+               let cached = try? await cache.cachedEvents(),
+               requestGeneration == generation,
+               !cached.isEmpty {
+                let neutralCache = cached.map(\.viewerNeutralDiscoverySummary)
+                items = neutralCache
                 phase = .offline
+                try? await cache.replaceEvents(neutralCache)
             }
         }
 
-        await replaceResults(generation: requestGeneration)
+        await replaceResults(generation: requestGeneration, query: requestQuery)
     }
 
     func refresh() async {
         guard !usesFixture else { return }
-        scheduledReload?.cancel()
-        scheduledReload = nil
-        generation += 1
-        await replaceResults(generation: generation)
+        beginReplacement()
+        await replaceResults(generation: generation, query: query(cursor: nil))
     }
 
     func searchDidChange() {
@@ -130,12 +138,24 @@ final class DiscoveryStore {
     func loadNextPage() async {
         guard hasMore, !isLoadingNextPage, let requestedCursor = nextCursor else { return }
         let requestGeneration = generation
+        let baseQuery = query(cursor: nil)
+        let requestQuery = query(cursor: requestedCursor)
         isLoadingNextPage = true
         paginationError = nil
-        defer { isLoadingNextPage = false }
+        paginationRecoveryRequiresReplacement = false
+        let request = Task { [service] in
+            try await service.discovery(requestQuery).privacySanitized
+        }
+        paginationRequest = request
+        defer {
+            if requestGeneration == generation {
+                isLoadingNextPage = false
+                paginationRequest = nil
+            }
+        }
 
         do {
-            let page = try await service.discovery(query(cursor: requestedCursor)).privacySanitized
+            let page = try await request.value
             try Task.checkCancellation()
             guard requestGeneration == generation, nextCursor == requestedCursor else { return }
 
@@ -143,27 +163,51 @@ final class DiscoveryStore {
             if page.hasMore, page.nextCursor == nil || page.nextCursor == requestedCursor {
                 hasMore = false
                 nextCursor = nil
+                paginationRecoveryRequiresReplacement = true
                 paginationError = .init(
                     id: "DISCOVERY_CURSOR_STALLED",
-                    message: String(localized: "更多活动暂时无法加载，请稍后重试。"),
+                    message: localized("更多活动暂时无法加载，请稍后重试。"),
                     retryable: true
                 )
             } else {
                 hasMore = page.hasMore
                 nextCursor = page.nextCursor
             }
-            try? await cache.replaceEvents(items)
+            await persistCanonicalCacheIfNeeded(query: baseQuery)
         } catch is CancellationError {
             return
         } catch {
             guard requestGeneration == generation else { return }
-            paginationError = Self.map(error)
+            paginationError = map(error)
         }
     }
 
+    func retryPagination() async {
+        guard paginationError != nil else { return }
+        if paginationRecoveryRequiresReplacement {
+            await refresh()
+        } else {
+            await loadNextPage()
+        }
+    }
+
+    func resetForSessionChange() {
+        cancelRequests()
+        generation += 1
+        items = items.map(\.viewerNeutralDiscoverySummary)
+        fatalError = nil
+        refreshError = nil
+        paginationError = nil
+        isRefreshing = false
+        isLoadingNextPage = false
+        hasMore = false
+        nextCursor = nil
+        paginationRecoveryRequiresReplacement = false
+        phase = items.isEmpty ? .initial : .content
+    }
+
     func replaceWithFixture(_ events: [EventSummary]) {
-        scheduledReload?.cancel()
-        scheduledReload = nil
+        cancelRequests()
         generation += 1
         items = events.map(\.discoverySafeSummary)
         phase = items.isEmpty ? .empty : .content
@@ -172,20 +216,21 @@ final class DiscoveryStore {
         paginationError = nil
         hasMore = false
         nextCursor = nil
+        paginationRecoveryRequiresReplacement = false
         usesFixture = true
     }
 
     private func scheduleReplacement() {
         guard !usesFixture else { return }
-        scheduledReload?.cancel()
-        generation += 1
+        beginReplacement()
         let requestGeneration = generation
+        let requestQuery = query(cursor: nil)
         scheduledReload = Task { [weak self, debounce] in
             do {
                 try await Task.sleep(for: debounce)
                 try Task.checkCancellation()
                 guard let self, requestGeneration == self.generation else { return }
-                await self.replaceResults(generation: requestGeneration)
+                await self.replaceResults(generation: requestGeneration, query: requestQuery)
                 if requestGeneration == self.generation {
                     self.scheduledReload = nil
                 }
@@ -197,16 +242,24 @@ final class DiscoveryStore {
         }
     }
 
-    private func replaceResults(generation requestGeneration: Int) async {
+    private func replaceResults(
+        generation requestGeneration: Int,
+        query requestQuery: EventDiscoveryQuery
+    ) async {
         guard requestGeneration == generation else { return }
         isRefreshing = !items.isEmpty
         if items.isEmpty { phase = .loading }
         fatalError = nil
         refreshError = nil
         paginationError = nil
+        paginationRecoveryRequiresReplacement = false
+        let request = Task { [service] in
+            try await service.discovery(requestQuery).privacySanitized
+        }
+        replacementRequest = request
 
         do {
-            let page = try await service.discovery(query(cursor: nil)).privacySanitized
+            let page = try await request.value
             try Task.checkCancellation()
             guard requestGeneration == generation else { return }
 
@@ -215,21 +268,22 @@ final class DiscoveryStore {
             if page.hasMore, page.nextCursor == nil {
                 hasMore = false
                 nextCursor = nil
+                paginationRecoveryRequiresReplacement = true
                 paginationError = .init(
                     id: "DISCOVERY_CURSOR_MISSING",
-                    message: String(localized: "更多活动暂时无法加载，请稍后重试。"),
+                    message: localized("更多活动暂时无法加载，请稍后重试。"),
                     retryable: true
                 )
             } else {
                 hasMore = page.hasMore
                 nextCursor = page.nextCursor
             }
-            try? await cache.replaceEvents(items)
+            await persistCanonicalCacheIfNeeded(query: requestQuery)
         } catch is CancellationError {
             return
         } catch {
             guard requestGeneration == generation else { return }
-            let mapped = Self.map(error)
+            let mapped = map(error)
             if items.isEmpty {
                 fatalError = mapped
                 phase = .error
@@ -239,7 +293,46 @@ final class DiscoveryStore {
             }
         }
 
-        if requestGeneration == generation { isRefreshing = false }
+        if requestGeneration == generation {
+            isRefreshing = false
+            replacementRequest = nil
+        }
+    }
+
+    private func beginReplacement() {
+        cancelRequests()
+        generation += 1
+        isLoadingNextPage = false
+        paginationError = nil
+        paginationRecoveryRequiresReplacement = false
+    }
+
+    private func cancelRequests() {
+        scheduledReload?.cancel()
+        scheduledReload = nil
+        replacementRequest?.cancel()
+        replacementRequest = nil
+        paginationRequest?.cancel()
+        paginationRequest = nil
+    }
+
+    private func persistCanonicalCacheIfNeeded(query: EventDiscoveryQuery) async {
+        guard isCanonicalCacheQuery(query) else { return }
+        try? await cache.replaceEvents(items.map(\.viewerNeutralDiscoverySummary))
+    }
+
+    private func isCanonicalCacheQuery(_ query: EventDiscoveryQuery) -> Bool {
+        query.q == nil
+            && query.region == "tokyo"
+            && query.category == nil
+            && query.startsAfter == nil
+            && query.startsBefore == nil
+            && query.availableOnly == nil
+            && query.format == nil
+            && query.language == nil
+            && query.price == nil
+            && query.bounds == nil
+            && query.cursor == nil
     }
 
     private func query(cursor: String?) -> EventDiscoveryQuery {
@@ -259,15 +352,19 @@ final class DiscoveryStore {
         )
     }
 
-    private static func map(_ error: Error) -> UserFacingError {
+    private func map(_ error: Error) -> UserFacingError {
         if let apiError = error as? APIError {
             return .init(id: apiError.code, message: apiError.message, retryable: apiError.retryable)
         }
         return .init(
             id: "NETWORK_UNAVAILABLE",
-            message: String(localized: "暂时无法连接 Spott，请检查网络后重试。"),
+            message: localized("暂时无法连接 Spott，请检查网络后重试。"),
             retryable: true
         )
+    }
+
+    private func localized(_ key: String.LocalizationValue) -> String {
+        DiscoveryLocalization.text(key, locale: locale)
     }
 
     private static func isOffline(_ error: Error) -> Bool {
@@ -281,6 +378,54 @@ final class DiscoveryStore {
             ].contains(urlError.code)
         }
         return false
+    }
+}
+
+private extension EventSummary {
+    var viewerNeutralDiscoverySummary: EventSummary {
+        let safe = discoverySafeSummary
+        return EventSummary(
+            id: safe.id,
+            publicSlug: safe.publicSlug,
+            organizerId: safe.organizerId,
+            status: safe.status,
+            title: safe.title,
+            description: safe.description,
+            category: safe.category,
+            startsAt: safe.startsAt,
+            endsAt: safe.endsAt,
+            deadlineAt: safe.deadlineAt,
+            displayTimeZone: safe.displayTimeZone,
+            region: safe.region,
+            publicArea: safe.publicArea,
+            capacity: safe.capacity,
+            confirmedCount: safe.confirmedCount,
+            availableCapacity: safe.availableCapacity,
+            coverURL: safe.coverURL,
+            tags: safe.tags,
+            organizer: EventOrganizer(
+                id: safe.organizer.id,
+                name: safe.organizer.name,
+                handle: safe.organizer.handle,
+                viewerFollowing: false,
+                trust: safe.organizer.trust
+            ),
+            favorited: false,
+            registrationStatus: nil,
+            viewerRegistration: nil,
+            registrationMode: safe.registrationMode,
+            waitlistEnabled: safe.waitlistEnabled,
+            format: safe.format,
+            primaryLocale: safe.primaryLocale,
+            supportedLocales: safe.supportedLocales,
+            localeConfirmed: safe.localeConfirmed,
+            availableActions: [],
+            version: safe.version,
+            updatedAt: safe.updatedAt,
+            coordinate: safe.coordinate,
+            exactAddress: nil,
+            fee: safe.fee
+        )
     }
 }
 

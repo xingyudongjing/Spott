@@ -122,6 +122,84 @@ final class DiscoveryStoreTests: XCTestCase {
         XCTAssertEqual(store.paginationError?.id, "DISCOVERY_CURSOR_STALLED")
     }
 
+    func testReplacingQueryCancelsPaginationAndAllowsTheNewQueryToPaginate() async throws {
+        let oldPageStarted = expectation(description: "old pagination started")
+        let oldPageCancelled = expectation(description: "old pagination cancelled")
+        let initial = try Self.event(id: 1, title: "Initial")
+        let replacement = try Self.event(id: 2, title: "Replacement")
+        let replacementNext = try Self.event(id: 3, title: "Replacement next")
+        let service = TestDiscoveryService { query, _ in
+            switch (query.q, query.cursor) {
+            case (nil, nil):
+                return Self.page(items: [initial], nextCursor: "old-cursor", hasMore: true)
+            case (nil, "old-cursor"):
+                oldPageStarted.fulfill()
+                do {
+                    try await Task.sleep(for: .milliseconds(500))
+                } catch is CancellationError {
+                    oldPageCancelled.fulfill()
+                    throw CancellationError()
+                }
+                return Self.page(items: [], nextCursor: nil, hasMore: false)
+            case ("replacement", nil):
+                return Self.page(items: [replacement], nextCursor: "new-cursor", hasMore: true)
+            case ("replacement", "new-cursor"):
+                return Self.page(items: [replacementNext], nextCursor: nil, hasMore: false)
+            default:
+                return Self.page(items: [])
+            }
+        }
+        let store = DiscoveryStore(
+            service: service,
+            cache: TestDiscoveryCache(),
+            debounce: .milliseconds(10)
+        )
+
+        await store.loadInitial()
+        let oldPagination = Task { await store.loadNextPage() }
+        await fulfillment(of: [oldPageStarted], timeout: 1)
+
+        store.searchText = "replacement"
+        store.searchDidChange()
+
+        await fulfillment(of: [oldPageCancelled], timeout: 0.3)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertFalse(store.isLoadingNextPage)
+        await store.loadNextPage()
+        await oldPagination.value
+
+        XCTAssertEqual(store.items.map(\.title), ["Replacement", "Replacement next"])
+        let queries = await service.recordedQueries()
+        XCTAssertTrue(queries.contains { $0.q == "replacement" && $0.cursor == "new-cursor" })
+    }
+
+    func testRetryingAStalledCursorRestartsFromTheFirstPage() async throws {
+        let first = try Self.event(id: 1, title: "First")
+        let stalled = try Self.event(id: 2, title: "Stalled")
+        let recovered = try Self.event(id: 3, title: "Recovered")
+        let service = TestDiscoveryService { query, requestNumber in
+            if requestNumber == 1 {
+                return Self.page(items: [first], nextCursor: "cursor-1", hasMore: true)
+            }
+            if requestNumber == 2 {
+                return Self.page(items: [stalled], nextCursor: "cursor-1", hasMore: true)
+            }
+            XCTAssertNil(query.cursor)
+            return Self.page(items: [recovered], nextCursor: nil, hasMore: false)
+        }
+        let store = DiscoveryStore(service: service, cache: TestDiscoveryCache())
+
+        await store.loadInitial()
+        await store.loadNextPage()
+        XCTAssertEqual(store.paginationError?.id, "DISCOVERY_CURSOR_STALLED")
+
+        await store.retryPagination()
+
+        XCTAssertEqual(store.items.map(\.title), ["Recovered"])
+        let queries = await service.recordedQueries()
+        XCTAssertEqual(queries.map(\.cursor), [nil, "cursor-1", nil])
+    }
+
     func testSelectedFiltersAreServerOnlyAndNeverRefilterReturnedItems() async throws {
         let serverResult = try Self.event(id: 1, title: "Server truth", category: "walk")
         let service = TestDiscoveryService { _, _ in Self.page(items: [serverResult]) }
@@ -200,6 +278,132 @@ final class DiscoveryStoreTests: XCTestCase {
         XCTAssertEqual(store.items.map(\.title), ["Cached"])
         XCTAssertEqual(store.phase, .offline)
         XCTAssertEqual(store.refreshError?.id, "NETWORK_UNAVAILABLE")
+    }
+
+    func testFilteredInitialLoadDoesNotDisplayTheCanonicalCache() async throws {
+        let cached = try Self.event(id: 1, title: "Cached baseline")
+        let store = DiscoveryStore(
+            service: TestDiscoveryService { _, _ in throw URLError(.notConnectedToInternet) },
+            cache: TestDiscoveryCache(cached: [cached])
+        )
+        store.category = "music"
+
+        await store.loadInitial()
+
+        XCTAssertTrue(store.items.isEmpty)
+        XCTAssertEqual(store.phase, .error)
+    }
+
+    func testFilteredResultsDoNotOverwriteTheCanonicalCache() async throws {
+        let baseline = try Self.event(id: 1, title: "Cached baseline")
+        let filtered = try Self.event(id: 2, title: "Filtered")
+        let cache = TestDiscoveryCache(cached: [baseline])
+        let store = DiscoveryStore(
+            service: TestDiscoveryService { _, _ in Self.page(items: [filtered]) },
+            cache: cache
+        )
+        store.category = "music"
+
+        await store.loadInitial()
+
+        let persisted = await cache.storedEvents()
+        XCTAssertEqual(persisted.map(\.title), ["Cached baseline"])
+    }
+
+    func testCanonicalCachePersistsOnlyAPublicViewerNeutralProjection() async throws {
+        let personalized = try Self.personalizedEvent(id: 1, title: "Personalized")
+        let cache = TestDiscoveryCache()
+        let store = DiscoveryStore(
+            service: TestDiscoveryService { _, _ in Self.page(items: [personalized]) },
+            cache: cache
+        )
+
+        await store.loadInitial()
+
+        XCTAssertNotNil(store.items.first?.viewerRegistration)
+        XCTAssertTrue(store.items.first?.favorited == true)
+        let cachedEvents = await cache.storedEvents()
+        let persisted = try XCTUnwrap(cachedEvents.first)
+        XCTAssertNil(persisted.viewerRegistration)
+        XCTAssertNil(persisted.registrationStatus)
+        XCTAssertFalse(persisted.favorited)
+        XCTAssertFalse(persisted.organizer.viewerFollowing)
+        XCTAssertTrue(persisted.availableActions.isEmpty)
+    }
+
+    func testLegacyCachedViewerStateIsStrippedBeforeOfflineDisplay() async throws {
+        let personalized = try Self.personalizedEvent(id: 1, title: "Legacy personalized")
+        let cache = TestDiscoveryCache(cached: [personalized])
+        let store = DiscoveryStore(
+            service: TestDiscoveryService { _, _ in throw URLError(.notConnectedToInternet) },
+            cache: cache
+        )
+
+        await store.loadInitial()
+
+        let displayed = try XCTUnwrap(store.items.first)
+        XCTAssertNil(displayed.viewerRegistration)
+        XCTAssertNil(displayed.registrationStatus)
+        XCTAssertFalse(displayed.favorited)
+        XCTAssertFalse(displayed.organizer.viewerFollowing)
+        XCTAssertTrue(displayed.availableActions.isEmpty)
+        let rewrittenCache = await cache.storedEvents()
+        let persisted = try XCTUnwrap(rewrittenCache.first)
+        XCTAssertNil(persisted.viewerRegistration)
+        XCTAssertNil(persisted.registrationStatus)
+        XCTAssertFalse(persisted.favorited)
+        XCTAssertFalse(persisted.organizer.viewerFollowing)
+        XCTAssertTrue(persisted.availableActions.isEmpty)
+    }
+
+    func testSigningOutRemovesViewerStateFromInMemoryDiscoveryAndRouterCache() throws {
+        let personalized = try Self.personalizedEvent(id: 1, title: "Signed in")
+        let model = AppModel.preview
+        model.discovery.replaceWithFixture([personalized])
+        model.show(event: personalized)
+        let reference = EventRouteReference(event: personalized)
+        XCTAssertNotNil(model.router.cachedEvent(for: reference)?.viewerRegistration)
+
+        model.signOut()
+
+        let displayed = try XCTUnwrap(model.discovery.items.first)
+        XCTAssertNil(displayed.viewerRegistration)
+        XCTAssertNil(displayed.registrationStatus)
+        XCTAssertFalse(displayed.favorited)
+        XCTAssertFalse(displayed.organizer.viewerFollowing)
+        XCTAssertTrue(displayed.availableActions.isEmpty)
+        XCTAssertNil(model.router.cachedEvent(for: reference))
+    }
+
+    func testSwitchingAccountsClearsPersonalizedDiscoveryAndRouterCache() throws {
+        let personalized = try Self.personalizedEvent(id: 1, title: "First account")
+        let model = AppModel.preview
+        model.discovery.replaceWithFixture([personalized])
+        model.show(event: personalized)
+        let reference = EventRouteReference(event: personalized)
+        let previous = try XCTUnwrap(model.session)
+        let replacement = UserSession(
+            accessToken: "replacement-access",
+            refreshToken: "replacement-refresh",
+            sessionId: UUID(),
+            accessTokenExpiresAt: previous.accessTokenExpiresAt,
+            user: .init(
+                id: UUID(),
+                publicHandle: "replacement",
+                phoneVerified: true,
+                restrictions: []
+            )
+        )
+
+        model.didAuthenticate(replacement)
+
+        let displayed = try XCTUnwrap(model.discovery.items.first)
+        XCTAssertNil(displayed.viewerRegistration)
+        XCTAssertNil(displayed.registrationStatus)
+        XCTAssertFalse(displayed.favorited)
+        XCTAssertFalse(displayed.organizer.viewerFollowing)
+        XCTAssertTrue(displayed.availableActions.isEmpty)
+        XCTAssertNil(model.router.cachedEvent(for: reference))
     }
 
     func testEmptyAndFatalErrorHaveDistinctStates() async {
@@ -355,6 +559,29 @@ final class DiscoveryStoreTests: XCTestCase {
         payload["coordinate"] = coordinate ?? NSNull()
         return payload
     }
+
+    nonisolated private static func personalizedEvent(id: Int, title: String) throws -> EventSummary {
+        var payload = try eventObject(id: id, title: title)
+        payload["favorited"] = true
+        payload["registrationStatus"] = "confirmed"
+        payload["viewerRegistration"] = [
+            "id": "019b0000-0000-7000-8200-000000000001",
+            "status": "confirmed",
+            "partySize": 2,
+            "offerExpiresAt": NSNull(),
+        ]
+        payload["availableActions"] = ["viewTicket"]
+        if var organizer = payload["organizer"] as? [String: Any] {
+            organizer["viewerFollowing"] = true
+            payload["organizer"] = organizer
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(
+            EventSummary.self,
+            from: JSONSerialization.data(withJSONObject: payload)
+        )
+    }
 }
 
 private actor TestDiscoveryService: DiscoveryServing {
@@ -385,4 +612,5 @@ private actor TestDiscoveryCache: DiscoveryCaching {
 
     func cachedEvents() async throws -> [EventSummary] { cached }
     func replaceEvents(_ events: [EventSummary]) async throws { cached = events }
+    func storedEvents() -> [EventSummary] { cached }
 }

@@ -206,6 +206,10 @@ final class AppModel {
 
     func didAuthenticate(_ newSession: UserSession) {
         let completedGate = presentedGate
+        let authenticatedUserID = newSession.user.id
+        if session?.user.id != newSession.user.id {
+            discovery.resetForSessionChange()
+        }
         if let previousUserID = session?.user.id, previousUserID != newSession.user.id {
             router.resetSensitiveNavigation()
         }
@@ -222,7 +226,11 @@ final class AppModel {
             presentedGate = .phoneVerification
         }
         Task {
-            try? await sync.bootstrap(userID: newSession.user.id)
+            guard session?.user.id == authenticatedUserID else { return }
+            try? await sync.bootstrap(userID: authenticatedUserID)
+            guard session?.user.id == authenticatedUserID else { return }
+            await discovery.refresh()
+            guard session?.user.id == authenticatedUserID else { return }
             await reconcileStorePurchases()
             await registerPendingPushToken()
         }
@@ -285,7 +293,13 @@ final class AppModel {
         session = nil
         presentedGate = nil
         router.resetSensitiveNavigation()
-        Task { try? await api.signOut(); try? await sync.resetSensitiveScope(reason: .signOut) }
+        discovery.resetForSessionChange()
+        Task {
+            try? await api.signOut()
+            try? await sync.resetSensitiveScope(reason: .signOut)
+            guard session == nil else { return }
+            await discovery.refresh()
+        }
     }
 
     static func map(_ error: Error) -> UserFacingError {

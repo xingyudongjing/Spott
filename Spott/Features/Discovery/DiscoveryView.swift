@@ -9,6 +9,7 @@ private enum DiscoveryDisplayMode: String, CaseIterable, Identifiable {
 
 struct DiscoveryView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.locale) private var locale
     @State private var store: DiscoveryStore
     @State private var displayMode = DiscoveryDisplayMode.list
     @State private var showsMapResults = false
@@ -55,6 +56,9 @@ struct DiscoveryView: View {
             .presentationDetents([.height(188), .medium, .large], selection: $mapSheetDetent)
             .presentationDragIndicator(.visible)
             .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+        }
+        .onChange(of: locale.identifier, initial: true) { _, _ in
+            store.locale = locale
         }
         .accessibilityIdentifier("discovery.screen")
     }

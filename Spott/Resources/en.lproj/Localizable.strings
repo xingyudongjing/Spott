@@ -231,6 +231,7 @@
 "查看拉黑名单" = "View blocked users";
 "正在加入…" = "Joining…";
 "正在加载活动" = "Loading events";
+"正在加载活动…" = "Loading events…";
 "活动" = "Events";
 "活动之后" = "Beyond the event";
 "活动标题" = "Event title";

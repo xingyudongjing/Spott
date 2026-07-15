@@ -23,6 +23,10 @@ export function SiteHeader() {
   const pathname = usePathname();
   const { t } = useI18n();
   const region = t("nav.regionValue");
+  const registrationRoute = pathname.startsWith("/register/");
+  const ownsMobileAction = registrationRoute || pathname.startsWith("/e/");
+
+  if (registrationRoute) return null;
 
   return (
     <>
@@ -70,7 +74,7 @@ export function SiteHeader() {
         </div>
       </header>
 
-      <nav className={styles.mobileDock} aria-label={t("nav.mobile")}>
+      {!ownsMobileAction ? <nav className={styles.mobileDock} aria-label={t("nav.mobile")}>
         <DockLink pathname={pathname} href="/discover" label={t("nav.discover")} icon={<SearchIcon />} />
         <DockLink pathname={pathname} href="/groups" label={t("nav.groups")} icon={<UsersIcon />} />
         <Link
@@ -84,7 +88,7 @@ export function SiteHeader() {
         </Link>
         <DockLink pathname={pathname} href="/me/events" label={t("nav.myEvents")} icon={<CalendarIcon />} />
         <DockLink pathname={pathname} href="/me/settings" label={t("nav.account")} icon={<UserIcon />} />
-      </nav>
+      </nav> : null}
     </>
   );
 }

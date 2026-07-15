@@ -1,0 +1,81 @@
+.root { display: grid; gap: 12px; }
+
+.primary {
+  display: inline-flex;
+  width: 100%;
+  min-height: 52px;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 20px;
+  border: 1px solid var(--spott-twilight);
+  border-radius: var(--spott-radius-control);
+  background: var(--spott-twilight);
+  color: white;
+  font-weight: 800;
+  text-align: center;
+  box-shadow: 0 12px 24px color-mix(in srgb, var(--spott-twilight) 20%, transparent);
+}
+.primary:disabled {
+  border-color: var(--spott-divider);
+  background: color-mix(in srgb, var(--spott-muted) 12%, var(--spott-surface));
+  color: var(--spott-muted);
+  box-shadow: none;
+}
+
+.utilities { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.utilities button,
+.mobileUtilities button {
+  min-height: 44px;
+  border: 1px solid var(--spott-divider);
+  border-radius: 12px;
+  background: var(--spott-surface);
+  color: var(--spott-ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+.utilities button[aria-pressed="true"] { color: var(--spott-twilight); border-color: color-mix(in srgb, var(--spott-twilight) 45%, var(--spott-divider)); }
+.mobileUtilities { display: none; }
+.message { color: var(--spott-coral); font-size: 13px; line-height: 1.45; }
+
+@media (max-width: 780px) {
+  .root { position: relative; grid-template-columns: minmax(0, 1fr) 48px; align-items: center; gap: 10px; }
+  .primary { min-height: 52px; }
+  .utilities { display: none; }
+  .mobileUtilities { position: relative; display: block; }
+  .mobileUtilities summary {
+    display: grid;
+    width: 48px;
+    min-height: 48px;
+    place-items: center;
+    border: 1px solid var(--spott-divider);
+    border-radius: 14px;
+    background: var(--spott-surface);
+    color: var(--spott-ink);
+    font-size: 0;
+    cursor: pointer;
+    list-style: none;
+  }
+  .mobileUtilities summary::after { font-size: 20px; letter-spacing: 2px; content: "•••"; }
+  .mobileUtilities summary::-webkit-details-marker { display: none; }
+  .mobileUtilities > div {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 10px);
+    display: grid;
+    width: min(260px, calc(100vw - 32px));
+    gap: 6px;
+    padding: 10px;
+    border: 1px solid var(--spott-divider);
+    border-radius: 16px;
+    background: var(--spott-surface);
+    box-shadow: 0 18px 42px rgb(21 29 39 / 18%);
+  }
+  .message { grid-column: 1 / -1; }
+}
+
+@media (prefers-contrast: more) {
+  .primary,
+  .utilities button,
+  .mobileUtilities summary,
+  .mobileUtilities > div { border-color: var(--spott-ink); }
+}

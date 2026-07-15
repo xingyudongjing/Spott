@@ -37,4 +37,20 @@ describe("responsive site navigation", () => {
     expect(screen.getByRole("link", { name: "通知" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "移动导航" })).toBeInTheDocument();
   });
+
+  test("removes the global mobile dock when event detail owns the safe-area action", () => {
+    navigation.pathname = "/e/tokyo-afterglow-walk";
+    renderWithI18n(<SiteHeader />);
+
+    expect(screen.getByRole("banner")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "移动导航" })).not.toBeInTheDocument();
+  });
+
+  test("keeps registration immersive without global chrome", () => {
+    navigation.pathname = "/register/tokyo-afterglow-walk";
+    renderWithI18n(<SiteHeader />);
+
+    expect(screen.queryByRole("banner")).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "移动导航" })).not.toBeInTheDocument();
+  });
 });

@@ -26,6 +26,7 @@ export interface WebSession {
 type APIRequestInit = RequestInit & {
   authenticated?: boolean;
   idempotent?: boolean;
+  idempotencyKey?: string;
   ifMatch?: number;
 };
 
@@ -259,7 +260,8 @@ export async function apiRequest<T>(
   init: APIRequestInit = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
-  if (init.idempotent && !headers.has("Idempotency-Key")) headers.set("Idempotency-Key", crypto.randomUUID());
+  if (init.idempotencyKey) headers.set("Idempotency-Key", init.idempotencyKey);
+  else if (init.idempotent && !headers.has("Idempotency-Key")) headers.set("Idempotency-Key", crypto.randomUUID());
   return apiRequestAttempt<T>(path, { ...init, headers }, true, null);
 }
 

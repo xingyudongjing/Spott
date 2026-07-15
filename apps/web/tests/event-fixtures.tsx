@@ -3,7 +3,7 @@ import { render } from "@testing-library/react";
 
 import { I18nProvider } from "../app/components/I18nProvider";
 import type { Locale } from "../app/i18n/messages";
-import type { EventPage, EventSummary } from "../app/lib/event-contract";
+import type { EventDetail, EventPage, EventSummary } from "../app/lib/event-contract";
 
 export const eventFixture: EventSummary = {
   id: "019b0000-0000-7000-8100-000000000001",
@@ -60,6 +60,21 @@ export const eventFixture: EventSummary = {
 
 export function makeEvent(overrides: Partial<EventSummary> = {}): EventSummary {
   return { ...eventFixture, ...overrides };
+}
+
+export function makeDetail(overrides: Partial<EventDetail> = {}): EventDetail {
+  return {
+    ...eventFixture,
+    exactAddress: null,
+    attendeeRequirements: "Bring comfortable shoes.",
+    riskFlags: [],
+    riskDetails: {},
+    exactAddressVisibility: "confirmed",
+    registrationQuestions: [],
+    media: [],
+    mediaCount: 0,
+    ...overrides,
+  };
 }
 
 export function makePage(

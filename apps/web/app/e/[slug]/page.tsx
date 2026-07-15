@@ -1,42 +1,57 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
-import { EventCover } from "../../components/EventCover";
+
+import { EventDetailView, eventStructuredData } from "../../components/event/EventDetail";
 import { Footer } from "../../components/Footer";
-import { getEvent } from "../../lib/api";
-import { eventDate, eventDay, eventTime } from "../../lib/format";
 import { serverLocale } from "../../i18n/server";
+import { EventAPIError } from "../../lib/events-api";
+import { fetchEventForRequest } from "../../lib/events-server";
 import { EventActions } from "./EventActions";
 import { EventFeedbackSummary } from "./EventFeedbackSummary";
 
 type PageProps = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
-  const { slug } = await params;
-  const event = await getEvent(slug);
+  const event = await eventOrNull((await params).slug);
   if (!event) return { title: "Event not found · Spott" };
-  return { title: event.title, description: event.description, alternates: { canonical: `/e/${event.publicSlug}` }, openGraph: { title: event.title, description: event.description, type: "website" } };
+  return {
+    title: event.title,
+    description: event.description,
+    alternates: { canonical: `/e/${event.publicSlug}` },
+    openGraph: {
+      title: event.title,
+      description: event.description,
+      type: "website",
+      ...(event.coverURL ? { images: [event.coverURL] } : {}),
+    },
+  };
 }
 
 export default async function EventPage({ params }: PageProps) {
   const [{ slug }, locale] = await Promise.all([params, serverLocale()]);
-  const event = await getEvent(slug);
+  const event = await eventOrNull(slug);
   if (!event) notFound();
-  const copy = detailCopy(locale);
-  const day = eventDay(event.startsAt);
-  const remaining = event.capacity - event.confirmedCount;
-  const jsonLd = { "@context": "https://schema.org", "@type": "Event", name: event.title, description: event.description, startDate: event.startsAt, endDate: event.endsAt, eventStatus: "https://schema.org/EventScheduled", eventAttendanceMode: "https://schema.org/OfflineEventAttendanceMode", location: { "@type": "Place", name: event.publicArea, address: { "@type": "PostalAddress", addressRegion: event.region, addressCountry: "JP" } }, organizer: { "@type": "Person", name: event.organizer.name } };
+  const jsonLd = JSON.stringify(eventStructuredData(event)).replaceAll("<", "\\u003c");
 
-  return <main><script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replaceAll("<", "\\u003c") }} /><div className="detail-shell"><div className="breadcrumb"><Link href="/discover">{copy.discover}</Link><span>/</span><span>{event.categoryLabel}</span></div><section className="detail-hero"><EventCover event={event} large /><div className="detail-title-block"><div className="date-tile"><span>{day.month}</span><strong>{day.day}</strong></div><div><div className="detail-status"><span /> {remaining > 0 ? copy.available.replace("{count}", String(remaining)) : copy.waitlist}</div><h1>{event.title}</h1><p>{event.description}</p><div className="tag-row detail-tags">{event.tags.map((tag) => <span key={tag}>{tag}</span>)}</div></div></div></section><div className="detail-layout"><div className="detail-content"><section className="fact-grid" aria-label={copy.info}><div><span>{copy.time}</span><strong>{eventDate(event.startsAt, locale)}</strong><p>{eventTime(event.startsAt, event.endsAt, locale)} · JST</p></div><div><span>{copy.location}</span><strong>{event.publicArea}</strong><p>{event.region} · {event.exactAddress ? event.exactAddress : copy.addressAfter}</p></div><div><span>{copy.fee}</span><strong>{event.priceLabel}</strong><p>{event.fee ? (event.fee.isFree ? copy.noPayment : copy.offlinePayment) : ""}</p></div><div><span>{copy.capacity}</span><strong>{event.confirmedCount} / {event.capacity}</strong><p>{remaining > 0 ? copy.remaining.replace("{count}", String(remaining)) : copy.canWaitlist}</p></div></section>
-    {event.fee && !event.fee.isFree && <aside className="fee-boundary"><span className="fee-icon">¥</span><div><strong>{copy.offlineFeeTitle}</strong><p>{event.fee.boundaryStatement}</p></div><dl><div><dt>{copy.collector}</dt><dd>{event.fee.collectorName}</dd></div><div><dt>{copy.method}</dt><dd>{event.fee.method}</dd></div><div><dt>{copy.refund}</dt><dd>{event.fee.refundPolicy}</dd></div></dl></aside>}
-    <section className="prose-section"><span className="section-number">ABOUT</span><h2>{copy.aboutTitle}</h2><p>{event.description}</p>{event.attendeeRequirements && <div className="attendee-requirements"><strong>{copy.requirements}</strong><p>{event.attendeeRequirements}</p></div>}<p>{copy.addressPrivacy}</p></section>
-    <EventFeedbackSummary eventId={event.id} locale={locale} />
-    {Boolean(event.registrationQuestions?.length) && <section className="event-question-preview"><span className="section-number">BEFORE YOU JOIN</span><h2>{copy.questions}</h2><ol>{event.registrationQuestions?.map((question, index) => <li key={question.id ?? `${index}-${question.prompt}`}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{question.prompt}</strong><p>{question.required ? copy.required : copy.optional}</p></div></li>)}</ol></section>}
-    <section className="host-card"><div className="host-avatar">{event.organizer.name.slice(0, 1)}</div><div><span>{copy.hostedBy}</span><h3>{event.organizer.name}</h3><p>@{event.organizer.handle} · {event.organizer.reliability}</p></div><Link href={`/u/${event.organizer.handle}`}>{copy.profile} ↗</Link></section><section className="safety-note"><strong>{copy.safety}</strong><p>{copy.safetyBody}</p><Link href={`/reports/new?targetType=event&targetId=${event.id}`}>{copy.report}</Link></section></div><aside className="action-card"><div className="action-price"><span>{copy.eventFee}</span><strong>{event.priceLabel}</strong></div><div className="action-capacity"><span><i style={{ width: `${event.capacity ? Math.min(100, event.confirmedCount / event.capacity * 100) : 0}%` }} /></span><p>{remaining > 0 ? copy.remaining.replace("{count}", String(remaining)) : copy.canWaitlist}</p></div><EventActions event={event} remaining={remaining} /><p className="action-hint">{copy.actionHint}</p></aside></div></div><Footer /></main>;
+  return (
+    <>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
+      <EventDetailView
+        event={event}
+        locale={locale}
+        actions={<EventActions event={event} />}
+        supplementary={<EventFeedbackSummary eventId={event.id} locale={locale} />}
+      />
+      <Footer />
+    </>
+  );
 }
 
-function detailCopy(locale: "zh-Hans" | "ja" | "en") {
-  if (locale === "ja") return { discover: "見つける", available: "申込受付中 · 残り {count}席", waitlist: "キャンセル待ち受付中", info: "イベント情報", time: "日時", location: "場所", fee: "参加費", capacity: "定員", addressAfter: "参加確定後に集合場所を表示", noPayment: "主催者への支払いはありません", offlinePayment: "主催者がプラットフォーム外で受け取ります", remaining: "残り {count}席", canWaitlist: "満席のためキャンセル待ちに登録できます", offlineFeeTitle: "プラットフォーム外の参加費", collector: "受取先", method: "支払方法", refund: "返金", aboutTitle: "内容と当日の流れ", requirements: "参加条件", addressPrivacy: "正確な集合場所は公開一覧やオフラインキャッシュには保存されず、設定に応じて確定参加者だけに表示されます。", questions: "申込時の質問", required: "必須", optional: "任意", hostedBy: "主催者", profile: "プロフィール", safety: "安全とキャンセル", safetyBody: "日時、場所、参加費などの重要事項が変わると記録付きで通知され、再確認またはキャンセルできます。問題は非公開で報告できます。", report: "イベントを報告", eventFee: "参加費", actionHint: "申込にはログインと日本の電話番号認証が必要です。Spottポイントと参加費は別です。" };
-  if (locale === "en") return { discover: "Discover", available: "Registration open · {count} spots", waitlist: "Waitlist open", info: "Event information", time: "Time", location: "Location", fee: "Fee", capacity: "Capacity", addressAfter: "Meeting point shown after confirmation", noPayment: "No payment to the host", offlinePayment: "Collected by the host outside Spott", remaining: "{count} spots remaining", canWaitlist: "Full — you can join the waitlist", offlineFeeTitle: "Offline event fee", collector: "Collector", method: "Method", refund: "Refunds", aboutTitle: "What to expect", requirements: "Participation requirements", addressPrivacy: "The exact meeting point is never stored in public listings or offline caches and is shown only to confirmed attendees when configured.", questions: "Registration questions", required: "Required", optional: "Optional", hostedBy: "Hosted by", profile: "View profile", safety: "Safety & cancellation", safetyBody: "If time, place, fee, or eligibility changes, you’ll receive an auditable update and can reconfirm or leave. Reports are private.", report: "Report event", eventFee: "Event fee", actionHint: "Registration requires sign-in and a verified Japanese phone number. Spott points and offline event fees are separate." };
-  return { discover: "发现", available: "可报名 · {count} 个名额", waitlist: "可加入候补", info: "活动信息", time: "时间", location: "地点", fee: "费用", capacity: "名额", addressAfter: "报名确认后显示集合点", noPayment: "无需向组织者付款", offlinePayment: "由组织者在平台外自行收取", remaining: "还有 {count} 个位置", canWaitlist: "名额已满，可加入候补", offlineFeeTitle: "线下活动费用说明", collector: "收款方", method: "方式", refund: "退款", aboutTitle: "活动内容与当天安排", requirements: "参与条件", addressPrivacy: "精确集合点不会进入公开列表或离线缓存，并按活动设置仅向已确认参加者展示。", questions: "报名时需要回答", required: "必填", optional: "可选", hostedBy: "由谁发起", profile: "查看主页", safety: "安全与取消", safetyBody: "如时间、地点、费用或参加条件发生关键变化，你会收到有记录的通知，并可重新确认或退出。举报内容仅案件处理人员可见。", report: "举报活动", eventFee: "活动费用", actionHint: "报名需登录并验证日本手机号。Spott 积分与线下活动费完全分离。" };
+async function eventOrNull(slug: string) {
+  try {
+    return await fetchEventForRequest(slug);
+  } catch (error) {
+    if (error instanceof EventAPIError && error.status === 404) return null;
+    throw error;
+  }
 }

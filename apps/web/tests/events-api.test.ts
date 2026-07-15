@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { searchEvents } from "../app/lib/events-api";
-import { makePage } from "./event-fixtures";
+import { fetchEvent, searchEvents } from "../app/lib/events-api";
+import { makeDetail, makePage } from "./event-fixtures";
 
 beforeEach(() => {
   vi.unstubAllGlobals();
@@ -22,5 +22,19 @@ describe("discovery authentication boundary", () => {
     expect(url).toContain("region=tokyo");
     expect(url).not.toContain("viewer-access-token");
     expect(headers.get("Authorization")).toBe("Bearer viewer-access-token");
+  });
+
+  test("forwards only explicit detail credentials and strictly parses the detail", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(makeDetail()), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchEvent("tokyo-afterglow-walk", { cookie: "__Host-spott_session=signed" });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toMatch(/\/events\/tokyo-afterglow-walk$/);
+    expect(new Headers(init.headers).get("Cookie")).toBe("__Host-spott_session=signed");
   });
 });

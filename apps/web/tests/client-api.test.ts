@@ -158,6 +158,29 @@ describe("refresh-aware client requests", () => {
     expect(readSession()).toEqual(otherUserSession);
   });
 
+  test("reuses a caller-owned idempotency key across an authenticated refresh retry", async () => {
+    saveSession(expiredSession);
+    const callerKey = "019b0000-0000-7000-8400-000000000001";
+    const keys: Array<string | null> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith("/auth/refresh")) return jsonResponse(freshSession);
+      const headers = new Headers(init?.headers);
+      keys.push(headers.get("Idempotency-Key"));
+      return headers.get("Authorization") === "Bearer fresh-access-token"
+        ? jsonResponse({ id: "registration" })
+        : jsonResponse({ error: { message: "expired" } }, 401);
+    }));
+
+    await expect(apiRequest("/events/event-a/registrations", {
+      method: "POST",
+      authenticated: true,
+      idempotencyKey: callerKey,
+      body: JSON.stringify({ partySize: 1 }),
+    })).resolves.toEqual({ id: "registration" });
+
+    expect(keys).toEqual([callerKey, callerKey]);
+  });
+
   test("does not let a stale refresh success overwrite a newly signed-in account", async () => {
     saveSession(expiredSession);
     let releaseRefresh!: () => void;

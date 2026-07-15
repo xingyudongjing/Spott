@@ -1,0 +1,31 @@
+{
+  "name": "@spott/worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "once": "tsx src/main.ts --once",
+    "lint": "eslint src --max-warnings=0",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1086.0",
+    "jose": "^6.2.3",
+    "nodemailer": "^9.0.3",
+    "pg": "^8.16.3",
+    "sharp": "^0.35.3",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.15",
+    "@types/nodemailer": "^8.0.1",
+    "@types/pg": "^8.15.4",
+    "tsx": "^4.20.3",
+    "typescript": "catalog:",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,1 @@
+export default function Privacy(){return <main className="legal-page"><span className="section-number">LEGAL / APPI</span><h1>隐私政策</h1><p>Spott 只在明确目的内处理个人信息。手机号、精确地址与安全证据使用分级保护，不进入公开缓存。</p><h2>你可以控制什么</h2><p>你可以导出、更正或请求删除自己的资料、报名记录、群组、积分流水与设置；法律或安全必须保留的记录会限制用途并从产品可见面移除。</p><h2>精确地址</h2><p>活动精确地址只向已确认或已签到参加者返回。退出登录、账号受限或内容下架时，客户端必须清除敏感缓存。</p></main>}

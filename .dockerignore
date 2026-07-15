@@ -1,0 +1,15 @@
+**/.DS_Store
+**/.git
+**/.next
+**/.turbo
+**/DerivedData
+**/dist
+**/node_modules
+database/.local
+apps
+Spott
+Spott.xcodeproj
+SpottTests
+SpottUITests
+docs
+packages

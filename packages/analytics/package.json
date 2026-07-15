@@ -1,0 +1,10 @@
+{
+  "name": "@spott/analytics",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./dist/index.js" },
+  "scripts": { "build": "tsc -p tsconfig.json", "lint": "eslint src --max-warnings=0", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "vitest run" },
+  "dependencies": { "zod": "catalog:" },
+  "devDependencies": { "typescript": "catalog:", "vitest": "^3.2.4" }
+}

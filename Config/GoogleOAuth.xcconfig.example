@@ -1,0 +1,5 @@
+// Copy these values from the Google Cloud OAuth clients for the Spott bundle.
+// Keep production credentials out of source control and inject them in CI/Xcode.
+GOOGLE_IOS_CLIENT_ID = 000000000000-ios.apps.googleusercontent.com
+GOOGLE_SERVER_CLIENT_ID = 000000000000-web.apps.googleusercontent.com
+GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.000000000000-ios

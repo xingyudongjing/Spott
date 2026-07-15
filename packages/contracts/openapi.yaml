@@ -1,0 +1,3572 @@
+openapi: 3.1.0
+info:
+  title: Spott API
+  version: 1.0.0
+  description: >-
+    Spott iOS/Web 单一契约。所有副作用写入均支持幂等键；业务状态由服务端裁决。
+  contact:
+    name: Spott Engineering
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: https://api.spott.jp/v1
+    description: Production
+tags:
+  - name: Auth
+    description: Identity, external login, sessions, and account lifecycle.
+  - name: Profiles
+    description: User profiles, social follows, and achievements.
+  - name: Discovery
+    description: Public event and group discovery surfaces.
+  - name: Events
+    description: Event authoring, publishing, search, and favorites.
+  - name: Registrations
+    description: Applications, waitlists, attendee review, and cancellation.
+  - name: Attendance
+    description: Dynamic, numeric, and manual check-in workflows.
+  - name: Groups
+    description: Persistent communities, memberships, announcements, and ownership.
+  - name: Points
+    description: Wallets, quotes, product catalogs, and StoreKit transactions.
+  - name: Notifications
+    description: Localized inbox, push devices, and delivery preferences.
+  - name: Safety
+    description: Reports, appeals, safety-case status, and blocking.
+  - name: Sync
+    description: Ordered cross-device incremental synchronization.
+  - name: Ops
+    description: Restricted operational moderation and configuration actions.
+  - name: Analytics
+    description: Privacy-aware product analytics ingestion.
+  - name: Feedback
+    description: Private post-event feedback and thresholded summaries.
+  - name: Media
+    description: Direct media uploads, processing, and attachment.
+  - name: Growth
+    description: Share links and generated promotional posters.
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Liveness and dependency status
+      security: []
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /auth/email/challenges:
+    post:
+      operationId: createEmailChallenge
+      summary: Create email challenge
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, deviceId]
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+                deviceId: { $ref: '#/components/schemas/UUID' }
+      responses:
+        '202': { $ref: '#/components/responses/ChallengeCreated' }
+        '429': { $ref: '#/components/responses/Error' }
+  /auth/email/verify:
+    post:
+      operationId: verifyEmailChallenge
+      summary: Verify email challenge
+      tags: [Auth]
+      security: []
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyChallengeRequest'
+      responses:
+        '200': { $ref: '#/components/responses/AuthSession' }
+        '400': { $ref: '#/components/responses/Error' }
+  /auth/apple:
+    post:
+      operationId: authenticateWithApple
+      summary: Authenticate with apple
+      description: >-
+        Validates SHA-256(raw nonce) and an exact platform-specific audience.
+        iOS accepts only APPLE_BUNDLE_ID; Web accepts only APPLE_SERVICE_ID.
+      tags: [Auth]
+      security: []
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [identityToken, nonce, deviceId]
+              properties:
+                identityToken: { type: string }
+                nonce: { type: string, minLength: 32 }
+                deviceId: { $ref: '#/components/schemas/UUID' }
+                platform: { type: string, enum: [ios, web], default: ios }
+      responses:
+        '200': { $ref: '#/components/responses/AuthSession' }
+        '401': { $ref: '#/components/responses/Error' }
+  /auth/google:
+    post:
+      operationId: authenticateWithGoogle
+      summary: Authenticate with google
+      description: >-
+        Verifies a Google ID token whose audience is the server-side OAuth Web
+        application client ID configured by GOOGLE_SERVER_CLIENT_ID. Native iOS
+        client IDs are not accepted as the production audience.
+      tags: [Auth]
+      security: []
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [idToken, deviceId]
+              properties:
+                idToken: { type: string }
+                deviceId: { $ref: '#/components/schemas/UUID' }
+      responses:
+        '200': { $ref: '#/components/responses/AuthSession' }
+        '401': { $ref: '#/components/responses/Error' }
+  /auth/refresh:
+    post:
+      operationId: refreshSession
+      summary: Refresh session
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken, deviceId]
+              properties:
+                refreshToken: { type: string }
+                deviceId: { $ref: '#/components/schemas/UUID' }
+      responses:
+        '200': { $ref: '#/components/responses/AuthSession' }
+        '401': { $ref: '#/components/responses/Error' }
+  /sessions/{id}:
+    delete:
+      operationId: revokeSession
+      summary: Revoke session
+      tags: [Auth]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204': { description: Revoked }
+        '404': { $ref: '#/components/responses/Error' }
+  /sessions:
+    delete:
+      operationId: revokeAllSessions
+      summary: Revoke every session for the current account
+      tags: [Auth]
+      responses:
+        '200': { description: All sessions revoked }
+        '401': { $ref: '#/components/responses/Error' }
+  /phone/challenges:
+    post:
+      operationId: createPhoneChallenge
+      summary: Create phone challenge
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phoneNumber, deviceId]
+              properties:
+                phoneNumber: { type: string, pattern: '^\\+81[1-9][0-9]{8,9}$' }
+                deviceId: { $ref: '#/components/schemas/UUID' }
+      responses:
+        '202': { $ref: '#/components/responses/ChallengeCreated' }
+        '429': { $ref: '#/components/responses/Error' }
+  /phone/challenges/{id}/verify:
+    post:
+      operationId: verifyPhoneChallenge
+      summary: Verify phone challenge
+      tags: [Auth]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, pattern: '^[0-9]{6}$' }
+      responses:
+        '200':
+          description: Verified
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requestId, verifiedAt, reward]
+                properties:
+                  requestId: { type: string }
+                  verifiedAt: { type: string, format: date-time }
+                  reward: { $ref: '#/components/schemas/WalletBalance' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /accounts/merge/preview:
+    post:
+      operationId: previewAccountMerge
+      summary: Preview account merge
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [credential]
+              properties:
+                credential: { $ref: '#/components/schemas/AccountMergeCredential' }
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '200':
+          description: Merge impact
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountMergePreview' }
+  /accounts/merge/commit:
+    post:
+      operationId: commitAccountMerge
+      summary: Commit account merge
+      tags: [Auth]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jobId, mergeToken, deviceId]
+              properties:
+                jobId: { $ref: '#/components/schemas/UUID' }
+                mergeToken: { type: string, minLength: 32, maxLength: 256, writeOnly: true }
+                deviceId: { $ref: '#/components/schemas/UUID' }
+                platform: { type: string, enum: [ios, web], default: web }
+      responses:
+        '200': { $ref: '#/components/responses/AuthSession' }
+        '409': { $ref: '#/components/responses/Error' }
+  /accounts/deletion-request:
+    post:
+      operationId: requestAccountDeletion
+      summary: Request account deletion
+      tags: [Auth]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '202':
+          description: Cooling-off period started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [executeAfter]
+                properties:
+                  executeAfter: { type: string, format: date-time }
+        '409': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: cancelAccountDeletion
+      summary: Cancel an account deletion request during cooling off
+      tags: [Auth]
+      responses:
+        '200': { description: Deletion request cancelled }
+        '409': { $ref: '#/components/responses/Error' }
+  /analytics/events/batch:
+    post:
+      operationId: ingestAnalyticsEvents
+      summary: Ingest a bounded analytics event batch
+      tags: [Analytics]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [events]
+              properties:
+                events:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { type: object, additionalProperties: true }
+      responses:
+        '202': { description: Batch accepted }
+        '400': { $ref: '#/components/responses/Error' }
+  /me/profile:
+    get:
+      operationId: getMyProfile
+      summary: Get my profile
+      tags: [Profiles]
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+    patch:
+      operationId: updateMyProfile
+      summary: Update my profile
+      tags: [Profiles]
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema:
+              type: object
+              properties:
+                nickname: { type: string, minLength: 1, maxLength: 40 }
+                bio: { type: string, maxLength: 500 }
+                regionId: { type: string }
+                preferredLocale: { $ref: '#/components/schemas/Locale' }
+                contentLanguages: { type: array, minItems: 1, maxItems: 3, items: { $ref: '#/components/schemas/Locale' } }
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+        '409': { $ref: '#/components/responses/Error' }
+  /profiles/{id}:
+    get:
+      operationId: getPublicProfile
+      summary: Get a public profile by user id or handle
+      tags: [Profiles]
+      security: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, minLength: 3, maxLength: 80 }, description: User UUID or public handle }
+      responses:
+        '200':
+          description: Public profile and viewer follow state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+        '404': { $ref: '#/components/responses/Error' }
+  /profiles/{id}/events:
+    get:
+      operationId: getPublicProfileEvents
+      summary: List publicly visible events hosted by a user
+      tags: [Profiles, Events]
+      security: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, minLength: 3, maxLength: 80 }, description: User UUID or public handle }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Public organizer event page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PublicProfileEventPage' }
+        '404': { $ref: '#/components/responses/Error' }
+  /profiles/{id}/follow:
+    put:
+      operationId: followProfile
+      summary: Reach the followed target state for an organizer
+      tags: [Profiles]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200': { description: Follow state, content: { application/json: { schema: { $ref: '#/components/schemas/FollowState' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: unfollowProfile
+      summary: Reach the unfollowed target state for an organizer
+      tags: [Profiles]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200': { description: Follow state, content: { application/json: { schema: { $ref: '#/components/schemas/FollowState' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+  /discovery/feed:
+    get:
+      operationId: getDiscoveryFeed
+      summary: Get discovery feed
+      tags: [Discovery]
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - { name: region, in: query, schema: { type: string, default: tokyo } }
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '200':
+          description: Discovery modules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventPage'
+  /events/search:
+    get:
+      operationId: searchEvents
+      summary: Search events
+      tags: [Discovery, Events]
+      security: []
+      parameters:
+        - { name: q, in: query, schema: { type: string, maxLength: 120 } }
+        - { name: region, in: query, schema: { type: string } }
+        - { name: category, in: query, schema: { type: string } }
+        - { name: startsAfter, in: query, schema: { type: string, format: date-time } }
+        - { name: bounds, in: query, description: "west,south,east,north", schema: { type: string } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '200':
+          description: Matching events
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventPage' }
+  /events/{id}:
+    get:
+      operationId: getEvent
+      summary: Get event
+      tags: [Events]
+      security: []
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200':
+          description: Permission-shaped event view
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventDetail' }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      operationId: updateEvent
+      summary: Update event
+      tags: [Events]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema: { $ref: '#/components/schemas/EventDraftInput' }
+      responses:
+        '200':
+          description: Updated event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventDetail' }
+        '409': { $ref: '#/components/responses/Error' }
+  /me/hosted-events:
+    get:
+      operationId: getMyHostedEvents
+      summary: List events hosted by the current user
+      tags: [Events]
+      responses:
+        '200': { description: Hosted events, content: { application/json: { schema: { $ref: '#/components/schemas/EventItems' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /me/favorite-events:
+    get:
+      operationId: getMyFavoriteEvents
+      summary: List the current user favorite events
+      tags: [Events]
+      responses:
+        '200': { description: Favorite events, content: { application/json: { schema: { $ref: '#/components/schemas/EventItems' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /events/{id}/favorite:
+    put:
+      operationId: favoriteEvent
+      summary: Favorite event
+      tags: [Events]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '204': { description: Favorite target state reached }
+    delete:
+      operationId: unfavoriteEvent
+      summary: Unfavorite event
+      tags: [Events]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '204': { description: Unfavorite target state reached }
+  /events/drafts:
+    post:
+      operationId: createEventDraft
+      summary: Create event draft
+      tags: [Events]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventDraftInput' }
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '201':
+          description: Draft created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventDetail' }
+  /events/{id}/submit:
+    post:
+      operationId: submitEvent
+      summary: Submit event
+      tags: [Events]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quoteId]
+              properties:
+                quoteId: { $ref: '#/components/schemas/UUID' }
+      responses:
+        '200':
+          description: Submission created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventDetail' }
+        '422': { $ref: '#/components/responses/Error' }
+  /events/{id}/cancel:
+    post:
+      operationId: cancelEvent
+      summary: Cancel event
+      tags: [Events]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 3, maxLength: 500 }
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '200':
+          description: Cancelled; side effects tracked by outbox
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventDetail' }
+  /events/{id}/registrations:
+    post:
+      operationId: registerForEvent
+      summary: Register for event
+      tags: [Registrations]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [partySize, quoteId]
+              properties:
+                partySize: { type: integer, minimum: 1, maximum: 10 }
+                quoteId: { $ref: '#/components/schemas/UUID' }
+                joinWaitlistIfFull: { type: boolean, default: false }
+                answers:
+                  type: object
+                  default: {}
+                  description: Values keyed by RegistrationQuestion.id.
+                  additionalProperties:
+                    oneOf:
+                      - type: string
+                        maxLength: 1000
+                      - type: boolean
+                      - type: 'null'
+                attendeeNote: { type: string, maxLength: 1000 }
+      responses:
+        '201':
+          description: Authoritative registration result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Registration' }
+        '409': { $ref: '#/components/responses/Error' }
+  /events/{id}/attendees:
+    get:
+      operationId: getEventAttendees
+      summary: List registration applications and answers for a host
+      tags: [Registrations]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/RegistrationStatus' } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Host attendee review page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttendeePage' }
+        '403': { $ref: '#/components/responses/Error' }
+  /registrations/{id}/decision:
+    post:
+      operationId: decideRegistration
+      summary: Approve or reject a pending registration
+      tags: [Registrations]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [approve, reject] }
+                reason: { type: string, minLength: 2, maxLength: 500 }
+      responses:
+        '200': { description: Authoritative registration, content: { application/json: { schema: { $ref: '#/components/schemas/Registration' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+  /registrations/{id}/waitlist-acceptance:
+    post:
+      operationId: acceptWaitlistOffer
+      summary: Accept waitlist offer
+      tags: [Registrations]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Offer accepted once
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Registration' }
+        '409': { $ref: '#/components/responses/Error' }
+  /registrations/{id}/cancel:
+    post:
+      operationId: cancelRegistration
+      summary: Cancel registration
+      tags: [Registrations]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '200':
+          description: Cancel result and authoritative refund
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [registration, refundedPoints, wallet]
+                properties:
+                  registration: { $ref: '#/components/schemas/Registration' }
+                  refundedPoints: { type: integer, format: int64 }
+                  wallet: { $ref: '#/components/schemas/WalletBalance' }
+  /me/registrations:
+    get:
+      operationId: getMyRegistrations
+      summary: Get my registrations
+      tags: [Registrations]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '200':
+          description: My registrations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor, hasMore]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Registration' } }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+  /events/{id}/checkin-codes:
+    post:
+      operationId: createCheckinCode
+      summary: Create checkin code
+      tags: [Attendance]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode: { type: string, enum: [dynamic_qr, six_digit] }
+      responses:
+        '201':
+          description: Thirty-second signed code
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mode, token, code, validFrom, validUntil]
+                properties:
+                  mode: { type: string, enum: [dynamic_qr, six_digit] }
+                  token: { type: [string, 'null'] }
+                  code: { type: [string, 'null'], pattern: '^[0-9]{6}$' }
+                  validFrom: { type: string, format: date-time }
+                  validUntil: { type: string, format: date-time }
+        '403': { $ref: '#/components/responses/Error' }
+  /checkins:
+    post:
+      operationId: createCheckin
+      summary: Create checkin
+      tags: [Attendance]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [registrationId, operationId]
+              oneOf:
+                - required: [token]
+                - required: [code]
+              properties:
+                registrationId: { $ref: '#/components/schemas/UUID' }
+                token: { type: string }
+                code: { type: string, pattern: '^[0-9]{6}$' }
+                operationId: { $ref: '#/components/schemas/UUID' }
+                deviceRecordedAt: { type: string, format: date-time }
+      responses:
+        '201':
+          description: Checked in exactly once
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckinResult' }
+        '409': { $ref: '#/components/responses/Error' }
+  /events/{id}/checkins/manual:
+    post:
+      operationId: createManualCheckin
+      summary: Check in a confirmed attendee manually as the host
+      tags: [Attendance]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [registrationId, operationId]
+              properties:
+                registrationId: { $ref: '#/components/schemas/UUID' }
+                operationId: { $ref: '#/components/schemas/UUID' }
+                deviceRecordedAt: { type: string, format: date-time }
+      responses:
+        '201': { description: Checked in, content: { application/json: { schema: { $ref: '#/components/schemas/ManualCheckinResult' } } } }
+        '422': { $ref: '#/components/responses/Error' }
+  /events/{id}/checkin-corrections:
+    get:
+      operationId: getEventCheckinCorrections
+      summary: List attendance correction requests for the event host
+      tags: [Attendance]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - { name: status, in: query, schema: { type: string, enum: [pending, approved, rejected] } }
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Host correction queue
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckinCorrectionPage' }
+        '403': { $ref: '#/components/responses/Error' }
+  /registrations/{id}/checkin-corrections:
+    post:
+      operationId: requestCheckinCorrection
+      summary: Request a post-event attendance correction within 48 hours
+      tags: [Attendance]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 3, maxLength: 1000 }
+      responses:
+        '201': { description: Correction pending }
+        '422': { $ref: '#/components/responses/Error' }
+  /checkin-corrections/{id}/decision:
+    post:
+      operationId: decideCheckinCorrection
+      summary: Approve or reject an attendance correction
+      tags: [Attendance]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [approve, reject] }
+                reason: { type: string, minLength: 2, maxLength: 500 }
+      responses:
+        '200': { description: Correction decision }
+        '403': { $ref: '#/components/responses/Error' }
+  /registrations/{id}/feedback:
+    post:
+      operationId: submitEventFeedback
+      summary: Submit or edit private structured post-event feedback
+      tags: [Feedback]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FeedbackInput' }
+      responses:
+        '201': { description: Feedback pending moderation }
+        '422': { $ref: '#/components/responses/Error' }
+  /events/{id}/feedback-summary:
+    get:
+      operationId: getEventFeedbackSummary
+      summary: Get privacy-thresholded aggregate feedback tags
+      tags: [Feedback]
+      security: []
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200': { description: Aggregate-only summary, content: { application/json: { schema: { $ref: '#/components/schemas/FeedbackSummary' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+  /events/{id}/feedback/private:
+    get:
+      operationId: getPrivateEventFeedback
+      summary: Get private improvement suggestions as the event host
+      tags: [Feedback]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200': { description: Private feedback items }
+        '403': { $ref: '#/components/responses/Error' }
+  /me/achievements:
+    get:
+      operationId: getMyAchievements
+      summary: List achievements for the current user
+      tags: [Profiles]
+      responses:
+        '200': { description: Achievement list }
+        '401': { $ref: '#/components/responses/Error' }
+  /me/achievements/evaluate:
+    post:
+      operationId: evaluateMyAchievements
+      summary: Evaluate achievement definitions against current metrics
+      tags: [Profiles]
+      responses:
+        '200': { description: Newly awarded achievements }
+        '401': { $ref: '#/components/responses/Error' }
+  /groups:
+    get:
+      operationId: discoverGroups
+      summary: Discover public groups by region, category, or query
+      tags: [Groups]
+      security: []
+      parameters:
+        - { name: region, in: query, schema: { type: string } }
+        - { name: category, in: query, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string, maxLength: 120 } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Group discovery page, content: { application/json: { schema: { $ref: '#/components/schemas/GroupPage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createGroup
+      summary: Create group
+      tags: [Groups]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GroupInput' }
+      responses:
+        '201':
+          description: Group created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Group' }
+        '400': { $ref: '#/components/responses/Error' }
+  /groups/{id}:
+    get:
+      operationId: getGroup
+      summary: Get a public group and viewer-shaped membership state
+      tags: [Groups]
+      security: []
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200': { description: Group detail, content: { application/json: { schema: { $ref: '#/components/schemas/Group' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+  /me/groups:
+    get:
+      operationId: getMyGroups
+      summary: List groups joined or owned by the current user
+      tags: [Groups]
+      responses:
+        '200': { description: My groups, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Group' } } } } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /groups/{id}/join:
+    post:
+      operationId: joinGroup
+      summary: Join group
+      tags: [Groups]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '201':
+          description: Joined or pending approval
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        '409': { $ref: '#/components/responses/Error' }
+  /groups/{id}/invites:
+    post:
+      operationId: createGroupInvite
+      summary: Create a limited-use group invitation code
+      tags: [Groups]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                maxUses: { type: integer, minimum: 1, maximum: 1000, default: 1 }
+                expiresInHours: { type: integer, minimum: 1, maximum: 720, default: 168 }
+      responses:
+        '201': { description: Invite code; shown once }
+        '403': { $ref: '#/components/responses/Error' }
+  /groups/{id}/members/{userId}:
+    patch:
+      operationId: updateGroupMember
+      summary: Update group member
+      tags: [Groups]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - { name: userId, in: path, required: true, schema: { $ref: '#/components/schemas/UUID' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                role: { type: string, enum: [admin, member] }
+                status: { type: string, enum: [active, muted, removed] }
+      responses:
+        '200': { description: Membership updated }
+        '403': { $ref: '#/components/responses/Error' }
+  /groups/{id}/members:
+    get:
+      operationId: getGroupMembers
+      summary: List member identity, roles, and moderation state as a group manager
+      tags: [Groups]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Manager-only member page, content: { application/json: { schema: { $ref: '#/components/schemas/GroupMemberPage' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /groups/{id}/capacity-purchases:
+    post:
+      operationId: purchaseGroupCapacity
+      summary: Purchase group capacity
+      tags: [Groups, Points]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quoteId]
+              properties:
+                quoteId: { $ref: '#/components/schemas/UUID' }
+      responses:
+        '200':
+          description: Capacity increased in the ledger transaction
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Group' }
+        '409': { $ref: '#/components/responses/Error' }
+  /groups/{id}/follow:
+    put:
+      operationId: followGroup
+      summary: Reach the followed state for a group
+      tags: [Groups]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200': { description: Follow state }
+        '404': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: unfollowGroup
+      summary: Reach the unfollowed state for a group
+      tags: [Groups]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200': { description: Follow state }
+        '404': { $ref: '#/components/responses/Error' }
+  /groups/{id}/announcements:
+    get:
+      operationId: getGroupAnnouncements
+      summary: List readable public or member group announcements
+      tags: [Groups]
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Announcement page, content: { application/json: { schema: { $ref: '#/components/schemas/AnnouncementPage' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createGroupAnnouncement
+      summary: Publish a group announcement as an owner or admin
+      tags: [Groups]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnnouncementInput' }
+      responses:
+        '201': { description: Announcement, content: { application/json: { schema: { $ref: '#/components/schemas/Announcement' } } } }
+        '429': { $ref: '#/components/responses/Error' }
+  /groups/{id}/announcements/{announcementId}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      - { name: announcementId, in: path, required: true, schema: { $ref: '#/components/schemas/UUID' } }
+    patch:
+      operationId: updateGroupAnnouncement
+      summary: Update an announcement using optimistic concurrency
+      tags: [Groups]
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnnouncementInput' }
+      responses:
+        '200': { description: Announcement, content: { application/json: { schema: { $ref: '#/components/schemas/Announcement' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteGroupAnnouncement
+      summary: Soft-delete an announcement as a group manager
+      tags: [Groups]
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/Error' }
+  /groups/{id}/announcements/{announcementId}/comments:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      - { name: announcementId, in: path, required: true, schema: { $ref: '#/components/schemas/UUID' } }
+    get:
+      operationId: getAnnouncementComments
+      summary: List visible comments for a readable announcement
+      tags: [Groups]
+      security: []
+      responses:
+        '200': { description: Comment list, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Comment' } } } } } } }
+        '404': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createAnnouncementComment
+      summary: Add a comment or reply as an active group member
+      tags: [Groups]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1, maxLength: 2000 }
+                parentId: { $ref: '#/components/schemas/UUID' }
+                locale: { $ref: '#/components/schemas/Locale' }
+      responses:
+        '201': { description: Comment, content: { application/json: { schema: { $ref: '#/components/schemas/Comment' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /comments/{commentId}:
+    parameters:
+      - { name: commentId, in: path, required: true, schema: { $ref: '#/components/schemas/UUID' } }
+    patch:
+      operationId: updateComment
+      summary: Update a comment authored by the current user
+      tags: [Groups]
+      parameters: [{ $ref: '#/components/parameters/IfMatch' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [body], properties: { body: { type: string, minLength: 1, maxLength: 2000 } } }
+      responses:
+        '200': { description: Comment, content: { application/json: { schema: { $ref: '#/components/schemas/Comment' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteComment
+      summary: Delete a comment authored by the current user
+      tags: [Groups]
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/Error' }
+  /groups/{id}/announcements/{announcementId}/like:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+      - { name: announcementId, in: path, required: true, schema: { $ref: '#/components/schemas/UUID' } }
+    put:
+      operationId: likeAnnouncement
+      summary: Reach the liked state for an announcement
+      tags: [Groups]
+      responses:
+        '200': { description: Like state }
+        '403': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: unlikeAnnouncement
+      summary: Reach the unliked state for an announcement
+      tags: [Groups]
+      responses:
+        '200': { description: Like state }
+        '403': { $ref: '#/components/responses/Error' }
+  /groups/{id}/transfers:
+    post:
+      operationId: startGroupTransfer
+      summary: Start a verified ownership transfer
+      tags: [Groups]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [targetUserId], properties: { targetUserId: { $ref: '#/components/schemas/UUID' } } }
+      responses:
+        '201': { description: Transfer awaiting target confirmation, content: { application/json: { schema: { $ref: '#/components/schemas/GroupTransfer' } } } }
+        '422': { $ref: '#/components/responses/Error' }
+  /groups/{id}/transfers/active:
+    get:
+      operationId: getActiveGroupTransfer
+      summary: Recover the active ownership transfer on another device
+      description: Visible only to the current group owner, transfer sender, or transfer recipient.
+      tags: [Groups]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200':
+          description: Active ownership transfer
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GroupTransfer' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /groups/{id}/transfers/{transferId}/accept:
+    post:
+      operationId: acceptGroupTransfer
+      summary: Accept a transfer and begin the 24-hour cooling period
+      tags: [Groups]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - { name: transferId, in: path, required: true, schema: { $ref: '#/components/schemas/UUID' } }
+      responses:
+        '200': { description: Transfer cooling off, content: { application/json: { schema: { $ref: '#/components/schemas/GroupTransfer' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+  /groups/{id}/transfers/{transferId}/complete:
+    post:
+      operationId: completeGroupTransfer
+      summary: Complete an accepted transfer after cooling off
+      tags: [Groups]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - { name: transferId, in: path, required: true, schema: { $ref: '#/components/schemas/UUID' } }
+      responses:
+        '200': { description: Ownership transferred, content: { application/json: { schema: { $ref: '#/components/schemas/GroupTransfer' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+  /groups/{id}/transfers/{transferId}/cancel:
+    post:
+      operationId: cancelGroupTransfer
+      summary: Cancel a pending ownership transfer
+      tags: [Groups]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - { name: transferId, in: path, required: true, schema: { $ref: '#/components/schemas/UUID' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [reason], properties: { reason: { type: string, minLength: 2, maxLength: 500 } } }
+      responses:
+        '200': { description: Transfer cancelled }
+        '409': { $ref: '#/components/responses/Error' }
+  /groups/{id}/dissolution:
+    post:
+      operationId: scheduleGroupDissolution
+      summary: Schedule group dissolution after a seven-day notice period
+      tags: [Groups]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [reason], properties: { reason: { type: string, minLength: 3, maxLength: 1000 } } }
+      responses:
+        '201': { description: Dissolution scheduled }
+        '409': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: cancelGroupDissolution
+      summary: Cancel a scheduled group dissolution
+      tags: [Groups]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200': { description: Dissolution cancelled }
+        '404': { $ref: '#/components/responses/Error' }
+  /groups/{id}/dissolution/finalize:
+    post:
+      operationId: finalizeGroupDissolution
+      summary: Finalize a group dissolution after its notice period
+      tags: [Groups]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200': { description: Group dissolved }
+        '409': { $ref: '#/components/responses/Error' }
+  /wallet:
+    get:
+      operationId: getWallet
+      summary: Get wallet
+      tags: [Points]
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '200':
+          description: Authoritative no-store wallet
+          headers:
+            Cache-Control: { schema: { type: string, const: 'private, no-store' } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WalletBalance' }
+  /wallet/transactions:
+    get:
+      operationId: getWalletTransactions
+      summary: Get wallet transactions
+      tags: [Points]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '200':
+          description: User-facing wallet ledger
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+  /points/rules:
+    get:
+      operationId: getPointRules
+      summary: Get effective configurable point earning and spending rules
+      tags: [Points]
+      security: []
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '200': { description: Effective point rule catalog, content: { application/json: { schema: { $ref: '#/components/schemas/PointRuleCatalog' } } } }
+        '500': { $ref: '#/components/responses/Error' }
+  /quotes:
+    post:
+      operationId: createPointQuote
+      summary: Quote the authoritative point cost of a business action
+      tags: [Points]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [purpose]
+              properties:
+                purpose: { type: string }
+                resourceId: { $ref: '#/components/schemas/UUID' }
+      responses:
+        '201': { description: Expiring point quote, content: { application/json: { schema: { $ref: '#/components/schemas/PointQuote' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+  /store/products:
+    get:
+      operationId: getStoreProducts
+      summary: Get the active server-configured Apple point products
+      tags: [Points]
+      security: []
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '200': { description: Active product catalog, content: { application/json: { schema: { $ref: '#/components/schemas/StoreProductCatalog' } } } }
+        '500': { $ref: '#/components/responses/Error' }
+  /store/apple/transactions:
+    post:
+      operationId: verifyAppleTransaction
+      summary: Verify apple transaction
+      tags: [Points]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [signedTransaction]
+              properties:
+                signedTransaction: { type: string }
+      responses:
+        '200':
+          description: Verified once and credited
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WalletBalance' }
+        '409': { $ref: '#/components/responses/Error' }
+  /webhooks/apple/storekit:
+    post:
+      operationId: receiveAppleStoreNotification
+      summary: Receive apple store notification
+      tags: [Points]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [signedPayload]
+              properties:
+                signedPayload: { type: string }
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '204': { description: "Safely accepted, including duplicates" }
+  /notifications:
+    get:
+      operationId: getNotifications
+      summary: Get notifications
+      tags: [Notifications]
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - { name: locale, in: query, schema: { $ref: '#/components/schemas/Locale' } }
+      responses:
+        '200': { description: Localized notification page, content: { application/json: { schema: { $ref: '#/components/schemas/NotificationPage' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+  /notifications/items/{id}/read:
+    put:
+      operationId: markNotificationRead
+      summary: Mark notification read
+      tags: [Notifications]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204': { description: Monotonic read state reached }
+        '404': { $ref: '#/components/responses/Error' }
+  /notifications/device-tokens:
+    post:
+      operationId: registerNotificationDevice
+      summary: Register or rotate an encrypted APNs or web push token
+      tags: [Notifications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [platform, token]
+              properties:
+                deviceId: { $ref: '#/components/schemas/UUID' }
+                platform: { type: string, enum: [ios, web] }
+                token: { type: string, minLength: 16, maxLength: 4096 }
+                environment: { type: string, enum: [sandbox, production], default: production }
+      responses:
+        '201': { description: Registered token metadata }
+        '400': { $ref: '#/components/responses/Error' }
+  /notifications/device-tokens/{tokenHash}:
+    delete:
+      operationId: disableNotificationDevice
+      summary: Disable a push token by its opaque hash
+      tags: [Notifications]
+      parameters:
+        - { name: tokenHash, in: path, required: true, schema: { type: string, pattern: '^[A-Fa-f0-9]{64}$' } }
+      responses:
+        '204': { description: Device token disabled }
+        '404': { $ref: '#/components/responses/Error' }
+  /notifications/preferences:
+    get:
+      operationId: getNotificationPreferences
+      summary: Get per-type notification delivery preferences
+      tags: [Notifications]
+      responses:
+        '200': { description: Notification preferences }
+        '401': { $ref: '#/components/responses/Error' }
+  /notifications/preferences/{type}:
+    put:
+      operationId: updateNotificationPreference
+      summary: Set delivery channels, quiet hours, and locale for a type
+      tags: [Notifications]
+      parameters:
+        - { name: type, in: path, required: true, schema: { type: string, pattern: '^[a-z0-9_.-]{3,80}$' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationPreferenceInput' }
+      responses:
+        '200': { description: Updated preference }
+        '400': { $ref: '#/components/responses/Error' }
+  /media/upload-intents:
+    post:
+      operationId: createMediaUploadIntent
+      summary: Create a direct upload intent for an image asset
+      tags: [Media]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MediaUploadInput' }
+      responses:
+        '201': { description: Upload intent }
+        '400': { $ref: '#/components/responses/Error' }
+  /media/{id}/complete:
+    post:
+      operationId: completeMediaUpload
+      summary: Complete an upload after verifying its content hash
+      tags: [Media]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - { name: X-Content-SHA256, in: header, required: true, schema: { type: string, pattern: '^[A-Fa-f0-9]{64}$' } }
+      responses:
+        '200': { description: Media queued for processing }
+        '409': { $ref: '#/components/responses/Error' }
+  /media/{id}/attach/event/{eventId}:
+    post:
+      operationId: attachEventMedia
+      summary: Attach one of at most six processed images to an event
+      tags: [Media, Events]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - { name: eventId, in: path, required: true, schema: { $ref: '#/components/schemas/UUID' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind: { type: string, enum: [cover, gallery], default: cover }
+                sortOrder: { type: integer, minimum: 0, maximum: 5, default: 0 }
+      responses:
+        '200': { description: Media attached }
+        '409': { $ref: '#/components/responses/Error' }
+  /media/{id}/attach/profile:
+    post:
+      operationId: attachProfileAvatar
+      summary: Replace the current user's avatar with a ready approved profile asset
+      tags: [Media, Profiles]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '201':
+          description: Avatar attached with a usable public derivative URL
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProfileMediaAttachment' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /media/{id}/attach/group/{groupId}:
+    post:
+      operationId: attachGroupCover
+      summary: Replace a group cover with a ready approved asset owned by the group owner
+      tags: [Media, Groups]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - { name: groupId, in: path, required: true, schema: { $ref: '#/components/schemas/UUID' } }
+      responses:
+        '201':
+          description: Group cover attached with a usable public derivative URL
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GroupMediaAttachment' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /shares:
+    post:
+      operationId: createShareLink
+      summary: Create an attributable public share link
+      tags: [Growth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ShareInput' }
+      responses:
+        '201': { description: Share link }
+        '400': { $ref: '#/components/responses/Error' }
+  /shares/{code}:
+    get:
+      operationId: openShareLink
+      summary: Resolve and attribute a public share code
+      tags: [Growth]
+      security: []
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Public resource route }
+        '404': { $ref: '#/components/responses/Error' }
+  /posters:
+    post:
+      operationId: createSharePoster
+      summary: Create a template or AI-assisted share poster
+      tags: [Growth, Points]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PosterInput' }
+      responses:
+        '201': { description: Poster job }
+        '409': { $ref: '#/components/responses/Error' }
+  /posters/{id}:
+    get:
+      operationId: getSharePoster
+      summary: Get a poster job owned by the current user
+      tags: [Growth]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200':
+          description: Poster state; ready jobs include a shareable URL
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PosterJob' }
+        '404': { $ref: '#/components/responses/Error' }
+  /events/{id}/poster:
+    get:
+      operationId: getEventPoster
+      summary: Restore the latest poster job for an event owned by the current organizer
+      tags: [Growth, Events]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200':
+          description: Latest automatic or manually-created event poster job
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventPosterJob' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /reports:
+    post:
+      operationId: createReport
+      summary: Create report
+      tags: [Safety]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReportInput' }
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '201':
+          description: Opaque report reference
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reference, status]
+                properties:
+                  reference: { type: string }
+                  status: { type: string }
+  /appeals:
+    post:
+      operationId: createAppeal
+      summary: Create appeal
+      tags: [Safety]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [statement]
+              oneOf:
+                - required: [caseReference]
+                - required: [caseId]
+              properties:
+                caseReference: { type: string, pattern: '^SPT-[0-9]{4}-[A-F0-9]{12}$' }
+                caseId: { $ref: '#/components/schemas/UUID' }
+                statement: { type: string, minLength: 10, maxLength: 5000 }
+      responses:
+        '201': { description: Appeal created or existing appeal returned }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /me/safety-cases:
+    get:
+      operationId: getMySafetyCases
+      summary: List safety reports involving the current user without encrypted evidence
+      tags: [Safety]
+      responses:
+        '200': { description: Submitted and subject safety cases, content: { application/json: { schema: { $ref: '#/components/schemas/SafetyCasePage' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /me/blocks:
+    get:
+      operationId: getMyBlocks
+      summary: List users blocked by the current user
+      tags: [Safety]
+      responses:
+        '200': { description: Blocked users, content: { application/json: { schema: { $ref: '#/components/schemas/BlockPage' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /users/{id}/block:
+    put:
+      operationId: blockUser
+      summary: Reach the blocked state and sever mutual follows
+      tags: [Safety]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 200 }
+      responses:
+        '200': { description: Block state, content: { application/json: { schema: { $ref: '#/components/schemas/BlockState' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: unblockUser
+      summary: Reach the unblocked state for a user
+      tags: [Safety]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200': { description: Block state, content: { application/json: { schema: { $ref: '#/components/schemas/BlockState' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+  /sync/pull:
+    get:
+      operationId: pullChanges
+      summary: Pull changes
+      tags: [Sync]
+      parameters:
+        - { name: cursor, in: query, required: true, schema: { type: integer, format: int64, minimum: 0 } }
+        - $ref: '#/components/parameters/Limit500'
+      responses:
+        '200':
+          description: Strictly ordered changes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SyncPage' }
+        '409': { $ref: '#/components/responses/Error' }
+  /sync/push:
+    post:
+      operationId: pushOperations
+      summary: Push operations
+      tags: [Sync]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deviceId, operations]
+              properties:
+                deviceId: { $ref: '#/components/schemas/UUID' }
+                operations:
+                  type: array
+                  minItems: 1
+                  maxItems: 50
+                  items: { $ref: '#/components/schemas/PendingOperation' }
+      responses:
+        '400': { $ref: '#/components/responses/Error' }
+        '200':
+          description: Per-operation authoritative results
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+  /ops/auth/email/verify:
+    post:
+      operationId: verifyOpsEmailChallenge
+      summary: Verify an operator email OTP and establish an MFA-gated Ops cookie session
+      tags: [Ops, Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerifyChallengeRequest' }
+      responses:
+        '200':
+          description: Sets __Host-spott_ops and __Host-spott_ops_refresh HttpOnly Secure SameSite cookies
+          headers:
+            Set-Cookie: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OpsAuthSession' }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/auth/refresh:
+    post:
+      operationId: refreshOpsSession
+      summary: Rotate an Ops cookie session using the HttpOnly refresh cookie
+      tags: [Ops, Auth]
+      security: []
+      responses:
+        '200':
+          description: Rotated Ops cookies
+          headers:
+            Set-Cookie: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OpsAuthSession' }
+        '401': { $ref: '#/components/responses/Error' }
+  /ops/auth/session:
+    delete:
+      operationId: revokeOpsSession
+      summary: Revoke the current Ops session and clear both cookies
+      tags: [Ops, Auth]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      responses:
+        '204': { description: Session revoked }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/overview:
+    get:
+      operationId: getOpsOverview
+      summary: Get scoped queue, health, and growth totals
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      responses:
+        '200':
+          description: Operations overview
+          content: { application/json: { schema: { $ref: '#/components/schemas/OpsOverview' } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/users:
+    get:
+      operationId: getOpsUsers
+      summary: Search redacted user accounts without email or phone values
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: restriction, in: query, schema: { type: string } }
+        - { name: deviceRisk, in: query, schema: { type: string, enum: [normal, elevated, blocked] } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Redacted users, content: { application/json: { schema: { $ref: '#/components/schemas/OpsUserPage' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/users/{id}/restriction-decisions:
+    post:
+      operationId: decideOpsUserRestriction
+      summary: Update account restrictions or submit a sensitive login-block decision for second approval
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OpsUserRestrictionInput' }
+      responses:
+        '200': { description: Applied or pending-approval restriction decision, content: { application/json: { schema: { $ref: '#/components/schemas/OpsUserRestrictionDecision' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /ops/organizers:
+    get:
+      operationId: getOpsOrganizers
+      summary: List organizer quality and safety aggregates
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Organizer aggregates, content: { application/json: { schema: { $ref: '#/components/schemas/OpsOrganizerPage' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/events:
+    get:
+      operationId: getOpsEvents
+      summary: List submitted events with organizer and risk context
+      tags: [Ops, Events]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: riskMin, in: query, schema: { type: integer, minimum: 0, maximum: 100 } }
+        - { name: region, in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Scoped event review queue, content: { application/json: { schema: { $ref: '#/components/schemas/OpsEventPage' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/events/{id}/review:
+    post:
+      operationId: reviewEvent
+      summary: Publish, return, or reject a submitted event with optimistic locking
+      tags: [Ops, Events]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, reason]
+              properties:
+                decision: { type: string, enum: [published, needs_changes, rejected] }
+                reason: { type: string, minLength: 3, maxLength: 2000 }
+      responses:
+        '200': { description: Review result; posterJobId is set when an enabled event is published, content: { application/json: { schema: { $ref: '#/components/schemas/OpsEventReviewResult' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /ops/groups:
+    get:
+      operationId: getOpsGroups
+      summary: List groups with lifecycle, transfer, report, and supply aggregates
+      tags: [Ops, Groups]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Scoped group inventory, content: { application/json: { schema: { $ref: '#/components/schemas/OpsGroupPage' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/groups/{id}/lifecycle-decision:
+    post:
+      operationId: decideOpsGroupLifecycle
+      summary: Restore, close, cancel closure, or remove a group
+      tags: [Ops, Groups]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, reason]
+              properties:
+                decision: { type: string, enum: [restore, start_closing, cancel_closing, remove] }
+                reason: { type: string, minLength: 3, maxLength: 2000 }
+      responses:
+        '200': { description: Lifecycle decision, content: { application/json: { schema: { $ref: '#/components/schemas/OpsGroupLifecycleDecision' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+  /ops/moderation/cases:
+    get:
+      operationId: getModerationCases
+      summary: Get the redacted moderation queue with filters
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - { name: severity, in: query, schema: { type: string, enum: [p0, p1, p2] } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: assignee, in: query, schema: { $ref: '#/components/schemas/UUID' } }
+        - { name: targetType, in: query, schema: { type: string, enum: [event, group, user, comment, announcement] } }
+        - { name: q, in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Redacted moderation queue, content: { application/json: { schema: { $ref: '#/components/schemas/OpsModerationCasePage' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/moderation/cases/{id}:
+    get:
+      operationId: getModerationCase
+      summary: Get redacted case details; purpose grants an audited short-lived evidence URL
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - { name: purpose, in: query, schema: { type: string, minLength: 3, maxLength: 1000 } }
+      responses:
+        '200': { description: Redacted moderation details, content: { application/json: { schema: { $ref: '#/components/schemas/OpsModerationCaseDetail' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+  /ops/moderation/cases/{id}/claim:
+    post:
+      operationId: claimModerationCase
+      summary: Claim a moderation case with optimistic locking
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '200': { description: Claimed case, content: { application/json: { schema: { $ref: '#/components/schemas/OpsModerationDecision' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+  /ops/moderation/cases/{id}/decision:
+    post:
+      operationId: decideModerationCase
+      summary: Decide a moderation case and append immutable action, audit, and outbox records
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, reason]
+              properties:
+                decision: { type: string, enum: [no_action, hide, remove, restrict] }
+                reason: { type: string, minLength: 3, maxLength: 2000 }
+                durationHours: { type: integer, minimum: 1, maximum: 8760 }
+      responses:
+        '200': { description: Immutable moderation decision, content: { application/json: { schema: { $ref: '#/components/schemas/OpsModerationDecision' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+  /ops/points/adjustments:
+    get:
+      operationId: getPointAdjustments
+      summary: List point adjustment requests
+      tags: [Ops, Points]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - { name: state, in: query, schema: { type: string, enum: [pending, approved, rejected, executed, failed] } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Adjustment queue, content: { application/json: { schema: { $ref: '#/components/schemas/OpsPointAdjustmentPage' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createPointAdjustment
+      summary: Create an audited point adjustment request
+      tags: [Ops, Points]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OpsPointAdjustmentInput' }
+      responses:
+        '201': { description: Pending adjustment request, content: { application/json: { schema: { $ref: '#/components/schemas/OpsPointAdjustment' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/points/adjustments/{id}/decision:
+    post:
+      operationId: decidePointAdjustment
+      summary: Approve or reject as an operator different from the requester
+      tags: [Ops, Points]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, reason]
+              properties:
+                decision: { type: string, enum: [approve, reject] }
+                reason: { type: string, minLength: 3, maxLength: 2000 }
+      responses:
+        '200': { description: Approval state, content: { application/json: { schema: { $ref: '#/components/schemas/OpsPointAdjustment' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+  /ops/points/adjustments/{id}/execute:
+    post:
+      operationId: executePointAdjustment
+      summary: Execute an approved adjustment as one balanced ledger transaction
+      tags: [Ops, Points]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200': { description: Executed adjustment, content: { application/json: { schema: { $ref: '#/components/schemas/OpsPointAdjustment' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+  /ops/points/ledger-health:
+    get:
+      operationId: getPointLedgerHealth
+      summary: Get double-entry and wallet reconciliation health
+      tags: [Ops, Points]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      responses:
+        '200': { description: Ledger health, content: { application/json: { schema: { $ref: '#/components/schemas/OpsLedgerHealth' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/config-revisions:
+    get:
+      operationId: getConfigRevisions
+      summary: List immutable configuration revisions
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - { name: state, in: query, schema: { type: string } }
+        - { name: key, in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Configuration revisions, content: { application/json: { schema: { $ref: '#/components/schemas/OpsConfigRevisionPage' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createConfigRevision
+      summary: Create a draft configuration revision
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OpsConfigRevisionInput' }
+      responses:
+        '201': { description: Draft revision, content: { application/json: { schema: { $ref: '#/components/schemas/OpsConfigRevision' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/config-revisions/{id}/impact-preview:
+    post:
+      operationId: previewConfigRevisionImpact
+      summary: Preview affected users, regions, warnings, and quote protection
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200': { description: Impact preview, content: { application/json: { schema: { $ref: '#/components/schemas/OpsConfigImpact' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/config-revisions/{id}/approve:
+    post:
+      operationId: approveConfigRevision
+      summary: Approve a draft by a different operator
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      responses:
+        '200': { description: Approved full revision, content: { application/json: { schema: { $ref: '#/components/schemas/OpsConfigRevision' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+  /ops/config-revisions/{id}/activate:
+    post:
+      operationId: activateConfigRevision
+      summary: Activate an approved revision and supersede the previous active version
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200': { description: Active revision, content: { application/json: { schema: { $ref: '#/components/schemas/OpsConfigRevision' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/config-revisions/{id}/rollback:
+    post:
+      operationId: rollbackConfigRevision
+      summary: Create a new draft rollback revision without mutating history
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties: { reason: { type: string, minLength: 3, maxLength: 2000 } }
+      responses:
+        '201': { description: New rollback draft, content: { application/json: { schema: { $ref: '#/components/schemas/OpsConfigRevision' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/analytics/overview:
+    get:
+      operationId: getOpsAnalyticsOverview
+      summary: Get scoped, aggregate-only product, points, safety, and supply funnels
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: region, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Aggregate analytics, content: { application/json: { schema: { $ref: '#/components/schemas/OpsAnalyticsOverview' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/audit-logs:
+    get:
+      operationId: getOpsAuditLogs
+      summary: Search immutable audit metadata with masked resource identifiers
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: actorId, in: query, schema: { $ref: '#/components/schemas/UUID' } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: resource, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Masked audit log page, content: { application/json: { schema: { $ref: '#/components/schemas/OpsAuditLogPage' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/admin-users:
+    get:
+      operationId: getOpsAdminUsers
+      summary: Audit operator roles, data scopes, MFA enrollment, and disabled state
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      responses:
+        '200': { description: Operator permission inventory, content: { application/json: { schema: { $ref: '#/components/schemas/OpsAdminUserList' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/session:
+    get:
+      operationId: getOpsSession
+      summary: Get current operator roles, data scopes, MFA age, and reauthentication requirements
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      responses:
+        '200': { description: Current Ops session, content: { application/json: { schema: { $ref: '#/components/schemas/OpsSession' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/exports:
+    get:
+      operationId: getOpsExports
+      summary: List governed export requests
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - { name: state, in: query, schema: { type: string, enum: [pending, approved, rejected, ready, expired, failed] } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200': { description: Export queue, content: { application/json: { schema: { $ref: '#/components/schemas/OpsExportPage' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createOpsExport
+      summary: Request a purpose-bound, watermarked, expiring export
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OpsExportInput' }
+      responses:
+        '201': { description: Pending export request, content: { application/json: { schema: { $ref: '#/components/schemas/OpsExport' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /ops/exports/{id}/approve:
+    post:
+      operationId: approveOpsExport
+      summary: Approve or reject an export as a different operator
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, reason]
+              properties:
+                decision: { type: string, enum: [approve, reject] }
+                reason: { type: string, minLength: 3, maxLength: 2000 }
+      responses:
+        '200': { description: Decided export, content: { application/json: { schema: { $ref: '#/components/schemas/OpsExport' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+  /ops/exports/{id}/download-ticket:
+    get:
+      operationId: getOpsExportDownloadTicket
+      summary: Issue an audited five-minute download URL and consume one download allowance
+      tags: [Ops]
+      security: [{ OpsSession: [] }, { BearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - { name: purpose, in: query, required: true, schema: { type: string, minLength: 3, maxLength: 1000 } }
+      responses:
+        '200': { description: Short-lived ticket, content: { application/json: { schema: { $ref: '#/components/schemas/OpsExportDownloadTicket' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    OpsSession:
+      type: apiKey
+      in: cookie
+      name: __Host-spott_ops
+  parameters:
+    ResourceId:
+      name: id
+      in: path
+      required: true
+      schema: { oneOf: [{ $ref: '#/components/schemas/UUID' }, { type: string, maxLength: 100 }] }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { $ref: '#/components/schemas/UUID' }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema: { type: string, pattern: '^"[1-9][0-9]*"$' }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Limit500:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 500, default: 500 }
+  responses:
+    Error:
+      description: Stable business error
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    ChallengeCreated:
+      description: Challenge accepted without revealing account existence
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [challengeId, expiresAt, retryAfterSeconds]
+            properties:
+              challengeId: { $ref: '#/components/schemas/UUID' }
+              expiresAt: { type: string, format: date-time }
+              retryAfterSeconds: { type: integer, minimum: 0 }
+    AuthSession:
+      description: Rotated device-bound session
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AuthSession' }
+  schemas:
+    UUID:
+      type: string
+      format: uuid
+    Locale:
+      type: string
+      enum: [zh-Hans, ja, en]
+    FollowState:
+      type: object
+      required: [targetUserId, following]
+      properties:
+        targetUserId: { $ref: '#/components/schemas/UUID' }
+        following: { type: boolean }
+    RegistrationStatus:
+      type: string
+      enum: [pending, confirmed, waitlisted, offered, checked_in, cancelled, rejected, expired, no_show, correction_pending, attendance_disputed, event_cancelled, final]
+    HealthResponse:
+      type: object
+      required: [status, version, requestId]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        version: { type: string }
+        requestId: { type: string }
+        dependencies: { type: object, additionalProperties: { type: string } }
+    VerifyChallengeRequest:
+      type: object
+      required: [challengeId, code, deviceId]
+      properties:
+        challengeId: { $ref: '#/components/schemas/UUID' }
+        code: { type: string, pattern: '^[0-9]{6}$' }
+        deviceId: { $ref: '#/components/schemas/UUID' }
+    AuthSession:
+      type: object
+      required: [accessToken, accessTokenExpiresAt, refreshToken, sessionId, user]
+      properties:
+        accessToken: { type: string }
+        accessTokenExpiresAt: { type: string, format: date-time }
+        refreshToken: { type: string }
+        sessionId: { $ref: '#/components/schemas/UUID' }
+        user:
+          type: object
+          required: [id, publicHandle, phoneVerified, restrictions]
+          properties:
+            id: { $ref: '#/components/schemas/UUID' }
+            publicHandle: { type: string }
+            phoneVerified: { type: boolean }
+            restrictions: { type: array, items: { type: string } }
+    AccountMergeCredential:
+      oneOf:
+        - type: object
+          required: [provider, identityToken, nonce]
+          properties:
+            provider: { type: string, const: apple }
+            identityToken: { type: string }
+            nonce: { type: string, minLength: 32, maxLength: 512 }
+            platform: { type: string, enum: [ios, web], default: ios }
+        - type: object
+          required: [provider, idToken]
+          properties:
+            provider: { type: string, const: google }
+            idToken: { type: string }
+        - type: object
+          required: [provider, challengeId, code]
+          properties:
+            provider: { type: string, const: email }
+            challengeId: { $ref: '#/components/schemas/UUID' }
+            code: { type: string, pattern: '^[0-9]{6}$' }
+      discriminator: { propertyName: provider }
+    AccountMergePreview:
+      type: object
+      required: [jobId, mergeToken, expiresAt, sourceUserId, targetUserId, impact, conflicts, canCommit, requiresSecondVerification]
+      properties:
+        jobId: { $ref: '#/components/schemas/UUID' }
+        mergeToken: { type: string, minLength: 43, maxLength: 43, description: One-time proof returned only after the second identity is verified. }
+        expiresAt: { type: string, format: date-time }
+        sourceUserId: { $ref: '#/components/schemas/UUID' }
+        targetUserId: { $ref: '#/components/schemas/UUID' }
+        impact: { type: object, additionalProperties: true }
+        conflicts:
+          type: array
+          items: { type: string, enum: [phoneBinding, eventRegistration, groupMembership, operatorAccount] }
+        canCommit: { type: boolean }
+        requiresSecondVerification: { type: boolean, const: false }
+    Profile:
+      type: object
+      required: [userId, nickname, bio, preferredLocale, contentLanguages, version, updatedAt]
+      properties:
+        userId: { $ref: '#/components/schemas/UUID' }
+        nickname: { type: string }
+        bio: { type: string }
+        regionId: { type: [string, 'null'] }
+        avatarURL: { type: [string, 'null'], format: uri }
+        preferredLocale: { $ref: '#/components/schemas/Locale' }
+        contentLanguages: { type: array, minItems: 1, maxItems: 3, items: { $ref: '#/components/schemas/Locale' } }
+        publicHandle: { type: string }
+        followerCount: { type: integer, minimum: 0 }
+        viewerFollowing: { type: boolean }
+        version: { type: integer, format: int64, minimum: 1 }
+        updatedAt: { type: string, format: date-time }
+    PublicProfileEvent:
+      type: object
+      required: [id, publicSlug, status, title, startsAt, endsAt, region, publicArea, priceLabel]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        publicSlug: { type: string }
+        status: { type: string, enum: [published, registration_closed, in_progress, ended, archived] }
+        title: { type: string }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        region: { type: string }
+        publicArea: { type: string }
+        priceLabel: { type: string }
+        coverURL: { type: [string, 'null'], format: uri }
+    PublicProfileEventPage:
+      type: object
+      required: [items, hasMore, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/PublicProfileEvent' } }
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'] }
+    EventSummary:
+      type: object
+      required: [id, publicSlug, status, title, startsAt, endsAt, region, publicArea, capacity, confirmedCount, priceLabel, tags, availableActions, version]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        publicSlug: { type: string }
+        status: { $ref: '#/components/schemas/EventStatus' }
+        title: { type: string }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        displayTimeZone: { type: string, default: Asia/Tokyo }
+        region: { type: string }
+        publicArea: { type: string }
+        capacity: { type: integer, minimum: 2 }
+        confirmedCount: { type: integer, minimum: 0 }
+        priceLabel: { type: string }
+        coverURL: { type: [string, 'null'], format: uri }
+        tags: { type: array, maxItems: 3, items: { type: string } }
+        registrationStatus: { type: [string, 'null'] }
+        registrationMode: { type: string, enum: [automatic, approval, invite_only] }
+        waitlistEnabled: { type: boolean }
+        attendeeRequirements: { type: [string, 'null'] }
+        riskFlags: { type: array, items: { type: string } }
+        riskDetails: { type: object, additionalProperties: { type: string } }
+        groupId: { type: [string, 'null'], format: uuid }
+        checkinMode: { type: string, enum: [dynamic_qr, six_digit, manual] }
+        commentPermission: { type: string, enum: [disabled, participants, group_members] }
+        posterEnabled: { type: boolean }
+        exactAddressVisibility: { type: string, enum: [public, confirmed] }
+        registrationQuestions: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/RegistrationQuestion' } }
+        media: { type: array, maxItems: 6, items: { $ref: '#/components/schemas/EventMedia' } }
+        mediaCount: { type: integer, minimum: 0, maximum: 6 }
+        availableActions: { type: array, items: { $ref: '#/components/schemas/AvailableAction' } }
+        version: { type: integer, format: int64, minimum: 1 }
+        updatedAt: { type: string, format: date-time }
+    EventDetail:
+      allOf:
+        - $ref: '#/components/schemas/EventSummary'
+        - type: object
+          required: [description, organizer, fee]
+          properties:
+            description: { type: string }
+            organizer: { type: object, additionalProperties: true }
+            exactAddress: { type: [string, 'null'], description: Omitted/null unless policy authorizes }
+            fee:
+              type: object
+              required: [isFree, boundaryStatement]
+              properties:
+                isFree: { type: boolean }
+                amountJPY: { type: [integer, 'null'], format: int64 }
+                collectorName: { type: [string, 'null'] }
+                method: { type: [string, 'null'] }
+                refundPolicy: { type: [string, 'null'] }
+                boundaryStatement: { type: string }
+    EventItems:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/EventDetail' }
+    RegistrationQuestion:
+      type: object
+      required: [id, prompt, kind, required, options]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        prompt: { type: string, minLength: 1, maxLength: 240 }
+        kind: { type: string, enum: [text, single_choice, boolean] }
+        required: { type: boolean }
+        options:
+          type: array
+          maxItems: 12
+          items: { type: string, minLength: 1, maxLength: 120 }
+    EventMedia:
+      type: object
+      required: [id, assetId, sortOrder, state, moderationState]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        assetId: { $ref: '#/components/schemas/UUID' }
+        sortOrder: { type: integer, minimum: 0, maximum: 5 }
+        state: { type: string }
+        moderationState: { type: string }
+        url: { type: [string, 'null'], format: uri }
+    EventPage:
+      type: object
+      required: [items, nextCursor, hasMore, serverTime]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/EventSummary' } }
+        nextCursor: { type: [string, 'null'] }
+        hasMore: { type: boolean }
+        serverTime: { type: string, format: date-time }
+        queryExplanationId: { type: string }
+    EventDraftInput:
+      type: object
+      properties:
+        title: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 10000 }
+        categoryId: { type: string }
+        startsAt: { type: string, format: date-time }
+        endsAt: { type: string, format: date-time }
+        deadlineAt: { type: string, format: date-time }
+        regionId: { type: string }
+        publicArea: { type: string, maxLength: 120 }
+        exactAddress: { type: string, maxLength: 500 }
+        capacity: { type: integer, minimum: 2, maximum: 500 }
+        registrationMode: { type: string, enum: [automatic, approval, invite_only] }
+        waitlistEnabled: { type: boolean }
+        tags: { type: array, maxItems: 5, items: { type: string, minLength: 1, maxLength: 40 } }
+        attendeeRequirements: { type: string, maxLength: 2000 }
+        riskFlags:
+          type: array
+          maxItems: 8
+          items: { type: string, enum: [alcohol, late_night, family, minors, outdoor, mountain, water, high_fee, career, investment, gender_limited] }
+        riskDetails: { type: object, additionalProperties: { type: string, maxLength: 1000 } }
+        groupId: { type: [string, 'null'], format: uuid }
+        checkinMode: { type: string, enum: [dynamic_qr, six_digit, manual] }
+        commentPermission: { type: string, enum: [disabled, participants, group_members] }
+        posterEnabled: { type: boolean }
+        exactAddressVisibility: { type: string, enum: [public, confirmed] }
+        fee: { type: object, additionalProperties: true }
+        registrationQuestions:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            required: [prompt]
+            properties:
+              id: { $ref: '#/components/schemas/UUID' }
+              prompt: { type: string, minLength: 1, maxLength: 240 }
+              kind: { type: string, enum: [text, single_choice, boolean], default: text }
+              required: { type: boolean, default: false }
+              options: { type: array, maxItems: 12, items: { type: string, minLength: 1, maxLength: 120 } }
+    EventStatus:
+      type: string
+      enum: [draft, pending_review, needs_changes, published, registration_closed, in_progress, ended, cancelled, removed, appeal_pending, archived, deleted, rejected]
+    AvailableAction:
+      type: string
+      enum: [register, joinWaitlist, cancelRegistration, viewTicket, checkIn, edit, submit, cancelEvent, appeal, joinGroup]
+    Registration:
+      type: object
+      required: [id, eventId, userId, status, partySize, availableActions, version, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        eventId: { $ref: '#/components/schemas/UUID' }
+        userId: { $ref: '#/components/schemas/UUID' }
+        status: { $ref: '#/components/schemas/RegistrationStatus' }
+        partySize: { type: integer, minimum: 1 }
+        attendeeNote: { type: [string, 'null'], maxLength: 1000 }
+        offerExpiresAt: { type: [string, 'null'], format: date-time }
+        availableActions: { type: array, items: { $ref: '#/components/schemas/AvailableAction' } }
+        version: { type: integer, format: int64, minimum: 1 }
+        updatedAt: { type: string, format: date-time }
+    CheckinResult:
+      allOf:
+        - $ref: '#/components/schemas/Registration'
+        - type: object
+          properties:
+            rewardPoints: { type: integer, format: int64, minimum: 0 }
+    ManualCheckinResult:
+      allOf:
+        - $ref: '#/components/schemas/CheckinResult'
+        - type: object
+          properties:
+            checkinMethod: { type: string, enum: [host_manual, correction] }
+    AttendeePage:
+      type: object
+      required: [items, hasMore, nextCursor]
+      properties:
+        items:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/Registration'
+              - type: object
+                required: [attendee, answers]
+                properties:
+                  attendee:
+                    type: object
+                    required: [id, nickname, publicHandle]
+                    properties:
+                      id: { $ref: '#/components/schemas/UUID' }
+                      nickname: { type: string }
+                      publicHandle: { type: string }
+                  answers:
+                    type: object
+                    description: Values keyed by RegistrationQuestion.id.
+                    additionalProperties: true
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'] }
+    CheckinCorrectionPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, eventId, registration, attendee, reason, status, createdAt]
+            properties:
+              id: { $ref: '#/components/schemas/UUID' }
+              eventId: { $ref: '#/components/schemas/UUID' }
+              registration:
+                type: object
+                required: [id, userId, status, partySize]
+                properties:
+                  id: { $ref: '#/components/schemas/UUID' }
+                  userId: { $ref: '#/components/schemas/UUID' }
+                  status: { $ref: '#/components/schemas/RegistrationStatus' }
+                  partySize: { type: integer, minimum: 1 }
+              attendee:
+                type: object
+                required: [id, nickname, publicHandle]
+                properties:
+                  id: { $ref: '#/components/schemas/UUID' }
+                  nickname: { type: string }
+                  publicHandle: { type: string }
+              reason: { type: string, minLength: 3, maxLength: 1000 }
+              status: { type: string, enum: [pending, approved, rejected] }
+              createdAt: { type: string, format: date-time }
+              decidedAt: { type: [string, 'null'], format: date-time }
+    FeedbackInput:
+      type: object
+      required: [attendanceRating, tags]
+      properties:
+        attendanceRating: { type: integer, minimum: 1, maximum: 5 }
+        tags:
+          type: array
+          maxItems: 5
+          items:
+            type: string
+            enum: [friendly, well_organized, clear_information, safe, would_join_again]
+        comment: { type: string, maxLength: 500 }
+        visibility: { type: string, enum: [private, aggregate_only], default: aggregate_only }
+    FeedbackSummary:
+      type: object
+      required: [sampleSize, minimumSampleSize, published, tags]
+      properties:
+        sampleSize: { type: integer, minimum: 0 }
+        minimumSampleSize: { type: integer, minimum: 1 }
+        published: { type: boolean }
+        tags:
+          type: array
+          items:
+            type: object
+            required: [tag, count, rate]
+            properties:
+              tag: { type: string, enum: [friendly, well_organized, clear_information, safe, would_join_again] }
+              count: { type: integer, minimum: 0 }
+              rate: { type: number, minimum: 0, maximum: 1 }
+    WalletBalance:
+      type: object
+      required: [paidBalance, freeBalance, totalBalance, version]
+      properties:
+        paidBalance: { type: integer, format: int64 }
+        freeBalance: { type: integer, format: int64, minimum: 0 }
+        totalBalance: { type: integer, format: int64 }
+        version: { type: integer, format: int64, minimum: 1 }
+        nextFreeExpiry: { type: [string, 'null'], format: date-time }
+    GroupInput:
+      type: object
+      required: [quoteId, name, slug, description, joinMode, categoryId]
+      properties:
+        quoteId: { $ref: '#/components/schemas/UUID' }
+        name: { type: string, minLength: 2, maxLength: 30 }
+        slug: { type: string, pattern: '^[a-z0-9-]{3,80}$' }
+        description: { type: string, minLength: 20, maxLength: 1000 }
+        joinMode: { type: string, enum: [open, approval, invite_only] }
+        regionId: { type: string, minLength: 1, maxLength: 80, default: nationwide }
+        categoryId: { type: string, minLength: 1, maxLength: 80 }
+        tags:
+          type: array
+          maxItems: 5
+          items: { type: string, minLength: 1, maxLength: 40 }
+        rules: { type: string, maxLength: 4000, default: '' }
+    Group:
+      type: object
+      required: [id, ownerId, owner, name, slug, description, joinMode, regionId, categoryId, tags, rules, capacity, memberCount, status, viewerFollowing, announcementSummary, availableActions, version, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        ownerId: { $ref: '#/components/schemas/UUID' }
+        owner:
+          type: object
+          required: [id, name, handle]
+          properties:
+            id: { $ref: '#/components/schemas/UUID' }
+            name: { type: string }
+            handle: { type: string }
+        name: { type: string }
+        slug: { type: string }
+        description: { type: string }
+        coverURL: { type: [string, 'null'], format: uri }
+        joinMode: { type: string, enum: [open, approval, invite_only] }
+        regionId: { type: string }
+        categoryId: { type: string }
+        tags: { type: array, items: { type: string } }
+        rules: { type: string }
+        capacity: { type: integer, minimum: 50 }
+        memberCount: { type: integer, minimum: 0 }
+        status: { type: string }
+        membershipStatus: { type: [string, 'null'] }
+        membershipRole: { type: [string, 'null'] }
+        viewerFollowing: { type: boolean }
+        announcementSummary: { type: array, items: { $ref: '#/components/schemas/Announcement' } }
+        closingAt: { type: [string, 'null'], format: date-time }
+        dissolveAfter: { type: [string, 'null'], format: date-time }
+        availableActions: { type: array, items: { type: string } }
+        version: { type: integer, format: int64 }
+        updatedAt: { type: string, format: date-time }
+    GroupPage:
+      type: object
+      required: [items, hasMore, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Group' } }
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'] }
+    GroupMemberPage:
+      type: object
+      required: [items, hasMore, nextCursor]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [user, role, status, joinedAt, updatedAt]
+            properties:
+              user:
+                type: object
+                required: [id, name, handle]
+                properties:
+                  id: { $ref: '#/components/schemas/UUID' }
+                  name: { type: string }
+                  handle: { type: string }
+              role: { type: string, enum: [owner, admin, member] }
+              status: { type: string, enum: [active, muted, pending, removed] }
+              joinedAt: { type: string, format: date-time }
+              updatedAt: { type: string, format: date-time }
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'] }
+    AnnouncementInput:
+      type: object
+      properties:
+        title: { type: string, minLength: 2, maxLength: 120 }
+        body: { type: string, minLength: 1, maxLength: 4000 }
+        visibility: { type: string, enum: [public, members], default: members }
+        commentsEnabled: { type: boolean, default: true }
+    Announcement:
+      type: object
+      required: [id, groupId, authorId, title, body, visibility, commentsEnabled, likeCount, viewerLiked, commentCount, version, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        groupId: { $ref: '#/components/schemas/UUID' }
+        authorId: { $ref: '#/components/schemas/UUID' }
+        authorName: { type: [string, 'null'] }
+        title: { type: string }
+        body: { type: string }
+        visibility: { type: string, enum: [public, members] }
+        commentsEnabled: { type: boolean }
+        pinnedAt: { type: [string, 'null'], format: date-time }
+        likeCount: { type: integer, minimum: 0 }
+        viewerLiked: { type: boolean }
+        commentCount: { type: integer, minimum: 0 }
+        version: { type: integer, format: int64 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AnnouncementPage:
+      type: object
+      required: [items, hasMore, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Announcement' } }
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'] }
+    Comment:
+      type: object
+      required: [id, announcementId, author, body, locale, version, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        announcementId: { $ref: '#/components/schemas/UUID' }
+        author: { type: object, required: [id, name], properties: { id: { $ref: '#/components/schemas/UUID' }, name: { type: string } } }
+        body: { type: string }
+        parentId: { type: [string, 'null'], format: uuid }
+        locale: { $ref: '#/components/schemas/Locale' }
+        version: { type: integer, format: int64 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    GroupTransfer:
+      type: object
+      required: [id, groupId, state]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        groupId: { $ref: '#/components/schemas/UUID' }
+        fromUserId: { $ref: '#/components/schemas/UUID' }
+        toUserId: { $ref: '#/components/schemas/UUID' }
+        ownerId: { $ref: '#/components/schemas/UUID' }
+        state: { type: string, enum: [awaiting_target, cooling_off, completed, cancelled] }
+        expiresAt: { type: string, format: date-time }
+        cooldownUntil: { type: [string, 'null'], format: date-time }
+    PointRuleCatalog:
+      type: object
+      required: [stage, items]
+      properties:
+        stage: { type: string, enum: [launch, stable] }
+        items:
+          type: array
+          items:
+            type: object
+            required: [key, type, launchValue, stableValue, effectiveValue, unit, conditions, description]
+            properties:
+              key: { type: string }
+              type: { type: string }
+              launchValue: { type: number }
+              stableValue: { type: number }
+              effectiveValue: { type: number }
+              unit: { type: string }
+              conditions: { type: object, additionalProperties: true }
+              description: { type: string }
+    PointQuote:
+      type: object
+      required: [id, amount, currency, expiresAt]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        amount: { type: integer, format: int64, minimum: 0 }
+        currency: { type: string, const: POINTS }
+        expiresAt: { type: string, format: date-time }
+    StoreProductCatalog:
+      type: object
+      required: [store, items]
+      properties:
+        store: { type: string, const: apple }
+        items:
+          type: array
+          items:
+            type: object
+            required: [productId, points, bonusPoints]
+            properties:
+              productId: { type: string }
+              points: { type: integer, format: int64, minimum: 1 }
+              bonusPoints: { type: integer, format: int64, minimum: 0 }
+    NotificationPage:
+      type: object
+      required: [items, hasMore, nextCursor]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, type, locale, templateVersion, title, body, variables, createdAt]
+            properties:
+              id: { $ref: '#/components/schemas/UUID' }
+              type: { type: string }
+              locale: { type: string, enum: [zh-Hans, ja, en] }
+              templateVersion: { type: integer, minimum: 1 }
+              title: { type: string }
+              body: { type: string }
+              variables: { type: object, additionalProperties: true }
+              resourceType: { type: [string, 'null'] }
+              resourcePublicId: { type: [string, 'null'] }
+              createdAt: { type: string, format: date-time }
+              readAt: { type: [string, 'null'], format: date-time }
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'] }
+    NotificationPreferenceInput:
+      type: object
+      properties:
+        inApp: { type: boolean, default: true }
+        push: { type: boolean, default: true }
+        email: { type: boolean, default: false }
+        quietStart: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
+        quietEnd: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
+        locale: { type: string, enum: [zh-Hans, ja, en], default: zh-Hans }
+    MediaUploadInput:
+      type: object
+      required: [purpose, filename, mimeType, byteSize]
+      properties:
+        purpose: { type: string, enum: [event_cover, profile_avatar, group_cover, report_evidence, share_poster] }
+        filename: { type: string, minLength: 1, maxLength: 255 }
+        mimeType: { type: string, enum: [image/jpeg, image/png, image/webp, image/heic] }
+        byteSize: { type: integer, minimum: 1, maximum: 20971520 }
+        focalX: { type: number, minimum: 0, maximum: 1, default: 0.5 }
+        focalY: { type: number, minimum: 0, maximum: 1, default: 0.5 }
+    ProfileMediaAttachment:
+      type: object
+      required: [assetId, profileId, url, version]
+      properties:
+        assetId: { $ref: '#/components/schemas/UUID' }
+        profileId: { $ref: '#/components/schemas/UUID' }
+        url: { type: string, format: uri }
+        version: { type: integer, format: int64, minimum: 1 }
+    GroupMediaAttachment:
+      type: object
+      required: [assetId, groupId, url, version]
+      properties:
+        assetId: { $ref: '#/components/schemas/UUID' }
+        groupId: { $ref: '#/components/schemas/UUID' }
+        url: { type: string, format: uri }
+        version: { type: integer, format: int64, minimum: 1 }
+    ShareInput:
+      type: object
+      required: [resourceType, resourceId]
+      properties:
+        resourceType: { type: string, enum: [event, group, profile] }
+        resourceId: { $ref: '#/components/schemas/UUID' }
+        campaign: { type: string, maxLength: 80 }
+    PosterInput:
+      type: object
+      required: [resourceType, resourceId]
+      properties:
+        resourceType: { type: string, enum: [event, group, profile] }
+        resourceId: { $ref: '#/components/schemas/UUID' }
+        template: { type: string, enum: [tokyo_afterglow, night_transit, paper_lantern], default: tokyo_afterglow }
+        locale: { type: string, enum: [zh-Hans, zh-Hant, ja, en], default: zh-Hans }
+        mode: { type: string, enum: [template, ai_assisted], default: template }
+    PosterJob:
+      type: object
+      required: [id, state, template, locale, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        state: { type: string, enum: [queued, processing, ready, failed] }
+        assetId: { type: [string, 'null'], format: uuid }
+        url: { type: [string, 'null'], format: uri, description: Present only when the approved generated asset is ready. }
+        failureCode: { type: [string, 'null'] }
+        template: { type: string }
+        locale: { type: string, enum: [zh-Hans, zh-Hant, ja, en] }
+        updatedAt: { type: string, format: date-time }
+    EventPosterJob:
+      allOf:
+        - $ref: '#/components/schemas/PosterJob'
+        - type: object
+          required: [resourceType, resourceId]
+          properties:
+            resourceType: { type: string, const: event }
+            resourceId: { $ref: '#/components/schemas/UUID' }
+    OpsAuthSession:
+      type: object
+      required: [sessionId, accessTokenExpiresAt, user]
+      properties:
+        sessionId: { $ref: '#/components/schemas/UUID' }
+        accessTokenExpiresAt: { type: string, format: date-time }
+        user:
+          type: object
+          required: [id, publicHandle, phoneVerified, restrictions]
+          properties:
+            id: { $ref: '#/components/schemas/UUID' }
+            publicHandle: { type: string }
+            phoneVerified: { type: boolean }
+            restrictions: { type: array, items: { type: string } }
+    OpsActor:
+      type: object
+      required: [id, label]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        label: { type: string }
+    OpsOverview:
+      type: object
+      required: [generatedAt, queues, health, growth]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        queues:
+          type: object
+          required: [p0Open, moderationOpen, eventReviewPending, pointApprovalsPending, appealsPending, outboxBacklog]
+          properties:
+            p0Open: { type: integer, minimum: 0 }
+            moderationOpen: { type: integer, minimum: 0 }
+            eventReviewPending: { type: integer, minimum: 0 }
+            pointApprovalsPending: { type: integer, minimum: 0 }
+            appealsPending: { type: integer, minimum: 0 }
+            outboxBacklog: { type: integer, minimum: 0 }
+        health:
+          type: object
+          required: [deliverySuccessRate1h, ledgerDeltaPaid, ledgerDeltaFree]
+          properties:
+            deliverySuccessRate1h: { type: number, minimum: 0, maximum: 1 }
+            ledgerDeltaPaid: { type: integer }
+            ledgerDeltaFree: { type: integer }
+        growth:
+          type: object
+          required: [activeUsers30d, activeGroups, eventsOpen, checkinRate30d, repeatRate60d]
+          properties:
+            activeUsers30d: { type: integer, minimum: 0 }
+            activeGroups: { type: integer, minimum: 0 }
+            eventsOpen: { type: integer, minimum: 0 }
+            checkinRate30d: { type: number, minimum: 0, maximum: 1 }
+            repeatRate60d: { type: number, minimum: 0, maximum: 1 }
+    OpsUser:
+      type: object
+      required: [id, handle, nickname, status, restrictions, phoneVerified, deviceRisk, hostedCount, registrationCount, complaintCount, createdAt, updatedAt, version]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        handle: { type: string }
+        nickname: { type: string }
+        status: { type: string }
+        restrictions: { type: array, items: { type: string } }
+        phoneVerified: { type: boolean }
+        deviceRisk: { type: string, enum: [normal, elevated, blocked] }
+        hostedCount: { type: integer, minimum: 0 }
+        registrationCount: { type: integer, minimum: 0 }
+        complaintCount: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64, minimum: 1 }
+    OpsUserPage:
+      type: object
+      required: [items, hasMore, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/OpsUser' } }
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'] }
+    OpsUserRestrictionInput:
+      type: object
+      required: [restrictions, reason]
+      properties:
+        status: { type: string, enum: [active, restricted, suspended] }
+        restrictions:
+          type: array
+          maxItems: 5
+          items: { type: string, enum: [loginBlocked, publishBlocked, registerBlocked, pointsBlocked, commentBlocked] }
+        expiresAt: { type: string, format: date-time }
+        reason: { type: string, minLength: 3, maxLength: 2000 }
+    OpsUserRestrictionDecision:
+      type: object
+      required: [id, status, restrictions, version, requestId]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        status: { type: string }
+        restrictions: { type: array, items: { type: string } }
+        version: { type: integer, format: int64, minimum: 1 }
+        decisionState: { type: string, enum: [pending_approval] }
+        approvalId: { type: string, format: uuid }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        requestId: { type: string }
+    OpsOrganizer:
+      type: object
+      required: [id, handle, nickname, status, verificationState, hostedCount, upcomingCount, completionRate, checkinRate, repeatRate60d, complaintRate, restrictionFlags, version]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        handle: { type: string }
+        nickname: { type: string }
+        status: { type: string }
+        verificationState: { type: string, enum: [phone_verified, unverified] }
+        hostedCount: { type: integer, minimum: 0 }
+        upcomingCount: { type: integer, minimum: 0 }
+        completionRate: { type: number, minimum: 0, maximum: 1 }
+        checkinRate: { type: number, minimum: 0, maximum: 1 }
+        repeatRate60d: { type: number, minimum: 0, maximum: 1 }
+        complaintRate: { type: number, minimum: 0 }
+        restrictionFlags: { type: array, items: { type: string } }
+        version: { type: integer, format: int64, minimum: 1 }
+    OpsOrganizerPage:
+      type: object
+      required: [items, hasMore, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/OpsOrganizer' } }
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'] }
+    OpsEvent:
+      type: object
+      required: [id, slug, title, organizer, status, categoryId, startsAt, publicArea, isFree, amountJpy, riskScore, riskReasons, submittedAt, version]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        slug: { type: string }
+        title: { type: string }
+        organizer:
+          type: object
+          required: [id, handle, nickname]
+          properties:
+            id: { $ref: '#/components/schemas/UUID' }
+            handle: { type: string }
+            nickname: { type: string }
+        status: { type: string }
+        categoryId: { type: [string, 'null'] }
+        startsAt: { type: [string, 'null'], format: date-time }
+        publicArea: { type: [string, 'null'] }
+        isFree: { type: [boolean, 'null'] }
+        amountJpy: { type: [integer, 'null'], format: int64 }
+        riskScore: { type: integer, minimum: 0, maximum: 100 }
+        riskReasons: { type: array, items: { type: string } }
+        submittedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64, minimum: 1 }
+    OpsEventPage:
+      type: object
+      required: [items, hasMore, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/OpsEvent' } }
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'] }
+    OpsEventReviewResult:
+      type: object
+      required: [id, eventId, status, reason, version, posterJobId, requestId]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        eventId: { $ref: '#/components/schemas/UUID' }
+        status: { type: string, enum: [published, needs_changes, rejected] }
+        reason: { type: string }
+        version: { type: integer, format: int64, minimum: 1 }
+        posterJobId: { type: [string, 'null'], format: uuid }
+        requestId: { type: string }
+    OpsGroup:
+      type: object
+      required: [id, slug, name, owner, status, joinMode, memberCount, capacity, openEventCount, reportCount, activeTransferState, closingAt, version]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        slug: { type: string }
+        name: { type: string }
+        owner:
+          type: object
+          required: [id, handle, nickname]
+          properties:
+            id: { $ref: '#/components/schemas/UUID' }
+            handle: { type: string }
+            nickname: { type: string }
+        status: { type: string }
+        joinMode: { type: string }
+        memberCount: { type: integer, minimum: 0 }
+        capacity: { type: integer, minimum: 0 }
+        openEventCount: { type: integer, minimum: 0 }
+        reportCount: { type: integer, minimum: 0 }
+        activeTransferState: { type: [string, 'null'] }
+        closingAt: { type: [string, 'null'], format: date-time }
+        version: { type: integer, format: int64, minimum: 1 }
+    OpsGroupPage:
+      type: object
+      required: [items, hasMore, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/OpsGroup' } }
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'] }
+    OpsGroupLifecycleDecision:
+      type: object
+      required: [id, status, version, requestId]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        status: { type: string }
+        version: { type: integer, format: int64, minimum: 1 }
+        requestId: { type: string }
+    OpsModerationCase:
+      type: object
+      required: [id, reference, targetType, targetId, reason, severity, status, assignee, slaDueAt, createdAt, version]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        reference: { type: string }
+        targetType: { type: string }
+        targetId: { type: string, description: Masked identifier }
+        reason: { type: string }
+        severity: { type: string, enum: [p0, p1, p2] }
+        status: { type: string }
+        assignee:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/OpsActor'
+        slaDueAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        version: { type: integer, format: int64, minimum: 1 }
+    OpsModerationCasePage:
+      type: object
+      required: [items, hasMore, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/OpsModerationCase' } }
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'] }
+    OpsModerationCaseDetail:
+      allOf:
+        - $ref: '#/components/schemas/OpsModerationCase'
+        - type: object
+          required: [target, reporter, evidence, actions, appeals]
+          properties:
+            target: { type: object, additionalProperties: true }
+            reporter:
+              type: object
+              required: [present]
+              properties: { present: { type: boolean } }
+            evidence:
+              type: array
+              items:
+                type: object
+                required: [id, assetId, mimeType, byteSize, retentionUntil, signedUrl]
+                properties:
+                  id: { $ref: '#/components/schemas/UUID' }
+                  assetId: { $ref: '#/components/schemas/UUID' }
+                  mimeType: { type: [string, 'null'] }
+                  byteSize: { type: integer, minimum: 0 }
+                  retentionUntil: { type: string, format: date-time }
+                  signedUrl: { type: [string, 'null'], format: uri }
+            actions: { type: array, items: { type: object, additionalProperties: true } }
+            appeals: { type: array, items: { type: object, additionalProperties: true } }
+    OpsModerationDecision:
+      type: object
+      required: [id, status, version, requestId]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        status: { type: string }
+        decision: { type: string }
+        assignee: { $ref: '#/components/schemas/OpsActor' }
+        version: { type: integer, format: int64, minimum: 1 }
+        requestId: { type: string }
+    OpsPointAdjustmentInput:
+      type: object
+      required: [targetUserId, bucket, amount, reason]
+      properties:
+        targetUserId: { $ref: '#/components/schemas/UUID' }
+        bucket: { type: string, enum: [paid, free] }
+        amount: { type: integer, minimum: -1000000, maximum: 1000000, not: { const: 0 } }
+        reason: { type: string, minLength: 3, maxLength: 2000 }
+        evidenceRef: { type: string, maxLength: 500 }
+    OpsPointAdjustment:
+      type: object
+      required: [id, target, bucket, amount, reason, state, requester, approver, transactionId, requiredApprovals, approvalCount, version, createdAt, decidedAt, executedAt]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        target:
+          type: object
+          required: [id, handle, nickname]
+          properties:
+            id: { $ref: '#/components/schemas/UUID' }
+            handle: { type: string }
+            nickname: { type: string }
+        bucket: { type: string, enum: [paid, free] }
+        amount: { type: integer }
+        reason: { type: string }
+        state: { type: string, enum: [pending, approved, rejected, executed, failed] }
+        requester: { $ref: '#/components/schemas/OpsActor' }
+        approver:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/OpsActor'
+        transactionId: { type: [string, 'null'], format: uuid }
+        requiredApprovals: { type: integer, minimum: 1, maximum: 2 }
+        approvalCount: { type: integer, minimum: 0, maximum: 2 }
+        version: { type: integer, format: int64, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        decidedAt: { type: [string, 'null'], format: date-time }
+        executedAt: { type: [string, 'null'], format: date-time }
+    OpsPointAdjustmentPage:
+      type: object
+      required: [items, hasMore, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/OpsPointAdjustment' } }
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'] }
+    OpsLedgerHealth:
+      type: object
+      required: [checkedAt, balanced, paidDelta, freeDelta, negativePaidWallets, pendingStoreReconciliations, expiringLots]
+      properties:
+        checkedAt: { type: string, format: date-time }
+        balanced: { type: boolean }
+        paidDelta: { type: integer }
+        freeDelta: { type: integer }
+        negativePaidWallets: { type: integer, minimum: 0 }
+        pendingStoreReconciliations: { type: integer, minimum: 0 }
+        expiringLots: { type: integer, minimum: 0 }
+    OpsConfigRevisionInput:
+      type: object
+      required: [key, value, audience, reason]
+      properties:
+        key: { type: string, minLength: 3, maxLength: 200 }
+        value: {}
+        audience: { type: object, additionalProperties: true }
+        region: { type: string }
+        minAppVersion: { type: string }
+        effectiveFrom: { type: string, format: date-time }
+        effectiveTo: { type: string, format: date-time }
+        reason: { type: string, minLength: 3, maxLength: 2000 }
+    OpsConfigRevision:
+      type: object
+      required: [id, key, value, version, audience, region, minAppVersion, effectiveFrom, effectiveTo, state, reason, submittedBy, approvedBy, createdAt, canApprove]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        key: { type: string }
+        value: {}
+        version: { type: integer, minimum: 1 }
+        audience: { type: object, additionalProperties: true }
+        region: { type: [string, 'null'] }
+        minAppVersion: { type: [string, 'null'] }
+        effectiveFrom: { type: [string, 'null'], format: date-time }
+        effectiveTo: { type: [string, 'null'], format: date-time }
+        state: { type: string, enum: [draft, approved, active, superseded, rejected] }
+        reason: { type: string }
+        submittedBy: { $ref: '#/components/schemas/OpsActor' }
+        approvedBy:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/OpsActor'
+        createdAt: { type: string, format: date-time }
+        canApprove: { type: boolean }
+    OpsConfigRevisionPage:
+      type: object
+      required: [items, hasMore, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/OpsConfigRevision' } }
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'] }
+    OpsConfigImpact:
+      type: object
+      required: [affectedUsers, affectedRegions, warnings, quoteProtection]
+      properties:
+        affectedUsers: { type: integer, minimum: 0 }
+        affectedRegions: { type: array, items: { type: string } }
+        warnings: { type: array, items: { type: string } }
+        quoteProtection: { type: boolean }
+    OpsFunnelStage:
+      type: object
+      required: [stage, value, rate]
+      properties:
+        stage: { type: string }
+        value: { type: integer, minimum: 0 }
+        rate: { type: number, minimum: 0, maximum: 1 }
+    OpsAnalyticsOverview:
+      type: object
+      required: [generatedAt, participantFunnel, hostFunnel, groupFunnel, points, safety, supply]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        participantFunnel: { type: array, items: { $ref: '#/components/schemas/OpsFunnelStage' } }
+        hostFunnel: { type: array, items: { $ref: '#/components/schemas/OpsFunnelStage' } }
+        groupFunnel: { type: array, items: { $ref: '#/components/schemas/OpsFunnelStage' } }
+        points:
+          type: object
+          required: [freeIssued, paidIssued, consumed, expired, refundRate]
+          properties:
+            freeIssued: { type: integer }
+            paidIssued: { type: integer }
+            consumed: { type: integer }
+            expired: { type: integer }
+            refundRate: { type: number, minimum: 0, maximum: 1 }
+        safety:
+          type: object
+          required: [reports, severeIncidents, complaintRate]
+          properties:
+            reports: { type: integer, minimum: 0 }
+            severeIncidents: { type: integer, minimum: 0 }
+            complaintRate: { type: number, minimum: 0, maximum: 1 }
+        supply:
+          type: object
+          required: [openEvents, categoryCoverage, regionCoverage]
+          properties:
+            openEvents: { type: integer, minimum: 0 }
+            categoryCoverage: { type: integer, minimum: 0 }
+            regionCoverage: { type: integer, minimum: 0 }
+    OpsAuditLog:
+      type: object
+      required: [id, createdAt, actor, action, resource, resourceIdMasked, purpose, traceId]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        createdAt: { type: string, format: date-time }
+        actor:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/OpsActor'
+        action: { type: string }
+        resource: { type: string }
+        resourceIdMasked: { type: [string, 'null'] }
+        purpose: { type: [string, 'null'] }
+        traceId: { type: string }
+    OpsAuditLogPage:
+      type: object
+      required: [items, hasMore, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/OpsAuditLog' } }
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'] }
+    OpsAdminUserList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, identityUserId, label, roles, dataScopes, mfaEnrolledAt, disabledAt]
+            properties:
+              id: { $ref: '#/components/schemas/UUID' }
+              identityUserId: { $ref: '#/components/schemas/UUID' }
+              label: { type: string }
+              roles: { type: array, items: { type: string } }
+              dataScopes: { type: array, items: { type: string } }
+              mfaEnrolledAt: { type: string, format: date-time }
+              disabledAt: { type: [string, 'null'], format: date-time }
+    OpsSession:
+      type: object
+      required: [operatorId, label, roles, dataScopes, mfaEnrolled, mfaAgeSeconds, reauthRequiredFor]
+      properties:
+        operatorId: { $ref: '#/components/schemas/UUID' }
+        label: { type: string }
+        roles: { type: array, items: { type: string } }
+        dataScopes: { type: array, items: { type: string } }
+        mfaEnrolled: { type: boolean }
+        mfaAgeSeconds: { type: integer, minimum: 0 }
+        reauthRequiredFor: { type: array, items: { type: string } }
+    OpsExportInput:
+      type: object
+      required: [dataset, purpose, expiresInHours, maxDownloads]
+      properties:
+        dataset: { type: string, enum: [event_roster, safety_summary, points_reconciliation, audit_log] }
+        filters: { type: object, additionalProperties: true, default: {} }
+        purpose: { type: string, minLength: 3, maxLength: 1000 }
+        expiresInHours: { type: integer, minimum: 1, maximum: 168 }
+        maxDownloads: { type: integer, minimum: 1, maximum: 5 }
+    OpsExport:
+      type: object
+      required: [id, dataset, purpose, state, requester, approver, watermark, expiresAt, maxDownloads, downloadCount, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        dataset: { type: string, enum: [event_roster, safety_summary, points_reconciliation, audit_log] }
+        purpose: { type: string }
+        state: { type: string, enum: [pending, approved, rejected, ready, expired, failed] }
+        requester: { $ref: '#/components/schemas/OpsActor' }
+        approver:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/OpsActor'
+        watermark: { type: string }
+        expiresAt: { type: string, format: date-time }
+        maxDownloads: { type: integer, minimum: 1, maximum: 5 }
+        downloadCount: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+    OpsExportPage:
+      type: object
+      required: [items, hasMore, nextCursor]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/OpsExport' } }
+        hasMore: { type: boolean }
+        nextCursor: { type: [string, 'null'] }
+    OpsExportDownloadTicket:
+      type: object
+      required: [url, expiresAt, downloadCount, maxDownloads]
+      properties:
+        url: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
+        downloadCount: { type: integer, minimum: 1 }
+        maxDownloads: { type: integer, minimum: 1, maximum: 5 }
+    SafetyCasePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [reference, relationship, targetType, targetId, reason, severity, status, createdAt, updatedAt]
+            properties:
+              reference: { type: string, pattern: '^SPT-[0-9]{4}-[A-F0-9]{12}$' }
+              relationship: { type: string, enum: [submitted, subject] }
+              targetType: { type: string, enum: [event, group, user, comment, announcement] }
+              targetId: { $ref: '#/components/schemas/UUID' }
+              reason: { type: string }
+              severity: { type: string, enum: [p0, p1, p2] }
+              status: { type: string }
+              caseStatus: { type: [string, 'null'] }
+              decision: { type: [string, 'null'] }
+              slaDueAt: { type: [string, 'null'], format: date-time }
+              createdAt: { type: string, format: date-time }
+              updatedAt: { type: string, format: date-time }
+              appeal:
+                oneOf:
+                  - type: 'null'
+                  - type: object
+                    required: [id, status, createdAt, decidedAt]
+                    properties:
+                      id: { $ref: '#/components/schemas/UUID' }
+                      status: { type: string }
+                      createdAt: { type: [string, 'null'], format: date-time }
+                      decidedAt: { type: [string, 'null'], format: date-time }
+    BlockPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [userId, publicHandle, blockedAt]
+            properties:
+              userId: { $ref: '#/components/schemas/UUID' }
+              publicHandle: { type: string }
+              nickname: { type: [string, 'null'] }
+              reason: { type: [string, 'null'] }
+              blockedAt: { type: string, format: date-time }
+    BlockState:
+      type: object
+      required: [userId, blocked]
+      properties:
+        userId: { $ref: '#/components/schemas/UUID' }
+        blocked: { type: boolean }
+    ReportInput:
+      type: object
+      required: [targetType, targetId, reason]
+      properties:
+        targetType: { type: string, enum: [event, group, user, comment, announcement] }
+        targetId: { $ref: '#/components/schemas/UUID' }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+        details: { type: string, maxLength: 5000 }
+        evidenceAssetIds: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/UUID' } }
+    SyncChange:
+      type: object
+      required: [seq, entityType, entityId, operation, version, changedFields, payload]
+      properties:
+        seq: { type: integer, format: int64 }
+        entityType: { type: string }
+        entityId: { $ref: '#/components/schemas/UUID' }
+        operation: { type: string, enum: [upsert, tombstone] }
+        version: { type: integer, format: int64, minimum: 1 }
+        changedFields: { type: array, items: { type: string } }
+        payload: { type: object, additionalProperties: true }
+    SyncPage:
+      type: object
+      required: [nextCursor, hasMore, serverTime, changes]
+      properties:
+        nextCursor: { type: integer, format: int64 }
+        hasMore: { type: boolean }
+        serverTime: { type: string, format: date-time }
+        changes: { type: array, items: { $ref: '#/components/schemas/SyncChange' } }
+    PendingOperation:
+      type: object
+      required: [operationId, entityType, action]
+      properties:
+        operationId: { $ref: '#/components/schemas/UUID' }
+        entityType: { type: string }
+        entityId: { type: [string, 'null'], format: uuid }
+        action: { type: string }
+        baseVersion: { type: [integer, 'null'], format: int64 }
+        patch: { type: object, additionalProperties: true }
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId, retryable, fieldErrors, actions, meta]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            requestId: { type: string }
+            retryable: { type: boolean }
+            fieldErrors:
+              type: array
+              items:
+                type: object
+                required: [field, message]
+                properties:
+                  field: { type: string }
+                  message: { type: string }
+            actions:
+              type: array
+              items:
+                type: object
+                required: [type, label]
+                properties:
+                  type: { type: string }
+                  label: { type: string }
+            meta: { type: object, additionalProperties: true }
+security:
+  - BearerAuth: []

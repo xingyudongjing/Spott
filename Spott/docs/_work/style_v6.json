@@ -1,0 +1,171 @@
+{
+  "input": "/Users/yaokai/Code/xingyu/Spott/Spott/docs/Spott-iOS-Web\u5168\u6808\u5f00\u53d1\u6587\u6863-V1.0-20260715.docx",
+  "fonts_by_char_count": {
+    "Noto Sans SC": 36649,
+    "Menlo": 8315
+  },
+  "direct_run_formatting_runs": 2198,
+  "direct_paragraph_formatting_paragraphs": 1838,
+  "heading_like_paragraphs_not_heading_style": [
+    {
+      "para_index": 1,
+      "text": "SPOTT  /  PRODUCT ENGINEERING",
+      "style": "Normal"
+    },
+    {
+      "para_index": 2,
+      "text": "Spott iOS \u539f\u751f App\n+ Web \u5168\u6808\u5f00\u53d1\u6587\u6863",
+      "style": "Normal"
+    },
+    {
+      "para_index": 4,
+      "text": "SWIFT 6.3  \u00b7  NEXT.JS 16.2  \u00b7  NESTJS 11  \u00b7  POSTGRESQL 18.4",
+      "style": "Normal"
+    },
+    {
+      "para_index": 5,
+      "text": "DESIGN DIRECTION",
+      "style": "Normal"
+    },
+    {
+      "para_index": 6,
+      "text": "Tokyo Afterglow",
+      "style": "Normal"
+    },
+    {
+      "para_index": 600,
+      "text": "\u4ea7\u54c1",
+      "style": "Normal"
+    },
+    {
+      "para_index": 602,
+      "text": "\u76ee\u6807",
+      "style": "Normal"
+    },
+    {
+      "para_index": 604,
+      "text": "\u4ea4\u4ed8\u8303\u56f4",
+      "style": "Normal"
+    },
+    {
+      "para_index": 606,
+      "text": "\u6570\u636e\u67b6\u6784",
+      "style": "Normal"
+    },
+    {
+      "para_index": 608,
+      "text": "\u7248\u672c",
+      "style": "Normal"
+    },
+    {
+      "para_index": 610,
+      "text": "\u9879\u76ee",
+      "style": "Normal"
+    },
+    {
+      "para_index": 611,
+      "text": "\u5185\u5bb9",
+      "style": "Normal"
+    },
+    {
+      "para_index": 626,
+      "text": "\u7ae0\u8282",
+      "style": "Normal"
+    },
+    {
+      "para_index": 627,
+      "text": "\u4e3b\u9898",
+      "style": "Normal"
+    },
+    {
+      "para_index": 628,
+      "text": "\u7ae0\u8282",
+      "style": "Normal"
+    },
+    {
+      "para_index": 629,
+      "text": "\u4e3b\u9898",
+      "style": "Normal"
+    },
+    {
+      "para_index": 678,
+      "text": "\u9886\u57df",
+      "style": "Normal"
+    },
+    {
+      "para_index": 679,
+      "text": "\u7ed3\u8bba",
+      "style": "Normal"
+    },
+    {
+      "para_index": 696,
+      "text": "\u5c42",
+      "style": "Normal"
+    },
+    {
+      "para_index": 697,
+      "text": "\u5f00\u53d1\u57fa\u7ebf",
+      "style": "Normal"
+    }
+  ],
+  "examples": {
+    "direct_paragraph_formatting": [
+      {
+        "para_index": 1,
+        "text": "SPOTT  /  PRODUCT ENGINEERING",
+        "style": "Normal"
+      },
+      {
+        "para_index": 2,
+        "text": "Spott iOS \u539f\u751f App\n+ Web \u5168\u6808\u5f00\u53d1\u6587\u6863",
+        "style": "Normal"
+      },
+      {
+        "para_index": 3,
+        "text": "\u9762\u5411 10 \u4e07\u7528\u6237\u7684\u9ad8\u53ef\u7528\u3001\u53ef\u540c\u6b65\u3001\u53ef\u6301\u7eed\u6f14\u8fdb\u7814\u53d1\u57fa\u7ebf",
+        "style": "Normal"
+      },
+      {
+        "para_index": 4,
+        "text": "SWIFT 6.3  \u00b7  NEXT.JS 16.2  \u00b7  NESTJS 11  \u00b7  POSTGRESQL 18.4",
+        "style": "Normal"
+      },
+      {
+        "para_index": 5,
+        "text": "DESIGN DIRECTION",
+        "style": "Normal"
+      }
+    ],
+    "direct_run_formatting": [
+      {
+        "para_index": 1,
+        "run_text": "SPOTT  /  PRODUCT ENGINEERING",
+        "style": "Normal"
+      },
+      {
+        "para_index": 2,
+        "run_text": "Spott iOS \u539f\u751f App\n+ Web \u5168\u6808\u5f00\u53d1\u6587\u6863",
+        "style": "Normal"
+      },
+      {
+        "para_index": 3,
+        "run_text": "\u9762\u5411 10 \u4e07\u7528\u6237\u7684\u9ad8\u53ef\u7528\u3001\u53ef\u540c\u6b65\u3001\u53ef\u6301\u7eed\u6f14\u8fdb\u7814\u53d1\u57fa\u7ebf",
+        "style": "Normal"
+      },
+      {
+        "para_index": 4,
+        "run_text": "SWIFT 6.3  \u00b7  NEXT.JS 16.2  \u00b7  NESTJS 11  \u00b7  POSTGRESQL 18.4",
+        "style": "Normal"
+      },
+      {
+        "para_index": 5,
+        "run_text": "DESIGN DIRECTION",
+        "style": "Normal"
+      }
+    ]
+  },
+  "notes": [
+    "Direct formatting is not always wrong, but it often causes inconsistent output when templates change.",
+    "Heading-like paragraphs not using Heading styles can break TOC and accessibility."
+  ]
+}

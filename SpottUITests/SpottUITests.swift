@@ -1,0 +1,55 @@
+//
+//  SpottUITests.swift
+//  SpottUITests
+//
+//  Created by 姚凯 on 2026/7/15.
+//
+
+import XCTest
+
+final class SpottUITests: XCTestCase {
+
+    override func setUpWithError() throws {
+        // Put setup code here. This method is called before the invocation of each test method in the class.
+
+        // In UI tests it is usually best to stop immediately when a failure occurs.
+        continueAfterFailure = false
+
+        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
+    }
+
+    override func tearDownWithError() throws {
+        // Put teardown code here. This method is called after the invocation of each test method in the class.
+    }
+
+    @MainActor
+    func testPrimaryNavigationAndAccessibilityLabels() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        XCTAssertTrue(app.tabBars.buttons["发现"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.tabBars.buttons["行程"].exists)
+        XCTAssertTrue(app.tabBars.buttons["创建"].exists)
+        XCTAssertTrue(app.tabBars.buttons["社群"].exists)
+        XCTAssertTrue(app.tabBars.buttons["我的"].exists)
+        XCTAssertEqual(app.tabBars.count, 1, "发现页只能有一套系统底部导航")
+        XCTAssertEqual(app.tabBars.firstMatch.buttons.count, 5, "系统底部导航应当正好包含五个入口")
+
+        XCTAssertTrue(app.buttons["显示地图"].exists, "地图切换不能暴露 SF Symbol 的内部名称")
+        app.buttons["显示地图"].tap()
+        XCTAssertTrue(app.buttons["显示列表"].waitForExistence(timeout: 2))
+        app.buttons["显示列表"].tap()
+
+        app.tabBars.buttons["创建"].tap()
+        XCTAssertTrue(app.staticTexts["登录后创建活动"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["登录"].exists)
+    }
+
+    @MainActor
+    func testLaunchPerformance() throws {
+        // This measures how long it takes to launch your application.
+        measure(metrics: [XCTApplicationLaunchMetric()]) {
+            XCUIApplication().launch()
+        }
+    }
+}

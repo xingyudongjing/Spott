@@ -1,0 +1,44 @@
+{
+  "name": "spott",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Spott 日本同城活动 iOS / Web / API monorepo",
+  "packageManager": "pnpm@11.5.2",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed": "tsx scripts/seed.ts",
+    "infra:up": "docker compose -f infrastructure/docker/compose.yaml up --build",
+    "infra:down": "docker compose -f infrastructure/docker/compose.yaml down",
+    "contract:lint": "redocly lint packages/contracts/openapi.yaml",
+    "contract:bundle": "redocly bundle packages/contracts/openapi.yaml -o packages/contracts/openapi.bundle.yaml",
+    "test:e2e": "playwright test",
+    "test:load": "k6 run tests/load/registration-last-seat.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.31.0",
+    "@playwright/test": "^1.55.0",
+    "@redocly/cli": "^2.0.8",
+    "@types/node": "^24.0.15",
+    "@types/pg": "^8.15.4",
+    "@typescript-eslint/eslint-plugin": "^8.38.0",
+    "@typescript-eslint/parser": "^8.38.0",
+    "eslint": "^9.31.0",
+    "pg": "^8.16.3",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.3",
+    "turbo": "^2.5.5",
+    "typescript": "^6.0.0",
+    "typescript-eslint": "^8.38.0",
+    "vitest": "^3.2.4"
+  }
+}

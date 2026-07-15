@@ -1,0 +1,12 @@
+{
+  "name": "@spott/contracts",
+  "version": "1.0.0",
+  "private": true,
+  "files": ["openapi.yaml", "openapi.bundle.yaml"],
+  "scripts": {
+    "build": "redocly bundle openapi.yaml -o openapi.bundle.yaml",
+    "lint": "redocly lint openapi.yaml",
+    "typecheck": "redocly lint openapi.yaml",
+    "test": "redocly lint openapi.yaml"
+  }
+}

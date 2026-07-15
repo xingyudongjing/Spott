@@ -127,7 +127,7 @@ git commit -m "build: restore reproducible web typecheck"
 - Modify: `services/api/src/modules/events/events.controller.ts`
 - Modify: `services/api/src/modules/events/events.service.ts`
 
-- [ ] **Step 1: 为查询解析器写 Red 测试**
+- [x] **Step 1: 为查询解析器写 Red 测试**
 
 新增测试覆盖：完整参数、非法 bounds、结束早于开始、不支持 locale、非法布尔值、1–100 limit。测试直接调用纯函数：
 
@@ -150,7 +150,7 @@ PATH=/opt/homebrew/opt/node@24/bin:$PATH pnpm --filter @spott/api test -- events
 
 Expected: FAIL，因为解析器尚不存在。
 
-- [ ] **Step 2: 实现唯一查询类型与解析器**
+- [x] **Step 2: 实现唯一查询类型与解析器**
 
 `events.discovery-query.ts` 导出：
 
@@ -170,7 +170,7 @@ export function parseDiscoveryQuery(input: Record<string, string | undefined>): 
 
 `events.controller.ts` 的 `/discovery/feed` 和 `/events/search` 都把 `@Query()` 交给同一解析器；feed 不再丢失高级筛选。
 
-- [ ] **Step 3: 为真实事件字段增加迁移**
+- [x] **Step 3: 为真实事件字段增加迁移**
 
 迁移必须使用一个 immutable helper 同时阻止越界 locale、缺少 primary 和重复 locale；普通 `cardinality + <@` 不足以阻止 `['ja','ja']`：
 
@@ -209,11 +209,12 @@ SELECT cardinality(locales) BETWEEN 1 AND 3
 format: in_person | online | hybrid
 primaryLocale: zh-Hans | ja | en
 supportedLocales: 1...3 个不重复 locale，且包含 primaryLocale
+coordinate: optional { latitude: -90...90, longitude: -180...180 }（输入不含 precision）
 ```
 
 `primaryLocale` 与 `supportedLocales` 是原子字段组：请求必须两者都省略或两者同时出现；只出现一个返回 400。两者都省略时，create 使用迁移默认且保持 `locale_confirmed_at = NULL`，update 保留现值和原确认时间；两者同时出现并验证通过时才保存两字段并写 `locale_confirmed_at = clock_timestamp()`。缺省迁移值不得自动变成“主办方已确认”。
 
-- [ ] **Step 4: 扩展 OpenAPI**
+- [x] **Step 4: 扩展 OpenAPI**
 
 新增结构化 schema：
 
@@ -261,7 +262,7 @@ ViewerRegistration (all required):
 EventSummary required:
   id, publicSlug, organizerId, status, title, description, category,
   startsAt|null, endsAt|null, deadlineAt|null, displayTimeZone,
-  region, publicArea, capacity, confirmedCount, fee, coverURL|null,
+  region, publicArea, capacity, confirmedCount, availableCapacity, fee, coverURL|null,
   tags, organizer, favorited, registrationStatus|null, viewerRegistration|null, registrationMode,
   waitlistEnabled, format, primaryLocale, supportedLocales,
   localeConfirmed, coordinate|null, availableActions, version, updatedAt
@@ -273,7 +274,7 @@ EventDetail required in addition to EventSummary:
 
 `EventSummary.coordinate` 的 schema 只允许 `precision: approximate`；`EventDetail.coordinate` 允许 `approximate|exact`。保留结构化 `availableActions`、`deadlineAt` 等客户端权限/状态输入；只删除 `priceLabel`、`boundaryStatement`、`categoryLabel` 和 `organizer.reliability` 这些服务端展示文案。
 
-- [ ] **Step 5: 验证 contract Green 并生成 bundle**
+- [x] **Step 5: 验证 contract Green 并生成 bundle**
 
 ```bash
 PATH=/opt/homebrew/opt/node@24/bin:$PATH pnpm contract:lint
@@ -285,7 +286,7 @@ PATH=/opt/homebrew/opt/node@24/bin:$PATH pnpm --filter @spott/api test -- events
 
 Expected: 全部 PASS，bundle 与 `packages/api-client/src/schema.d.ts` 都和源契约同步；`git diff --exit-code -- packages/contracts/openapi.bundle.yaml packages/api-client/src/schema.d.ts` 在生成文件已暂存/提交的验证阶段为零漂移。
 
-- [ ] **Step 6: 提交数据契约**
+- [x] **Step 6: 提交数据契约**
 
 ```bash
 git add database/migrations/0016_core_journey_discovery.sql packages/contracts packages/api-client/src/schema.d.ts services/api/src/modules/events
@@ -298,11 +299,18 @@ git commit -m "feat(events): define real discovery contract"
 
 **Files:**
 
+- Create: `database/migrations/0017_event_completion_fact.sql`
 - Create: `services/api/src/modules/events/events.discovery-sql.ts`
 - Create: `services/api/src/modules/events/events.discovery-sql.spec.ts`
 - Create: `services/api/src/modules/events/events.discovery.integration.spec.ts`
+- Create: `services/api/vitest.config.ts`
+- Create: `services/api/vitest.integration.config.ts`
 - Modify: `services/api/src/modules/events/events.service.ts`
 - Modify: `services/api/src/modules/events/events.service.spec.ts`
+- Modify: `services/api/src/modules/registrations/registrations.service.ts`
+- Modify: `services/api/src/modules/registrations/registrations.service.spec.ts`
+- Modify: `services/worker/src/jobs.ts`
+- Modify: `services/worker/test/jobs.test.ts`
 - Modify: `packages/domain/src/policy.ts`
 - Modify: `packages/domain/test/domain.test.ts`
 - Create: `scripts/test-postgis.ts`
@@ -310,11 +318,12 @@ git commit -m "feat(events): define real discovery contract"
 
 - [ ] **Step 1: 为 SQL 构建器写 Red 测试**
 
-测试断言：所有成员筛选都位于 `ORDER BY/LIMIT` 前；参数化而非字符串插值；游标仍是 `(e.starts_at,e.id)`；bounds 使用 `ST_Intersects`/`ST_MakeEnvelope`；语言要求 `locale_confirmed_at IS NOT NULL`；余位判断为 `capacity IS NULL OR confirmed_count < capacity`；价格判断来自 `event_fees`。
+测试断言：所有成员筛选都位于 `ORDER BY/LIMIT` 前；参数化而非字符串插值；游标仍是 `(e.starts_at,e.id)`；bounds 使用 `ST_Intersects`/`ST_MakeEnvelope`；语言要求 `locale_confirmed_at IS NOT NULL` 且匹配 `supported_locales`；余位判断使用 `confirmed_count + pending_count + offered_count < capacity`；价格判断来自 `event_fees`。
 
 同时为映射函数写 Red 断言：
 
 ```ts
+expect(summary.availableCapacity).toBe(3);
 expect(summary.coordinate?.precision).toBe('approximate');
 expect(summary.coordinate).toEqual({ latitude: 35.68, longitude: 139.77, precision: 'approximate' });
 expect(JSON.stringify(summary)).not.toContain('手机号已验证');
@@ -328,7 +337,27 @@ PATH=/opt/homebrew/opt/node@24/bin:$PATH pnpm --filter @spott/api test -- events
 
 Expected: FAIL，因为结构化 SQL 和真实字段尚未实现。
 
-- [ ] **Step 2: 构建参数化发现查询**
+- [ ] **Step 2: 先修正容量和完成事实的根数据**
+
+在 worker/registration 的现有测试中先增加多人数候补案例并观察失败：`partySize=3` 从 waitlisted → offered → accepted/expired/cancelled 时，`offered_count` 必须分别 `+3/-3`；`waitlist_count` 仍表示报名记录数所以只 `±1`。把 `services/worker/src/jobs.ts` 和 `registrations.service.ts` 的所有 offered 更新改成 party size，保证报名判满、发现余位与提交一致。
+
+`0017_event_completion_fact.sql` 新增 nullable `events.events.completed_at`，把当前 `status='ended'` 的记录保守回填为 `COALESCE(updated_at, clock_timestamp())`，并创建 `BEFORE INSERT OR UPDATE OF status` trigger：只有进入 `ended` 时设置，之后归档仍保留；cancelled/removed/rejected → archived 永远不设置。旧 archived 无法判断来源，保持 null，不猜测成功举办。
+
+信任口径固定：
+
+```text
+completedEventCount = organizer 的 completed_at IS NOT NULL 且 deleted_at IS NULL 的活动数
+attendance sample = 这些活动中 registration.status 为 checked_in 或 no_show 的 party-size 总人数
+attendance rate = checked_in party-size / sample party-size
+sample < 5 => unavailable
+sample >= 5 且 rate < 0.70 => under_70
+0.70 <= rate < 0.90 => 70_89
+rate >= 0.90 => 90_plus
+```
+
+不使用 Ops 旧 `ended|archived` 或 `final` 口径。
+
+- [ ] **Step 3: 构建参数化发现查询**
 
 `events.discovery-sql.ts` 导出：
 
@@ -341,16 +370,17 @@ export function buildDiscoveryStatement(
 ): DiscoveryStatement;
 ```
 
-坐标选择必须在数据库侧降精度：
+坐标选择必须在数据库侧降精度；`EventRow` 同时选择 `pending_count`、按 party-size 修正后的 `offered_count`，并映射：
 
 ```sql
 CASE WHEN l.point IS NULL THEN NULL ELSE ST_Y(ST_SnapToGrid(l.point::geometry, 0.01)) END AS latitude,
 CASE WHEN l.point IS NULL THEN NULL ELSE ST_X(ST_SnapToGrid(l.point::geometry, 0.01)) END AS longitude
+GREATEST(0, e.capacity - COALESCE(c.confirmed_count,0) - COALESCE(c.pending_count,0) - COALESCE(c.offered_count,0)) AS available_capacity
 ```
 
 bounds 使用精确内部点筛选，但响应仍只输出降精度点。所有 query 值进入 `values`，不得拼接用户输入。
 
-- [ ] **Step 3: 用真实身份/履约数据计算信任字段**
+- [ ] **Step 4: 用真实身份/履约数据计算信任字段**
 
 查询返回布尔 `phone_verified`、已结束且成功举办的 `completed_event_count`，以及在足够样本下由确认/签到聚合得到的 `attendance_rate_band`。样本不足返回 `unavailable`。`toView` 只返回：
 
@@ -365,7 +395,7 @@ organizer: {
 
 同一查询返回当前 viewer 的 registration `id/status/party_size`，并从最新未处理 `events.waitlist_promotions` 取得 `offer_expires_at`；映射为 nullable `viewerRegistration`。`offered` 状态必须携带 registration id 和真实到期时间，使双端可调用既有 `/registrations/{id}/waitlist-acceptance`，不得仅凭字符串状态画不可执行 CTA。
 
-- [ ] **Step 4: 正确输出详情坐标精度并锁定地址权限矩阵**
+- [ ] **Step 5: 正确输出详情坐标精度、写入真实 point 并锁定地址权限矩阵**
 
 发现：任何人有点即只得到 `approximate`，且永不返回 exact address。详情权限矩阵固定为：
 
@@ -378,7 +408,15 @@ organizer: {
 
 把 visibility 纳入 domain policy 的显式输入；`packages/domain/test/domain.test.ts` 对表中每格和 `removed/cancelled` 逐项测试。详情只有 policy 返回 true 时解密 `exactAddress` 并输出原始点 `exact`，否则返回发现同款 `approximate`。无点统一 `null`，不得生成坐标；在线加入信息不得进入 summary。
 
-- [ ] **Step 5: 增加隔离 PostGIS 集成测试**
+`upsertDetails` 在 draft input 含 coordinate 时使用完全参数化 SQL 写入：
+
+```sql
+ST_SetSRID(ST_MakePoint($longitude, $latitude), 4326)::geography
+```
+
+经纬度已由 Zod 契约限界，SQL 参数顺序固定 longitude 在前、latitude 在后；省略 coordinate 保留现有 point，不得清空或合成。
+
+- [ ] **Step 6: 增加隔离 PostGIS 集成测试**
 
 `scripts/test-postgis.ts` 只连接 `SPOTT_TEST_DATABASE_URL` 且数据库名必须以 `_test` 结尾，否则立即退出。它必须用 `fileURLToPath(new URL('..', import.meta.url))` 得到仓库根，绝不能依赖调用者 `process.cwd()`；从绝对路径 `<repoRoot>/database/migrations` 按序运行全部 migration，然后以 `cwd=<repoRoot>/services/api` 启动 Vitest 和传入的 `src/...spec.ts`。`services/api/package.json` 添加：
 
@@ -393,6 +431,10 @@ organizer: {
 - 有点/无点与发现/未授权详情/授权详情三种精度。
 - 未确认旧 locale 不匹配显式语言筛选。
 - 信誉没有硬编码且聚合边界正确。
+- 多人数 pending/offered 占位影响 availableOnly/availableCapacity，且与报名服务判满一致。
+- draft coordinate 能写入真实 PostGIS point，省略时保留，无点时不合成。
+
+默认 `services/api/vitest.config.ts` 必须 exclude `**/*.integration.spec.ts`；`vitest.integration.config.ts` 只 include integration specs。这样普通 `pnpm --filter @spott/api test` 不依赖外部 PG。
 
 在本机使用隔离 PG18，不触碰正在 5432 运行的 PG16：
 
@@ -404,19 +446,21 @@ rm -rf /tmp/spott-pg18-core-journey
 cleanup() { "$PG18_BIN/pg_ctl" -D /tmp/spott-pg18-core-journey stop >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 "$PG18_BIN/createdb" -p 55433 spott_core_journey_test
-SPOTT_TEST_DATABASE_URL=postgres://localhost:55433/spott_core_journey_test PATH=/opt/homebrew/opt/node@24/bin:$PATH pnpm --filter @spott/api test:integration
+SPOTT_TEST_DATABASE_URL=postgres://127.0.0.1:55433/spott_core_journey_test DATABASE_URL=postgres://127.0.0.1:55433/spott_core_journey_test PATH=/opt/homebrew/opt/node@24/bin:$PATH pnpm --filter @spott/api test:integration
 ```
 
 Expected: PASS；测试脚本验证 PostGIS extension 可用，migration 成功应用；shell cleanup 用 trap 保证测试失败也停止 PG18。命令绝不调用 `/opt/homebrew/bin` 中的 PG16，也不连接 5432。
 
-- [ ] **Step 6: 运行 API 全量验证并提交**
+- [ ] **Step 7: 运行 API/Worker 全量验证并提交**
 
 ```bash
 PATH=/opt/homebrew/opt/node@24/bin:$PATH pnpm --filter @spott/domain build
 PATH=/opt/homebrew/opt/node@24/bin:$PATH pnpm --filter @spott/api test
 PATH=/opt/homebrew/opt/node@24/bin:$PATH pnpm --filter @spott/api typecheck
+PATH=/opt/homebrew/opt/node@24/bin:$PATH pnpm --filter @spott/worker test
+PATH=/opt/homebrew/opt/node@24/bin:$PATH pnpm --filter @spott/worker typecheck
 PATH=/opt/homebrew/opt/node@24/bin:$PATH pnpm contract:lint
-git add services/api packages/domain scripts/test-postgis.ts
+git add database/migrations/0017_event_completion_fact.sql services/api services/worker packages/domain scripts/test-postgis.ts
 git commit -m "feat(events): filter discovery before pagination"
 ```
 
@@ -542,6 +586,12 @@ git commit -m "feat(ui): share discovery and event action semantics"
 
 ## Task 5: 实现 Web 真实发现界面与地图
 
+**Visual references (read before RED):**
+
+- `docs/design/core-journey/visual-spec.md`
+- `docs/design/core-journey/web-discovery-desktop-concept.png`
+- `docs/design/core-journey/discovery-mobile-concept.png`
+
 **Files:**
 
 - Create: `apps/web/app/components/discovery/DiscoveryShell.tsx`
@@ -583,7 +633,7 @@ if (!controller.signal.aborted) setPage(page);
 
 - [ ] **Step 3: 实现 Quiet Confidence 首屏**
 
-桌面：紧凑标题/搜索/地区/列表地图切换，下面立即是两栏或三栏 Event Grid；不使用大 Hero。移动：360px 高度内出现第一张卡的标题或封面。卡片显示本地化时间、公开区域、结构化价格、format、语言确认状态、余位/候补和真实 organizer trust；无 cover 使用类别占位，不造摄影图。
+桌面：紧凑标题/搜索/地区/列表地图切换，下面立即是单一带边界的活动列表表面；不使用大 Hero，也不把每一项拆成漂浮 dashboard 卡。移动 Web：针对拇指与单手操作重排为高完成度内容卡，360px 高度内出现第一张卡的标题或封面，不是简单缩小桌面。两端都显示本地化时间、公开区域、结构化价格、format、语言确认状态、余位/候补和真实 organizer trust；无 cover 使用类别占位，不造摄影图。
 
 - [ ] **Step 4: 懒加载 MapLibre 适配层**
 
@@ -654,6 +704,10 @@ git commit -m "feat(web): complete registration and itinerary journey"
 
 ## Task 7: 修复 iOS 每 Tab 独立导航与 Gate 意图恢复
 
+**Native visual reference (read before RED):**
+
+- `docs/design/core-journey/ios26-native-visual-spec.md`
+
 **Files:**
 
 - Modify: `Spott/App/AppModel.swift`
@@ -683,6 +737,8 @@ git commit -m "feat(web): complete registration and itinerary journey"
 
 `AppRootView` 的五个 `NavigationStack` 全部绑定对应 path 并注册同一 destination。删除 `discoveryPath` 单路径和所有绕过 Router 的 append。
 
+保留 iOS 26 系统 `TabView` 与原生 tab bar，不实现移动 Web 的自定义 dock；iPhone 滚动时使用 `.tabBarMinimizeBehavior(.onScrollDown)`。系统导航、返回手势、toolbar、sheet 和 safe area 行为不得用网页式自定义壳替代。
+
 `GateView` 在真实 challenge 请求返回后，仅在 `#if DEBUG` 且响应含 `developmentCode` 时把该值写入验证码输入 state；Release 不读取、不显示、不自动填充 OTP。Web 已有同等 development-only 自动填充。这样本地/XCUITest 仍点击真实发送与验证动作，不需要测试专用认证入口。
 
 - [ ] **Step 3: 验证路由 Green 并提交**
@@ -696,6 +752,10 @@ git commit -m "fix(ios): preserve navigation and registration intent"
 ---
 
 ## Task 8: 实现 iOS 真实发现、筛选与 MapKit
+
+**Native visual reference (read before RED):**
+
+- `docs/design/core-journey/ios26-native-visual-spec.md`
 
 **Files:**
 
@@ -730,9 +790,11 @@ git commit -m "fix(ios): preserve navigation and registration intent"
 
 Store 取消旧 Task；失败且已有内容时保留列表并显示刷新 banner；客户端不再按 category/date/availability 过滤 page.items。
 
-- [ ] **Step 3: 重组原生发现 UI**
+- [ ] **Step 3: 重组 iOS 26 原生发现 UI**
 
-首屏是紧凑 top bar、搜索和横向 chips，随后立即出现真实活动卡。卡片使用结构化 format/language/fee/trust/status；字体改为语义 Dynamic Type。加载、空、错误、离线统一状态组件。
+首屏使用系统 navigation/search/toolbar、横向高价值 filters，随后立即出现真实活动内容；不复制移动 Web 顶栏和底部 dock。卡片使用结构化 format/language/fee/trust/status；字体改为语义 Dynamic Type。加载、空、错误、离线统一为原生状态组件。
+
+系统 `TabView`、navigation bar、sheet 和 menu 自带 iOS 26 Liquid Glass。仅对浮动 filter cluster、地图/列表控件等少量交互 chrome 在 `GlassEffectContainer` 内使用 `.glassEffect(.regular.interactive(), in: ...)` 或 `.buttonStyle(.glass)`；内容卡保持清晰语义表面，禁止全屏玻璃卡堆叠。
 
 - [ ] **Step 4: MapKit 只使用真实坐标**
 
@@ -749,6 +811,10 @@ git commit -m "feat(ios): deliver real discovery and map"
 ---
 
 ## Task 9: 实现 iOS 详情、报名与行程闭环
+
+**Native visual reference (read before RED):**
+
+- `docs/design/core-journey/ios26-native-visual-spec.md`
 
 **Files:**
 
@@ -772,7 +838,7 @@ git commit -m "feat(ios): deliver real discovery and map"
 
 - [ ] **Step 2: 实现详情事实区与安全区 CTA**
 
-保持标题、时间、公开地点、format、语言、费用、容量在首屏可扫描。Action Bar 使用 `.safeAreaInset(edge: .bottom)`，不会覆盖说明最后一段；只显示 `EventCTAState` 推导的一个主动作。
+保持标题、时间、公开地点、format、语言、费用、容量在首屏可扫描。Action Bar 使用 `.safeAreaInset(edge: .bottom)`，不会覆盖说明最后一段；只显示 `EventCTAState` 推导的一个主动作。主动作采用 iOS 26 原生 prominent glass button，次动作使用系统 glass/toolbar 样式，不自绘网页式 sticky bar。
 
 - [ ] **Step 3: 实现原生报名表单和确认态**
 

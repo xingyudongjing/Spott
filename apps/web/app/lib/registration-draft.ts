@@ -1,4 +1,4 @@
-export const REGISTRATION_DRAFT_SCHEMA_VERSION = 1 as const;
+export const REGISTRATION_DRAFT_SCHEMA_VERSION = 2 as const;
 
 export type RegistrationStep = "details" | "review";
 export type RegistrationAnswer = string | boolean;
@@ -7,6 +7,7 @@ export interface RegistrationDraft {
   schemaVersion: typeof REGISTRATION_DRAFT_SCHEMA_VERSION;
   eventId: string;
   eventVersion: number;
+  ownerUserId: string | null;
   partySize: number;
   answers: Record<string, RegistrationAnswer>;
   attendeeNote: string;
@@ -27,13 +28,19 @@ export function loadRegistrationDraft(
   storage: DraftStorage,
   eventId: string,
   eventVersion: number,
+  ownerUserId: string | null,
 ): RegistrationDraft | null {
   const key = registrationDraftKey(eventId, eventVersion);
   try {
+    storage.removeItem(`spott.web.registration-draft.v1.${eventId}.v${eventVersion}`);
     const raw = storage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as unknown;
     if (!isRegistrationDraft(parsed, eventId, eventVersion)) {
+      storage.removeItem(key);
+      return null;
+    }
+    if (parsed.ownerUserId !== null && parsed.ownerUserId !== ownerUserId) {
       storage.removeItem(key);
       return null;
     }
@@ -85,6 +92,7 @@ function isRegistrationDraft(
     value.schemaVersion !== REGISTRATION_DRAFT_SCHEMA_VERSION
     || value.eventId !== eventId
     || value.eventVersion !== eventVersion
+    || !(value.ownerUserId === null || typeof value.ownerUserId === "string")
     || !Number.isInteger(value.partySize)
     || Number(value.partySize) < 1
     || typeof value.attendeeNote !== "string"

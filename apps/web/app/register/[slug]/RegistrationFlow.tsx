@@ -1,331 +1,379 @@
-'use client';
+"use client";
 
-import Link from 'next/link';
-import { useEffect, useState } from 'react';
-import type { FormEvent } from 'react';
-import type { EventView } from '../../lib/demo-data';
-import { eventDate, eventTime } from '../../lib/format';
-import { trackProductEvent } from '../../lib/analytics';
-import { apiRequest, errorMessage, readSession, type RegistrationView } from '../../lib/client-api';
-import { useI18n } from '../../components/I18nProvider';
+import Link from "next/link";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
-interface Quote {
-  id: string;
-  amount: number;
-  currency: 'POINTS';
-  expiresAt: string;
-}
+import { useI18n } from "../../components/I18nProvider";
+import { APIError, apiRequest, errorMessage, readSession, type RegistrationView } from "../../lib/client-api";
+import type { EventDetail } from "../../lib/event-contract";
+import { resolveEventCTA } from "../../lib/event-cta";
+import { fetchEvent } from "../../lib/events-api";
+import {
+  clearRegistrationDraft,
+  gateDestination,
+  loadRegistrationDraft,
+  REGISTRATION_DRAFT_SCHEMA_VERSION,
+  saveRegistrationDraft,
+  type RegistrationAnswer,
+  type RegistrationStep,
+} from "../../lib/registration-draft";
+import { RegistrationConfirmation } from "./RegistrationConfirmation";
+import { DetailsForm, RegistrationUnavailable, ReviewForm } from "./RegistrationForms";
+import styles from "./RegistrationFlow.module.css";
+import {
+  registrationPartyLimit,
+  type RegistrationFieldErrors,
+  type RegistrationQuote,
+} from "./registration-model";
 
-export function RegistrationFlow({ event }: { event: EventView }) {
-  const { locale, t } = useI18n();
-  const [accepted, setAccepted] = useState(event.fee?.isFree ?? false);
+export { RegistrationConfirmation, registrationPartyLimit };
+
+export function RegistrationFlow({
+  event,
+  navigate,
+}: {
+  event: EventDetail;
+  navigate?: (destination: string) => void;
+}) {
+  const { t } = useI18n();
+  const [liveEvent, setLiveEvent] = useState(event);
+  const [gateReady, setGateReady] = useState(false);
+  const [ownerUserId, setOwnerUserId] = useState<string | null>(null);
+  const [step, setStep] = useState<RegistrationStep>("details");
   const [partySize, setPartySize] = useState(1);
-  const [answers, setAnswers] = useState<Record<string, string | boolean>>({});
-  const [attendeeNote, setAttendeeNote] = useState('');
-  const [quote, setQuote] = useState<Quote | null>(null);
+  const [answers, setAnswers] = useState<Record<string, RegistrationAnswer>>({});
+  const [attendeeNote, setAttendeeNote] = useState("");
+  const [acceptedTerms, setAcceptedTerms] = useState(event.fee?.isFree ?? true);
+  const [idempotencyKey, setIdempotencyKey] = useState("");
+  const [quote, setQuote] = useState<RegistrationQuote | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
   const [result, setResult] = useState<RegistrationView | null>(null);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState('');
-  const full = event.capacity > 0 && event.confirmedCount >= event.capacity;
+  const [message, setMessage] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<RegistrationFieldErrors>({});
+  const [needsReconfirmation, setNeedsReconfirmation] = useState(false);
+  const [reconfirmed, setReconfirmed] = useState(false);
+  const restoredOnce = useRef(false);
+  const submitting = useRef(false);
+  const draftVersions = useRef(new Set([event.version]));
+
+  const full = liveEvent.capacity > 0 && liveEvent.availableCapacity === 0;
+  const partyLimit = registrationPartyLimit(liveEvent);
+  const registrationCTA = resolveEventCTA(liveEvent, {
+    authenticated: ownerUserId !== null,
+    phoneVerified: ownerUserId !== null,
+  });
 
   useEffect(() => {
+    if (restoredOnce.current) return;
+    restoredOnce.current = true;
     const session = readSession();
-    const path = `/register/${event.publicSlug}`;
-    if (!session) window.location.replace(`/login?returnTo=${encodeURIComponent(path)}`);
-    else if (!session.user.phoneVerified)
-      window.location.replace(`/phone-verification?returnTo=${encodeURIComponent(path)}`);
-  }, [event.publicSlug]);
+    const currentOwnerUserId = session?.user.id ?? null;
+    const stored = loadRegistrationDraft(window.sessionStorage, event.id, event.version, currentOwnerUserId);
+    const key = stored?.idempotencyKey ?? window.crypto.randomUUID();
+    setOwnerUserId(currentOwnerUserId);
+    if (stored) {
+      setPartySize(Math.min(stored.partySize, registrationPartyLimit(event)));
+      setAnswers(stored.answers);
+      setAttendeeNote(stored.attendeeNote);
+      setAcceptedTerms(stored.acceptedTerms);
+      setStep(stored.step);
+    }
+    setIdempotencyKey(key);
+    const returnTo = `${window.location.pathname}${window.location.search}`;
+    saveRegistrationDraft(window.sessionStorage, {
+      ...(stored ?? {
+        partySize: 1,
+        answers: {},
+        attendeeNote: "",
+        acceptedTerms: event.fee?.isFree ?? true,
+        step: "details",
+        updatedAt: new Date().toISOString(),
+      }),
+      schemaVersion: REGISTRATION_DRAFT_SCHEMA_VERSION,
+      eventId: event.id,
+      eventVersion: event.version,
+      ownerUserId: currentOwnerUserId,
+      idempotencyKey: key,
+    });
+    const gate = gateDestination(readSession(), returnTo);
+    if (gate) {
+      (navigate ?? ((destination: string) => window.location.replace(destination)))(gate);
+      return;
+    }
+    setGateReady(true);
+    if (
+      stored?.step === "review"
+      && resolveEventCTA(event, { authenticated: true, phoneVerified: true }).intent === "register"
+    ) {
+      void requestFreshQuote(event.id).catch((error) => setMessage(errorMessage(error)));
+    }
+  }, [event, navigate]);
 
-  async function submit(eventSubmit: FormEvent) {
-    eventSubmit.preventDefault();
-    if (!accepted) {
-      setMessage('请先确认已阅读线下费用与退款边界。');
-      return;
-    }
-    const missingQuestion = (event.registrationQuestions ?? []).find(
-      (question) =>
-        question.required &&
-        question.id &&
-        (answers[question.id] === undefined || answers[question.id] === ''),
-    );
-    if (missingQuestion) {
-      setMessage(
-        locale === 'ja'
-          ? `必須項目に回答してください：${missingQuestion.prompt}`
-          : locale === 'en'
-            ? `Please answer: ${missingQuestion.prompt}`
-            : `请回答必填问题：${missingQuestion.prompt}`,
-      );
-      return;
-    }
-    setBusy(true);
-    setMessage('');
+  useEffect(() => {
+    if (!gateReady || !idempotencyKey || result) return;
+    saveRegistrationDraft(window.sessionStorage, {
+      schemaVersion: REGISTRATION_DRAFT_SCHEMA_VERSION,
+      eventId: liveEvent.id,
+      eventVersion: liveEvent.version,
+      ownerUserId,
+      partySize,
+      answers,
+      attendeeNote,
+      acceptedTerms,
+      step,
+      idempotencyKey,
+      updatedAt: new Date().toISOString(),
+    });
+  }, [acceptedTerms, answers, attendeeNote, gateReady, idempotencyKey, liveEvent.id, liveEvent.version, ownerUserId, partySize, result, step]);
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const update = () => {
+      const inset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+      document.documentElement.style.setProperty("--registration-keyboard-offset", `${inset}px`);
+    };
+    update();
+    viewport.addEventListener("resize", update);
+    viewport.addEventListener("scroll", update);
+    return () => {
+      viewport.removeEventListener("resize", update);
+      viewport.removeEventListener("scroll", update);
+      document.documentElement.style.removeProperty("--registration-keyboard-offset");
+    };
+  }, []);
+
+  const requestQuote = useCallback(async (force = false) => {
+    if (!force && quote && Date.parse(quote.expiresAt) > Date.now() + 5_000) return quote;
+    setQuoteLoading(true);
     try {
-      const activeQuote =
-        quote ??
-        (await apiRequest<Quote>('/quotes', {
-          method: 'POST',
-          authenticated: true,
-          body: JSON.stringify({ purpose: 'registration', resourceId: event.id }),
-        }));
-      setQuote(activeQuote);
-      const registration = await apiRequest<RegistrationView>(`/events/${event.id}/registrations`, {
-        method: 'POST',
+      const next = await apiRequest<RegistrationQuote>("/quotes", {
+        method: "POST",
         authenticated: true,
-        idempotent: true,
+        body: JSON.stringify({ purpose: "registration", resourceId: liveEvent.id }),
+      });
+      setQuote(next);
+      return next;
+    } finally {
+      setQuoteLoading(false);
+    }
+  }, [liveEvent.id, quote]);
+
+  function updateInput(update: () => void) {
+    update();
+    setQuote(null);
+    setNeedsReconfirmation(false);
+    setReconfirmed(false);
+    setMessage("");
+  }
+
+  function validateDetails() {
+    const errors: RegistrationFieldErrors = {};
+    if (!Number.isInteger(partySize) || partySize < 1 || partySize > partyLimit) {
+      errors.partySize = t("registration.partySizeError", { count: partyLimit });
+    }
+    for (const question of liveEvent.registrationQuestions) {
+      const answer = answers[question.id];
+      if (question.required && (answer === undefined || answer === "")) {
+        errors[`answers.${question.id}`] = t("registration.fieldRequired");
+      }
+    }
+    if (liveEvent.fee && !liveEvent.fee.isFree && !acceptedTerms) {
+      errors.acceptedTerms = t("registration.acceptError");
+    }
+    setFieldErrors(errors);
+    const first = Object.keys(errors)[0];
+    if (first) {
+      setMessage(t("registration.checkErrors"));
+      focusField(first);
+      return false;
+    }
+    setMessage("");
+    return true;
+  }
+
+  async function review(submission: FormEvent) {
+    submission.preventDefault();
+    if (!validateDetails()) return;
+    setStep("review");
+    try {
+      await requestQuote();
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
+
+  async function retryQuote() {
+    setMessage("");
+    try {
+      await requestQuote(true);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
+
+  async function submitRegistration(submission: FormEvent) {
+    submission.preventDefault();
+    if (submitting.current) return;
+    if (needsReconfirmation && !reconfirmed) {
+      setMessage(t("registration.reconfirmRequired"));
+      return;
+    }
+    submitting.current = true;
+    setBusy(true);
+    setMessage("");
+    try {
+      const activeQuote = await requestQuote();
+      const registration = await apiRequest<RegistrationView>(`/events/${liveEvent.id}/registrations`, {
+        method: "POST",
+        authenticated: true,
+        idempotencyKey,
         body: JSON.stringify({
           partySize,
           quoteId: activeQuote.id,
           joinWaitlistIfFull: full,
           attendeeNote: attendeeNote.trim() || undefined,
-          answers: Object.fromEntries(
-            Object.entries(answers).filter(([id]) => /^[0-9a-f-]{36}$/i.test(id)),
-          ),
+          answers,
         }),
       });
+      clearLogicalDrafts();
       setResult(registration);
-      void trackProductEvent('registration_completed', {
-        eventId: event.id,
-        status: registration.status,
-        partySize,
-        waitlisted: registration.status === 'waitlisted',
-      });
     } catch (error) {
-      setQuote(null);
-      setMessage(errorMessage(error));
+      if (error instanceof APIError && error.body.fieldErrors?.length) {
+        const errors = Object.fromEntries(error.body.fieldErrors.map((item) => [item.field, item.message]));
+        setFieldErrors(errors);
+        setStep("details");
+        setMessage(t("registration.checkErrors"));
+        focusField(error.body.fieldErrors[0]!.field);
+      } else if (error instanceof APIError && error.status === 409) {
+        await refreshAfterConflict();
+      } else {
+        setMessage(errorMessage(error));
+      }
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
 
-  if (result) {
-    const waiting = result.status === 'waitlisted';
-    return (
-      <main className="flow-page">
-        <div className="flow-shell narrow">
-          <section className="flow-card success-card">
-            <span className="success-mark" aria-hidden="true">
-              ✓
-            </span>
-            <span className="section-number">REGISTRATION / COMPLETE</span>
-            <h1>{waiting ? t('registration.waitlistSuccess') : t('registration.success')}</h1>
-            <p className="lead">
-              {waiting
-                ? locale === 'ja'
-                  ? '空席が出たら Web と iOS の両方でお知らせします。'
-                  : locale === 'en'
-                    ? 'We’ll notify you on Web and iOS when a spot opens.'
-                    : '有名额释放时，我们会同时在 Web 和 iOS 通知你。'
-                : locale === 'ja'
-                  ? 'Web と iOS の「参加予定」に追加されました。'
-                  : locale === 'en'
-                    ? 'This event is now in My events on Web and iOS.'
-                    : '这场活动已经出现在你的 Web 与 iOS「我的活动」中。'}
-            </p>
-            <div className="registration-summary">
-              <div>
-                <strong>{event.title}</strong>
-                <p>
-                  {eventDate(event.startsAt, locale)} ·{' '}
-                  {eventTime(event.startsAt, event.endsAt, locale)}
-                </p>
-                <p>{event.publicArea}</p>
-              </div>
-              <span>
-                {waiting
-                  ? `${t('event.waitlist')} ${result.waitlistPosition ?? ''}`
-                  : locale === 'ja'
-                    ? '確定'
-                    : locale === 'en'
-                      ? 'Confirmed'
-                      : '已确认'}
-              </span>
-            </div>
-            <Link className="primary-action" href="/me/events">
-              {t('event.viewRegistration')}
-            </Link>
-            <Link className="secondary-action" href={`/e/${event.publicSlug}`}>
-              {locale === 'ja'
-                ? 'イベントに戻る'
-                : locale === 'en'
-                  ? 'Back to event'
-                  : '返回活动页'}
-            </Link>
-          </section>
-        </div>
-      </main>
-    );
+  async function refreshAfterConflict() {
+    try {
+      const session = readSession();
+      const refreshed = await fetchEvent(liveEvent.id, session ? { accessToken: session.accessToken } : undefined);
+      draftVersions.current.add(refreshed.version);
+      setLiveEvent(refreshed);
+      setPartySize((current) => Math.min(current, registrationPartyLimit(refreshed)));
+      setQuote(null);
+      setNeedsReconfirmation(true);
+      setReconfirmed(false);
+      setMessage(t("registration.changed"));
+      await requestFreshQuote(refreshed.id);
+    } catch (refreshError) {
+      setMessage(errorMessage(refreshError));
+    }
   }
 
+  async function requestFreshQuote(eventId: string) {
+    setQuoteLoading(true);
+    try {
+      const next = await apiRequest<RegistrationQuote>("/quotes", {
+        method: "POST",
+        authenticated: true,
+        body: JSON.stringify({ purpose: "registration", resourceId: eventId }),
+      });
+      setQuote(next);
+    } finally {
+      setQuoteLoading(false);
+    }
+  }
+
+  function clearLogicalDrafts() {
+    for (const version of draftVersions.current) {
+      clearRegistrationDraft(window.sessionStorage, liveEvent.id, version);
+    }
+  }
+
+  function restartRegistration() {
+    clearLogicalDrafts();
+    draftVersions.current = new Set([liveEvent.version]);
+    setPartySize(1);
+    setAnswers({});
+    setAttendeeNote("");
+    setAcceptedTerms(liveEvent.fee?.isFree ?? true);
+    setStep("details");
+    setIdempotencyKey(window.crypto.randomUUID());
+    setQuote(null);
+    setMessage("");
+    setFieldErrors({});
+    setNeedsReconfirmation(false);
+    setReconfirmed(false);
+  }
+
+  function focusField(field: string) {
+    window.setTimeout(() => {
+      const id = field === "acceptedTerms"
+        ? "registration-terms"
+        : field.startsWith("answers.")
+          ? `registration-answer-${field.slice("answers.".length)}`
+          : `registration-${field}`;
+      document.getElementById(id)?.focus();
+    }, 0);
+  }
+
+  if (!gateReady) {
+    return <main className={styles.page}><p className={styles.gateStatus} role="status">{t("registration.gateLoading")}</p></main>;
+  }
+  if (result) return <RegistrationConfirmation event={liveEvent} registration={result} />;
+  if (registrationCTA.intent !== "register") return <RegistrationUnavailable event={liveEvent} />;
+
   return (
-    <main className="flow-page">
-      <div className="flow-shell">
-        <div className="flow-progress">
-          <span className="active" />
-          <span className="active" />
-          <span />
+    <main className={styles.page}>
+      <header className={styles.header}>
+        <Link className={styles.wordmark} href="/discover">Spott</Link>
+        <Link className={styles.back} href={`/e/${liveEvent.publicSlug}`}>← {t("registration.backEvent")}</Link>
+      </header>
+      <div className={styles.shell}>
+        <div className={styles.progress} aria-label={t("registration.progress")}>
+          <span aria-current={step === "details" ? "step" : undefined}>1</span>
+          <i />
+          <span aria-current={step === "review" ? "step" : undefined}>2</span>
         </div>
-        <Link className="back-link" href={`/e/${event.publicSlug}`}>
-          ← {locale === 'ja' ? 'イベントに戻る' : locale === 'en' ? 'Back to event' : '返回活动'}
-        </Link>
-        <form className="flow-card" onSubmit={submit}>
-          <span className="section-number">REGISTRATION / CONFIRM</span>
-          <h1>{full ? t('registration.waitlistTitle') : t('registration.title')}</h1>
-          <div className="registration-summary">
-            <div>
-              <strong>{event.title}</strong>
-              <p>
-                {eventDate(event.startsAt, locale)} ·{' '}
-                {eventTime(event.startsAt, event.endsAt, locale)}
-              </p>
-              <p>{event.publicArea}</p>
-            </div>
-            <span>{event.priceLabel}</span>
-          </div>
-          <label className="form-field">
-            {locale === 'ja' ? '参加人数' : locale === 'en' ? 'Party size' : '参加人数'}
-            <select
-              value={partySize}
-              onChange={(input) => setPartySize(Number(input.target.value))}
-            >
-              {Array.from({ length: Math.min(10, Math.max(1, full ? event.capacity : event.capacity - event.confirmedCount)) }, (_, index) => (
-                <option value={index + 1} key={index + 1}>
-                  {index + 1} {t('common.people')}
-                </option>
-              ))}
-            </select>
-          </label>
-          {Boolean(event.attendeeRequirements) && (
-            <aside className="registration-requirements">
-              <strong>
-                {locale === 'ja'
-                  ? '参加条件'
-                  : locale === 'en'
-                    ? 'Participation requirements'
-                    : '参与条件'}
-              </strong>
-              <p>{event.attendeeRequirements}</p>
-            </aside>
-          )}
-          {(event.registrationQuestions ?? []).some((question) => question.id) && (
-            <fieldset className="registration-questions">
-              <legend>{t('registration.questions')}</legend>
-              {event.registrationQuestions
-                ?.filter((question) => question.id)
-                .map((question) => (
-                  <label className="form-field" key={question.id}>
-                    {question.prompt}{' '}
-                    {question.required && <small>{t('registration.required')}</small>}
-                    {question.kind === 'single_choice' ? (
-                      <select
-                        required={question.required}
-                        value={String(answers[question.id!] ?? '')}
-                        onChange={(input) =>
-                          setAnswers((current) => ({
-                            ...current,
-                            [question.id!]: input.target.value,
-                          }))
-                        }
-                      >
-                        <option value="">—</option>
-                        {question.options.map((option) => (
-                          <option key={option}>{option}</option>
-                        ))}
-                      </select>
-                    ) : question.kind === 'boolean' ? (
-                      <select
-                        required={question.required}
-                        value={
-                          answers[question.id!] === undefined ? '' : String(answers[question.id!])
-                        }
-                        onChange={(input) =>
-                          setAnswers((current) => ({
-                            ...current,
-                            [question.id!]: input.target.value === 'true',
-                          }))
-                        }
-                      >
-                        <option value="">—</option>
-                        <option value="true">
-                          {locale === 'ja' ? 'はい' : locale === 'en' ? 'Yes' : '是'}
-                        </option>
-                        <option value="false">
-                          {locale === 'ja' ? 'いいえ' : locale === 'en' ? 'No' : '否'}
-                        </option>
-                      </select>
-                    ) : (
-                      <textarea
-                        required={question.required}
-                        maxLength={1000}
-                        value={String(answers[question.id!] ?? '')}
-                        onChange={(input) =>
-                          setAnswers((current) => ({
-                            ...current,
-                            [question.id!]: input.target.value,
-                          }))
-                        }
-                      />
-                    )}
-                  </label>
-                ))}
-            </fieldset>
-          )}
-          <label className="form-field">
-            {t('registration.note')}
-            <textarea
-              value={attendeeNote}
-              onChange={(input) => setAttendeeNote(input.target.value)}
-              maxLength={1000}
-              placeholder={t('registration.notePlaceholder')}
-            />
-          </label>
-          <label className="check-row">
-            <input
-              type="checkbox"
-              checked={accepted}
-              onChange={(input) => setAccepted(input.target.checked)}
-            />
-            <span>
-              <strong>{t('registration.acceptFee')}</strong>
-              <small>{event.fee?.boundaryStatement ?? ''}</small>
-            </span>
-          </label>
-          <div className="points-confirm">
-            <div>
-              <span>
-                {locale === 'ja' ? '使用ポイント' : locale === 'en' ? 'Points used' : '本次消耗'}
-              </span>
-              <strong>
-                {quote
-                  ? `${quote.amount} ${locale === 'en' ? 'points' : '积分'}`
-                  : locale === 'ja'
-                    ? '送信時に最新価格を取得'
-                    : locale === 'en'
-                      ? 'Live price at confirmation'
-                      : '提交时获取实时积分价格'}
-              </strong>
-            </div>
-            <p>
-              {locale === 'ja'
-                ? 'キャンセルや重要変更時は規定に従って返還されます。参加費とは別です。'
-                : locale === 'en'
-                  ? 'Points are returned according to the cancellation rules. Offline event fees are separate.'
-                  : '活动取消或关键变化后按规则退回。线下活动费不从积分扣除。'}
-            </p>
-          </div>
-          {message && (
-            <p className="form-message" role="alert">
-              {message}
-            </p>
-          )}
-          <button className="primary-action" disabled={busy}>
-            {busy
-              ? t('registration.submitting')
-              : full
-                ? t('registration.submitWaitlist')
-                : t('registration.submit')}
-          </button>
-        </form>
+        {step === "details" ? (
+          <DetailsForm
+            event={liveEvent}
+            partyLimit={partyLimit}
+            partySize={partySize}
+            answers={answers}
+            attendeeNote={attendeeNote}
+            acceptedTerms={acceptedTerms}
+            fieldErrors={fieldErrors}
+            message={message}
+            onPartySize={(value) => updateInput(() => setPartySize(value))}
+            onAnswer={(id, value) => updateInput(() => setAnswers((current) => ({ ...current, [id]: value })))}
+            onNote={(value) => updateInput(() => setAttendeeNote(value))}
+            onAccepted={(value) => updateInput(() => setAcceptedTerms(value))}
+            onSubmit={review}
+          />
+        ) : (
+          <ReviewForm
+            event={liveEvent}
+            partySize={partySize}
+            answers={answers}
+            attendeeNote={attendeeNote}
+            quote={quote}
+            quoteLoading={quoteLoading}
+            busy={busy}
+            message={message}
+            needsReconfirmation={needsReconfirmation}
+            reconfirmed={reconfirmed}
+            onReconfirmed={setReconfirmed}
+            onBack={() => setStep("details")}
+            onRestart={restartRegistration}
+            onRetryQuote={() => void retryQuote()}
+            onSubmit={submitRegistration}
+          />
+        )}
       </div>
     </main>
   );

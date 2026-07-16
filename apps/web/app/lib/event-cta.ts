@@ -1,5 +1,17 @@
 import type { EventSummary } from "./event-contract";
 
+export type EventCTAEvent = Pick<
+  EventSummary,
+  | "status"
+  | "viewerRegistration"
+  | "capacity"
+  | "availableCapacity"
+  | "deadlineAt"
+  | "waitlistEnabled"
+  | "availableActions"
+  | "registrationMode"
+>;
+
 export type EventCTAKind =
   | "event_unavailable"
   | "accept_waitlist"
@@ -29,7 +41,7 @@ export interface EventCTASession {
   phoneVerified: boolean;
 }
 
-export function resolveEventCTA(event: EventSummary, session: EventCTASession, now = new Date()): EventCTA {
+export function resolveEventCTA(event: EventCTAEvent, session: EventCTASession, now = new Date()): EventCTA {
   if (["cancelled", "ended", "removed"].includes(event.status)) {
     return disabled("event_unavailable");
   }

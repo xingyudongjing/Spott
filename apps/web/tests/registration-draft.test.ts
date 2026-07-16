@@ -4,6 +4,7 @@ import {
   clearRegistrationDraft,
   gateDestination,
   loadRegistrationDraft,
+  REGISTRATION_DRAFT_SCHEMA_VERSION,
   registrationDraftKey,
   saveRegistrationDraft,
   type RegistrationDraft,
@@ -12,9 +13,10 @@ import {
 const eventId = "019b0000-0000-7000-8100-000000000001";
 
 const draft: RegistrationDraft = {
-  schemaVersion: 1,
+  schemaVersion: REGISTRATION_DRAFT_SCHEMA_VERSION,
   eventId,
   eventVersion: 7,
+  ownerUserId: "019b0000-0000-7000-8000-000000000001",
   partySize: 3,
   answers: {
     "019b0000-0000-7000-8300-000000000001": "Vegetarian",
@@ -34,21 +36,51 @@ describe("versioned registration draft", () => {
     saveRegistrationDraft(window.sessionStorage, draft);
 
     expect(registrationDraftKey(eventId, 7)).toContain(`${eventId}.v7`);
-    expect(loadRegistrationDraft(window.sessionStorage, eventId, 7)).toEqual(draft);
+    expect(loadRegistrationDraft(window.sessionStorage, eventId, 7, draft.ownerUserId)).toEqual(draft);
   });
 
   test("never restores a draft for another event contract version", () => {
     saveRegistrationDraft(window.sessionStorage, draft);
 
-    expect(loadRegistrationDraft(window.sessionStorage, eventId, 8)).toBeNull();
-    expect(loadRegistrationDraft(window.sessionStorage, "019b0000-0000-7000-8100-000000000002", 7)).toBeNull();
+    expect(loadRegistrationDraft(window.sessionStorage, eventId, 8, draft.ownerUserId)).toBeNull();
+    expect(loadRegistrationDraft(window.sessionStorage, "019b0000-0000-7000-8100-000000000002", 7, draft.ownerUserId)).toBeNull();
   });
 
   test("clears only the matching draft after a successful logical submission", () => {
     saveRegistrationDraft(window.sessionStorage, draft);
     clearRegistrationDraft(window.sessionStorage, eventId, 7);
 
-    expect(loadRegistrationDraft(window.sessionStorage, eventId, 7)).toBeNull();
+    expect(loadRegistrationDraft(window.sessionStorage, eventId, 7, draft.ownerUserId)).toBeNull();
+  });
+
+  test("keeps a draft through token refresh for the same owner", () => {
+    saveRegistrationDraft(window.sessionStorage, draft);
+
+    expect(loadRegistrationDraft(window.sessionStorage, eventId, 7, draft.ownerUserId)).toEqual(draft);
+  });
+
+  test("deletes another owner's private draft instead of restoring it", () => {
+    saveRegistrationDraft(window.sessionStorage, draft);
+
+    expect(loadRegistrationDraft(
+      window.sessionStorage,
+      eventId,
+      7,
+      "019b0000-0000-7000-8000-000000000002",
+    )).toBeNull();
+    expect(window.sessionStorage.getItem(registrationDraftKey(eventId, 7))).toBeNull();
+  });
+
+  test("allows an anonymous gate draft to be claimed by the account that returns", () => {
+    const anonymousDraft: RegistrationDraft = { ...draft, ownerUserId: null };
+    saveRegistrationDraft(window.sessionStorage, anonymousDraft);
+
+    expect(loadRegistrationDraft(
+      window.sessionStorage,
+      eventId,
+      7,
+      "019b0000-0000-7000-8000-000000000002",
+    )).toEqual(anonymousDraft);
   });
 
   test("returns the correct gate without mutating the return path", () => {
@@ -67,9 +99,9 @@ describe("versioned registration draft", () => {
       removeItem: () => { throw new DOMException("blocked"); },
     };
     expect(() => saveRegistrationDraft(blocked, draft)).not.toThrow();
-    expect(loadRegistrationDraft(blocked, eventId, 7)).toBeNull();
+    expect(loadRegistrationDraft(blocked, eventId, 7, draft.ownerUserId)).toBeNull();
 
     window.sessionStorage.setItem(registrationDraftKey(eventId, 7), "not-json");
-    expect(loadRegistrationDraft(window.sessionStorage, eventId, 7)).toBeNull();
+    expect(loadRegistrationDraft(window.sessionStorage, eventId, 7, draft.ownerUserId)).toBeNull();
   });
 });

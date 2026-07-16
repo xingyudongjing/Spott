@@ -7,10 +7,25 @@ import { useI18n } from "../../components/I18nProvider";
 import { trackProductEvent } from "../../lib/analytics";
 import { apiRequest, errorMessage, readSession } from "../../lib/client-api";
 import type { EventSummary } from "../../lib/event-contract";
-import { resolveEventCTA, type EventCTA } from "../../lib/event-cta";
+import { resolveEventCTA, type EventCTA, type EventCTAEvent } from "../../lib/event-cta";
 import styles from "./EventActions.module.css";
 
-export function EventActions({ event }: { event: EventSummary }) {
+type EventActionsEvent = EventCTAEvent & Pick<
+  EventSummary,
+  | "id"
+  | "publicSlug"
+  | "title"
+  | "description"
+  | "category"
+  | "region"
+  | "publicArea"
+  | "startsAt"
+  | "endsAt"
+  | "favorited"
+  | "organizer"
+>;
+
+export function EventActions({ event }: { event: EventActionsEvent }) {
   const { locale, t } = useI18n();
   const [session, setSession] = useState(() => readSession());
   const [favorited, setFavorited] = useState(event.favorited);
@@ -191,7 +206,7 @@ export function EventPrimaryAction({
   onAccept,
 }: {
   cta: EventCTA;
-  event: EventSummary;
+  event: Pick<EventSummary, "publicSlug">;
   busy: boolean;
   onAccept: (registrationId: string) => void;
 }) {

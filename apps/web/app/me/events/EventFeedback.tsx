@@ -3,13 +3,7 @@
 import { useState } from "react";
 import type { Locale } from "../../i18n/messages";
 import { apiRequest, errorMessage } from "../../lib/client-api";
-
-type FeedbackTag =
-  | "friendly"
-  | "well_organized"
-  | "clear_information"
-  | "safe"
-  | "would_join_again";
+import { feedbackCopy, type FeedbackTag } from "./feedback-copy";
 
 interface FeedbackResult {
   status: string;
@@ -133,7 +127,7 @@ export function EventFeedback({
                   checked={tags.includes(value)}
                   onChange={() => toggleTag(value)}
                 />
-                <span>{tagLabel(value, locale)}</span>
+                <span>{copy.tagsByValue[value]}</span>
               </label>
             ))}
           </fieldset>
@@ -170,80 +164,4 @@ export function EventFeedback({
       )}
     </div>
   );
-}
-
-function tagLabel(tag: FeedbackTag, locale: Locale): string {
-  const labels: Record<FeedbackTag, [string, string, string]> = {
-    friendly: ["氛围友好", "親しみやすい", "Friendly"],
-    well_organized: ["组织周到", "運営が丁寧", "Well organized"],
-    clear_information: ["信息清晰", "案内が明確", "Clear information"],
-    safe: ["让人安心", "安心できた", "Felt safe"],
-    would_join_again: ["愿意再参加", "また参加したい", "Would join again"],
-  };
-  return labels[tag][locale === "ja" ? 1 : locale === "en" ? 2 : 0];
-}
-
-function feedbackCopy(locale: Locale) {
-  if (locale === "ja")
-    return {
-      open: "参加後のフィードバック",
-      close: "フィードバックを閉じる",
-      privateEyebrow: "POST-EVENT / PRIVATE",
-      title: "体験を振り返る",
-      privacy: "回答は公開プロフィールに表示されません",
-      rating: "総合評価",
-      tags: "当てはまるもの",
-      comment: "主催者への改善提案（任意）",
-      placeholder: "次回がもっと良くなる具体的な提案を入力してください",
-      visibility: "コメントの共有範囲",
-      aggregate: "匿名集計にのみ利用",
-      hostOnly: "主催者に非公開フィードバックとして共有",
-      sending: "送信中…",
-      submit: "フィードバックを送信",
-      received: "フィードバックを受け付けました",
-      points: "{count}ポイントを付与しました",
-      review: "公開集計前にモデレーションされます",
-      edit: "1回だけ編集",
-    };
-  if (locale === "en")
-    return {
-      open: "Post-event feedback",
-      close: "Close feedback",
-      privateEyebrow: "POST-EVENT / PRIVATE",
-      title: "Reflect on the experience",
-      privacy: "Your response never appears on your public profile",
-      rating: "Overall rating",
-      tags: "What went well",
-      comment: "Private suggestion for the host (optional)",
-      placeholder: "Share one concrete idea that could make the next gathering better",
-      visibility: "Comment visibility",
-      aggregate: "Use only in anonymous aggregates",
-      hostOnly: "Share privately with the host",
-      sending: "Sending…",
-      submit: "Send feedback",
-      received: "Feedback received",
-      points: "You earned {count} points",
-      review: "It will be moderated before any aggregate is published",
-      edit: "Edit once",
-    };
-  return {
-    open: "活动后反馈",
-    close: "收起反馈",
-    privateEyebrow: "POST-EVENT / PRIVATE",
-    title: "回顾这次体验",
-    privacy: "回答不会出现在你的公开主页",
-    rating: "总体评价",
-    tags: "哪些方面做得好",
-    comment: "给主办方的私密改进建议（选填）",
-    placeholder: "写一条具体建议，让下一次见面更好",
-    visibility: "建议的使用方式",
-    aggregate: "只用于匿名汇总",
-    hostOnly: "作为私密反馈提供给主办方",
-    sending: "正在提交…",
-    submit: "提交反馈",
-    received: "反馈已收到",
-    points: "已获得 {count} 积分",
-    review: "内容审核通过后才会进入匿名汇总",
-    edit: "可再修改一次",
-  };
 }

@@ -108,6 +108,20 @@ describe("single-request itinerary", () => {
     expect(screen.getByText("Evening walk")).toBeInTheDocument();
   });
 
+  test.each([
+    ["online", "线上活动"],
+    ["in_person", "区域待确认"],
+  ])("renders the truthful fallback location for %s events", async (format, expectedLocation) => {
+    const payload = structuredClone(itineraryPage);
+    payload.items = [payload.items[0]!];
+    payload.items[0]!.event!.format = format;
+    payload.items[0]!.event!.publicArea = null;
+    apiRequestMock.mockResolvedValue(payload);
+    renderWithI18n(<MyEventsClient />);
+
+    expect(await screen.findByText(expectedLocation)).toBeInTheDocument();
+  });
+
   test("renders one eligible primary action and keeps cancellation in an accessible menu", async () => {
     const user = userEvent.setup();
     const payload = structuredClone(itineraryPage);

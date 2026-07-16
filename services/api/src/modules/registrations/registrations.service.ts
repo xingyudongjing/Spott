@@ -8,6 +8,56 @@ import { IdempotencyService } from '../../platform/idempotency.js';
 import type { AuthenticatedUser } from '../../platform/request-context.js';
 import { PointsService } from '../points/points.service.js';
 
+const MAX_CHECKIN_WINDOW_MINUTES = 525_600;
+
+const CHECKIN_WINDOW_CTES = `
+checkin_clock AS (
+  SELECT clock_timestamp() AS server_time
+), active_checkin_config AS (
+  SELECT DISTINCT ON (revision.key)
+    revision.key, revision.value_json
+  FROM admin.config_revisions revision
+  CROSS JOIN checkin_clock
+  WHERE revision.key IN (
+      'checkin.window.before_minutes',
+      'checkin.window.after_minutes'
+    )
+    AND revision.state = 'active'
+    AND (revision.effective_from IS NULL
+      OR revision.effective_from <= checkin_clock.server_time)
+    AND (revision.effective_to IS NULL
+      OR revision.effective_to > checkin_clock.server_time)
+  ORDER BY revision.key, revision.version DESC
+), parsed_checkin_config AS (
+  SELECT config.key,
+    CASE
+      WHEN jsonb_typeof(config.value_json) IN ('number', 'string')
+        AND (config.value_json #>> '{}') ~ '^[0-9]{1,6}$'
+      THEN (config.value_json #>> '{}')::bigint
+      ELSE NULL
+    END AS minutes
+  FROM active_checkin_config config
+), checkin_window AS (
+  SELECT
+    COALESCE(
+      MAX(CASE
+        WHEN config.key = 'checkin.window.before_minutes'
+          AND config.minutes BETWEEN 0 AND ${MAX_CHECKIN_WINDOW_MINUTES}
+        THEN config.minutes
+      END),
+      60
+    ) AS before_minutes,
+    COALESCE(
+      MAX(CASE
+        WHEN config.key = 'checkin.window.after_minutes'
+          AND config.minutes BETWEEN 0 AND ${MAX_CHECKIN_WINDOW_MINUTES}
+        THEN config.minutes
+      END),
+      120
+    ) AS after_minutes
+  FROM parsed_checkin_config config
+)`;
+
 interface RegistrationRow {
   id: string;
   event_id: string;
@@ -555,38 +605,8 @@ export class RegistrationsService {
     const decodedCursor = this.decodeItineraryCursor(cursor);
     const safeLimit = Math.min(Math.max(limit, 1), 100);
     const result = await this.database.query<RegistrationItineraryRow>(
-      `WITH itinerary_clock AS (
-         SELECT clock_timestamp() AS server_time
-       ), active_checkin_config AS (
-         SELECT DISTINCT ON (revision.key)
-           revision.key, revision.value_json
-         FROM admin.config_revisions revision
-         CROSS JOIN itinerary_clock
-         WHERE revision.key IN (
-             'checkin.window.before_minutes',
-             'checkin.window.after_minutes'
-           )
-           AND revision.state = 'active'
-           AND (revision.effective_from IS NULL
-             OR revision.effective_from <= itinerary_clock.server_time)
-           AND (revision.effective_to IS NULL
-             OR revision.effective_to > itinerary_clock.server_time)
-         ORDER BY revision.key, revision.version DESC
-       ), checkin_window AS (
-         SELECT
-           COALESCE(
-             MAX((config.value_json #>> '{}')::bigint)
-               FILTER (WHERE config.key = 'checkin.window.before_minutes'),
-             60
-           ) AS before_minutes,
-           COALESCE(
-             MAX((config.value_json #>> '{}')::bigint)
-               FILTER (WHERE config.key = 'checkin.window.after_minutes'),
-             120
-           ) AS after_minutes
-         FROM active_checkin_config config
-       )
-       SELECT itinerary_clock.server_time, r.*,
+      `WITH ${CHECKIN_WINDOW_CTES}
+       SELECT checkin_clock.server_time, r.*,
          promotion.expires_at AS offer_expires_at,
          event.id AS itinerary_event_id,
          event.public_slug::text AS itinerary_public_slug,
@@ -606,12 +626,12 @@ export class RegistrationsService {
          (
            r.status = 'confirmed'
            AND event.id IS NOT NULL
-           AND itinerary_clock.server_time >= event.starts_at
+           AND checkin_clock.server_time >= event.starts_at
              - checkin_window.before_minutes * interval '1 minute'
-           AND itinerary_clock.server_time <= event.ends_at
+           AND checkin_clock.server_time <= event.ends_at
              + checkin_window.after_minutes * interval '1 minute'
          ) AS itinerary_checkin_eligible
-       FROM itinerary_clock
+       FROM checkin_clock
        CROSS JOIN checkin_window
        LEFT JOIN events.registrations r
          ON r.user_id = $1
@@ -624,7 +644,7 @@ export class RegistrationsService {
          WHERE offer.registration_id = r.id
            AND offer.accepted_at IS NULL
            AND offer.expired_at IS NULL
-           AND offer.expires_at > itinerary_clock.server_time
+           AND offer.expires_at > checkin_clock.server_time
          ORDER BY offer.offered_at DESC, offer.id DESC
          LIMIT 1
        ) promotion ON true
@@ -686,8 +706,18 @@ export class RegistrationsService {
       starts_at: Date;
       ends_at: Date;
       checkin_mode: string;
+      checkin_eligible: boolean;
     }>(
-      'SELECT organizer_id, status, starts_at, ends_at, checkin_mode FROM events.events WHERE id = $1',
+      `WITH ${CHECKIN_WINDOW_CTES}
+       SELECT event.organizer_id, event.status, event.starts_at, event.ends_at, event.checkin_mode,
+         checkin_clock.server_time >= event.starts_at
+           - checkin_window.before_minutes * interval '1 minute'
+         AND checkin_clock.server_time <= event.ends_at
+           + checkin_window.after_minutes * interval '1 minute'
+           AS checkin_eligible
+       FROM checkin_clock
+       CROSS JOIN checkin_window
+       JOIN events.events event ON event.id = $1`,
       [eventId],
     );
     const row = event.rows[0];
@@ -697,6 +727,9 @@ export class RegistrationsService {
     }
     if (!['published', 'registration_closed', 'in_progress', 'ended'].includes(row.status)) {
       throw new DomainError('CHECKIN_NOT_AVAILABLE', '当前活动状态不能生成签到码。', 422);
+    }
+    if (!row.checkin_eligible) {
+      throw new DomainError('CHECKIN_WINDOW_CLOSED', '当前不在签到时段内。', 422);
     }
     const mode = requestedMode ?? (row.checkin_mode === 'six_digit' ? 'six_digit' : 'dynamic_qr');
     const secret = randomBytes(24).toString('base64url');
@@ -764,25 +797,20 @@ export class RegistrationsService {
         method = 'dynamic_qr';
         const [codeId, secret] = input.token?.split('.') ?? [];
         if (codeId && secret) {
-          const code = await client.query<{
-            event_id: string;
-            token_hash: Buffer;
-            valid_from: Date;
-            valid_until: Date;
-            revoked_at: Date | null;
-          }>(
-            `SELECT event_id, token_hash, valid_from, valid_until, revoked_at
-             FROM events.dynamic_checkin_codes WHERE id = $1 AND mode = 'dynamic_qr'`,
-            [codeId],
+          const expectedHash = this.tokenHash(secret);
+          const code = await client.query<{ token_hash: Buffer }>(
+            `SELECT token_hash
+             FROM events.dynamic_checkin_codes
+             WHERE id = $1 AND event_id = $2 AND mode = 'dynamic_qr'
+               AND revoked_at IS NULL
+               AND valid_from <= clock_timestamp() AND valid_until > clock_timestamp()`,
+            [codeId, registration.event_id],
           );
           const token = code.rows[0];
           codeValid = Boolean(
             token &&
-            token.event_id === registration.event_id &&
-            !token.revoked_at &&
-            token.valid_from <= new Date() &&
-            token.valid_until > new Date() &&
-            timingSafeEqual(token.token_hash, this.tokenHash(secret)),
+            token.token_hash.length === expectedHash.length &&
+            timingSafeEqual(token.token_hash, expectedHash),
           );
         }
       }
@@ -1024,21 +1052,29 @@ export class RegistrationsService {
     allowCorrection: boolean,
     correctionOnly = false,
   ): Promise<'normal' | 'correction'> {
-    const result = await client.query<{ starts_at: Date; ends_at: Date }>(
-      'SELECT starts_at, ends_at FROM events.events WHERE id = $1',
+    const result = await client.query<{
+      normal_eligible: boolean;
+      correction_eligible: boolean;
+    }>(
+      `WITH ${CHECKIN_WINDOW_CTES}
+       SELECT
+         checkin_clock.server_time >= event.starts_at
+           - checkin_window.before_minutes * interval '1 minute'
+         AND checkin_clock.server_time <= event.ends_at
+           + checkin_window.after_minutes * interval '1 minute'
+           AS normal_eligible,
+         checkin_clock.server_time >= event.ends_at
+         AND checkin_clock.server_time <= event.ends_at + interval '48 hours'
+           AS correction_eligible
+       FROM checkin_clock
+       CROSS JOIN checkin_window
+       JOIN events.events event ON event.id = $1`,
       [eventId],
     );
-    const event = result.rows[0];
-    if (!event?.starts_at || !event.ends_at) throw new DomainError('EVENT_TIME_INVALID', '活动时间不完整。', 422);
-    const beforeMinutes = await this.points.configBigInt(client, 'checkin.window.before_minutes', 60n);
-    const afterMinutes = await this.points.configBigInt(client, 'checkin.window.after_minutes', 120n);
-    const now = Date.now();
-    const normalStart = event.starts_at.getTime() - Number(beforeMinutes) * 60_000;
-    const normalEnd = event.ends_at.getTime() + Number(afterMinutes) * 60_000;
-    if (!correctionOnly && now >= normalStart && now <= normalEnd) return 'normal';
-    if (allowCorrection && now >= event.ends_at.getTime() && now <= event.ends_at.getTime() + 48 * 3_600_000) {
-      return 'correction';
-    }
+    const eligibility = result.rows[0];
+    if (!eligibility) throw new DomainError('EVENT_TIME_INVALID', '活动时间不完整。', 422);
+    if (!correctionOnly && eligibility.normal_eligible) return 'normal';
+    if (allowCorrection && eligibility.correction_eligible) return 'correction';
     throw new DomainError('CHECKIN_WINDOW_CLOSED', '当前不在签到或 48 小时补签时段内。', 422);
   }
 
@@ -1100,7 +1136,7 @@ export class RegistrationsService {
     );
   }
 
-  private toView(row: RegistrationRow, checkInEligible = true): Record<string, unknown> {
+  private toView(row: RegistrationRow, checkInEligible = false): Record<string, unknown> {
     const actions: AvailableAction[] = [];
     if (['pending', 'confirmed', 'waitlisted', 'offered'].includes(row.status)) actions.push('cancelRegistration');
     if (row.status === 'offered') actions.push('register');

@@ -2,21 +2,63 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RegistrationsService } from './registrations.service.js';
 
 describe('RegistrationsService correction window', () => {
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
 
-  it('does not open post-event correction requests while the event is still running', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-07-15T10:30:00.000Z'));
+  it('uses one database clock and one active-config snapshot with inclusive normal boundaries', async () => {
     const client = {
       query: vi.fn().mockResolvedValue({
         rows: [{
-          starts_at: new Date('2026-07-15T10:00:00.000Z'),
-          ends_at: new Date('2026-07-15T11:00:00.000Z'),
+          normal_eligible: true,
+          correction_eligible: false,
         }],
       }),
     };
-    const points = { configBigInt: vi.fn().mockResolvedValue(60n) };
+    const points = { configBigInt: vi.fn().mockRejectedValue(new Error('must not load separately')) };
     const service = new RegistrationsService({} as never, {} as never, points as never);
+    const checkinWindow = service as unknown as {
+      assertCheckinWindow: (
+        transactionClient: typeof client,
+        eventId: string,
+        allowCorrection: boolean,
+        correctionOnly: boolean,
+      ) => Promise<'normal' | 'correction'>;
+    };
+
+    vi.spyOn(Date, 'now').mockImplementation(() => {
+      throw new Error('application clock must not determine the check-in window');
+    });
+
+    await expect(checkinWindow.assertCheckinWindow(
+      client,
+      '019b0000-0000-7000-8100-000000000001',
+      false,
+      false,
+    )).resolves.toBe('normal');
+
+    expect(client.query).toHaveBeenCalledOnce();
+    expect(points.configBigInt).not.toHaveBeenCalled();
+    const [sql, values] = client.query.mock.calls[0] as unknown as [string, unknown[]];
+    expect(values).toEqual(['019b0000-0000-7000-8100-000000000001']);
+    expect(sql).toContain('SELECT clock_timestamp() AS server_time');
+    expect(sql).toContain('revision.effective_from <= checkin_clock.server_time');
+    expect(sql).toContain('revision.effective_to > checkin_clock.server_time');
+    expect(sql).toContain('checkin_clock.server_time >= event.starts_at');
+    expect(sql).toContain('checkin_clock.server_time <= event.ends_at');
+  });
+
+  it('keeps correction closed while running even if the normal window is open', async () => {
+    const client = {
+      query: vi.fn().mockResolvedValue({
+        rows: [{
+          normal_eligible: true,
+          correction_eligible: false,
+        }],
+      }),
+    };
+    const service = new RegistrationsService({} as never, {} as never, {} as never);
     const checkinWindow = service as unknown as {
       assertCheckinWindow: (
         transactionClient: typeof client,
@@ -34,19 +76,16 @@ describe('RegistrationsService correction window', () => {
     )).rejects.toMatchObject({ code: 'CHECKIN_WINDOW_CLOSED' });
   });
 
-  it('accepts a correction request for 48 hours after the event ends', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-07-16T10:00:00.000Z'));
+  it('accepts the exact event-end boundary as a correction when requested', async () => {
     const client = {
       query: vi.fn().mockResolvedValue({
         rows: [{
-          starts_at: new Date('2026-07-15T10:00:00.000Z'),
-          ends_at: new Date('2026-07-15T11:00:00.000Z'),
+          normal_eligible: true,
+          correction_eligible: true,
         }],
       }),
     };
-    const points = { configBigInt: vi.fn().mockResolvedValue(60n) };
-    const service = new RegistrationsService({} as never, {} as never, points as never);
+    const service = new RegistrationsService({} as never, {} as never, {} as never);
     const checkinWindow = service as unknown as {
       assertCheckinWindow: (
         transactionClient: typeof client,
@@ -62,6 +101,124 @@ describe('RegistrationsService correction window', () => {
       true,
       true,
     )).resolves.toBe('correction');
+  });
+});
+
+describe('RegistrationsService dynamic QR validation', () => {
+  it('lets PostgreSQL validate event ownership and validity time before the constant-time hash check', async () => {
+    const user = {
+      id: '019b0000-0000-7000-8000-000000000003',
+      sessionId: 'session',
+      phoneVerified: true,
+      restrictions: [],
+      roles: ['verified'],
+    };
+    const eventId = '019b0000-0000-7000-8100-000000000001';
+    const registrationId = '019b0000-0000-7000-8200-000000000001';
+    const codeId = '019b0000-0000-7000-8300-000000000001';
+    const secret = 'dynamic-secret';
+    const tokenHash = Buffer.alloc(32, 7);
+    const confirmed = {
+      id: registrationId,
+      event_id: eventId,
+      user_id: user.id,
+      status: 'confirmed',
+      party_size: 1,
+      attendee_note: null,
+      version: '1',
+      waitlist_joined_at: null,
+      updated_at: new Date('2026-07-16T00:00:00.000Z'),
+      offer_expires_at: null,
+    };
+    const queries: Array<{ text: string; values: readonly unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (text: string, values: readonly unknown[] = []) => {
+        queries.push({ text, values });
+        if (text.includes('FROM events.dynamic_checkin_codes')) {
+          return {
+            rows: [{
+              event_id: eventId,
+              token_hash: tokenHash,
+              valid_from: new Date('2000-01-01T00:00:00.000Z'),
+              valid_until: new Date('2100-01-01T00:00:00.000Z'),
+              revoked_at: null,
+            }],
+          };
+        }
+        return { rows: [], rowCount: 1 };
+      }),
+    };
+    const database = {
+      transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const idempotency = {
+      requestHash: vi.fn().mockReturnValue(Buffer.alloc(32)),
+      claim: vi.fn().mockResolvedValue(null),
+      complete: vi.fn(),
+    };
+    const service = new RegistrationsService(database as never, idempotency as never, {} as never);
+    Object.assign(service, {
+      tokenHash: vi.fn().mockReturnValue(tokenHash),
+      load: vi.fn()
+        .mockResolvedValueOnce(confirmed)
+        .mockResolvedValueOnce({ ...confirmed, status: 'checked_in', version: '2' }),
+      assertCheckinWindow: vi.fn().mockResolvedValue('normal'),
+      awardAttendance: vi.fn().mockResolvedValue(0),
+      recordChange: vi.fn(),
+    });
+
+    await service.checkIn(user, '019b0000-0000-7000-9000-000000000001', {
+      registrationId,
+      token: `${codeId}.${secret}`,
+      operationId: '019b0000-0000-7000-9000-000000000002',
+    });
+
+    const validation = queries.find(({ text }) => text.includes('FROM events.dynamic_checkin_codes'))!;
+    expect(validation.values).toEqual([codeId, eventId]);
+    expect(validation.text).toMatch(/SELECT token_hash\s+FROM events\.dynamic_checkin_codes/);
+    expect(validation.text).toContain('event_id = $2');
+    expect(validation.text).toContain('revoked_at IS NULL');
+    expect(validation.text).toContain('valid_from <= clock_timestamp()');
+    expect(validation.text).toContain('valid_until > clock_timestamp()');
+  });
+});
+
+describe('RegistrationsService check-in code window', () => {
+  it('does not mint a code outside the same authoritative normal window', async () => {
+    const host = {
+      id: '019b0000-0000-7000-8000-000000000002',
+      sessionId: 'session',
+      phoneVerified: true,
+      restrictions: [],
+      roles: ['host'],
+    };
+    const eventId = '019b0000-0000-7000-8100-000000000001';
+    const query = vi.fn()
+      .mockResolvedValueOnce({
+        rows: [{
+          organizer_id: host.id,
+          status: 'published',
+          starts_at: new Date('2026-08-01T10:00:00.000Z'),
+          ends_at: new Date('2026-08-01T12:00:00.000Z'),
+          checkin_mode: 'dynamic_qr',
+          checkin_eligible: false,
+        }],
+      })
+      .mockRejectedValueOnce(new Error('mint attempted outside the authoritative window'));
+    const service = new RegistrationsService({ query } as never, {} as never, {} as never);
+    Object.assign(service, { tokenHash: vi.fn().mockReturnValue(Buffer.alloc(32, 3)) });
+
+    await expect(service.createCheckinCode(host, eventId)).rejects.toMatchObject({
+      code: 'CHECKIN_WINDOW_CLOSED',
+      status: 422,
+    });
+    expect(query).toHaveBeenCalledOnce();
+    const [sql, values] = query.mock.calls[0] as unknown as [string, unknown[]];
+    expect(values).toEqual([eventId]);
+    expect(sql).toMatch(/WITH\s+checkin_clock AS/);
+    expect(sql).toContain('AS checkin_eligible');
+    expect(sql).toContain('checkin_clock.server_time >= event.starts_at');
+    expect(sql).toContain('checkin_clock.server_time <= event.ends_at');
   });
 });
 
@@ -318,6 +475,27 @@ function itineraryRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+describe('RegistrationsService registration action authority', () => {
+  it('does not advertise checkIn unless an authoritative window result explicitly enables it', () => {
+    const service = new RegistrationsService({} as never, {} as never, {} as never);
+    const mapper = service as unknown as {
+      toView: (row: ReturnType<typeof itineraryRow>, checkInEligible?: boolean) => {
+        availableActions: string[];
+      };
+    };
+
+    expect(mapper.toView(itineraryRow()).availableActions).toEqual([
+      'cancelRegistration',
+      'viewTicket',
+    ]);
+    expect(mapper.toView(itineraryRow(), true).availableActions).toEqual([
+      'cancelRegistration',
+      'viewTicket',
+      'checkIn',
+    ]);
+  });
+});
+
 describe('RegistrationsService privacy-safe itinerary pagination', () => {
   it('returns the exact itinerary page shape from one joined query and uses database server time', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [itineraryRow()] });
@@ -382,19 +560,22 @@ describe('RegistrationsService privacy-safe itinerary pagination', () => {
     expect(sql).toContain("asset.state = 'ready'");
     expect(sql).toContain("asset.moderation_state = 'approved'");
     expect(sql).toContain('FROM events.waitlist_promotions');
-    expect(sql).toContain('offer.expires_at > itinerary_clock.server_time');
+    expect(sql).toContain('offer.expires_at > checkin_clock.server_time');
     expect(sql).toContain('FROM admin.config_revisions');
     expect(sql).toContain("revision.state = 'active'");
-    expect(sql).toContain('revision.effective_from <= itinerary_clock.server_time');
-    expect(sql).toContain('revision.effective_to > itinerary_clock.server_time');
+    expect(sql).toContain('revision.effective_from <= checkin_clock.server_time');
+    expect(sql).toContain('revision.effective_to > checkin_clock.server_time');
+    expect(sql).toContain("jsonb_typeof(config.value_json) IN ('number', 'string')");
+    expect(sql).toContain("~ '^[0-9]{1,6}$'");
+    expect(sql).toContain('config.minutes BETWEEN 0 AND 525600');
     expect(sql).toMatch(
       /COALESCE\([\s\S]*?checkin\.window\.before_minutes[\s\S]*?,\s*60\s*\) AS before_minutes/,
     );
     expect(sql).toMatch(
       /COALESCE\([\s\S]*?checkin\.window\.after_minutes[\s\S]*?,\s*120\s*\) AS after_minutes/,
     );
-    expect(sql).toContain('itinerary_clock.server_time >= event.starts_at');
-    expect(sql).toContain('itinerary_clock.server_time <= event.ends_at');
+    expect(sql).toContain('checkin_clock.server_time >= event.starts_at');
+    expect(sql).toContain('checkin_clock.server_time <= event.ends_at');
     expect(sql).toContain('AS itinerary_checkin_eligible');
   });
 

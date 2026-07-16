@@ -61,6 +61,22 @@ final class DiscoveryEventPresentationTests: XCTestCase {
         XCTAssertEqual(japanese.formatText, "対面 · 日本語")
     }
 
+    func testInvalidEventTimeZoneNeverSilentlyFormatsTheStartInUTC() throws {
+        let event = try makeEvent(overrides: [
+            "startsAt": "2026-07-18T08:30:00Z",
+            "displayTimeZone": "Not/A_Time_Zone",
+        ])
+
+        let presentation = DiscoveryEventPresentation(
+            event: event,
+            locale: Locale(identifier: "en")
+        )
+
+        XCTAssertEqual(presentation.dateText, "Event time unavailable")
+        XCTAssertEqual(presentation.shortDateText, "Event time unavailable")
+        XCTAssertFalse(presentation.dateText.contains("8:30"))
+    }
+
     func testRoutedEventLoadingMessageExistsInEverySupportedLocale() {
         XCTAssertEqual(
             DiscoveryLocalization.text("正在加载活动…", locale: Locale(identifier: "en")),

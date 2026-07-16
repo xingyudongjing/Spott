@@ -58,7 +58,7 @@ struct DiscoveryView: View {
             .presentationBackgroundInteraction(.enabled(upThrough: .medium))
         }
         .onChange(of: locale.identifier, initial: true) { _, _ in
-            store.locale = locale
+            store.updateLocale(locale)
         }
         .accessibilityIdentifier("discovery.screen")
     }

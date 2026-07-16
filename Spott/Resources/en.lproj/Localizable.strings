@@ -233,6 +233,7 @@
 "正在加载活动" = "Loading events";
 "正在加载活动…" = "Loading events…";
 "活动" = "Events";
+"活动时间不可用" = "Event time unavailable";
 "活动之后" = "Beyond the event";
 "活动标题" = "Event title";
 "活动说明" = "Event description";

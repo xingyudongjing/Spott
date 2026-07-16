@@ -173,6 +173,36 @@ final class DiscoveryStoreTests: XCTestCase {
         XCTAssertTrue(queries.contains { $0.q == "replacement" && $0.cursor == "new-cursor" })
     }
 
+    func testReplacementInvalidatesTheOldCursorBeforeTheDebounceFinishes() async throws {
+        let initial = try Self.event(id: 1, title: "Initial")
+        let replacement = try Self.event(id: 2, title: "Replacement")
+        let service = TestDiscoveryService { query, _ in
+            if query.q == nil {
+                return Self.page(items: [initial], nextCursor: "old-cursor", hasMore: true)
+            }
+            return Self.page(items: [replacement])
+        }
+        let store = DiscoveryStore(
+            service: service,
+            cache: TestDiscoveryCache(),
+            debounce: .milliseconds(80)
+        )
+
+        await store.loadInitial()
+        store.searchText = "replacement"
+        store.searchDidChange()
+
+        await store.loadNextPage()
+        var queries = await service.recordedQueries()
+        XCTAssertEqual(queries.count, 1)
+        XCTAssertFalse(store.hasMore)
+
+        try await Task.sleep(for: .milliseconds(140))
+        queries = await service.recordedQueries()
+        XCTAssertEqual(queries.map(\.cursor), [nil, nil])
+        XCTAssertEqual(queries.map(\.q), [nil, "replacement"])
+    }
+
     func testRetryingAStalledCursorRestartsFromTheFirstPage() async throws {
         let first = try Self.event(id: 1, title: "First")
         let stalled = try Self.event(id: 2, title: "Stalled")
@@ -292,6 +322,27 @@ final class DiscoveryStoreTests: XCTestCase {
 
         XCTAssertTrue(store.items.isEmpty)
         XCTAssertEqual(store.phase, .error)
+    }
+
+    func testChangingLocaleRebuildsKnownDiscoveryErrorsWithoutAnotherRequest() async {
+        let service = TestDiscoveryService { _, _ in throw URLError(.notConnectedToInternet) }
+        let store = DiscoveryStore(
+            service: service,
+            cache: TestDiscoveryCache(),
+            locale: Locale(identifier: "zh-Hans")
+        )
+
+        await store.loadInitial()
+        XCTAssertEqual(store.fatalError?.message, "暂时无法连接 Spott，请检查网络后重试。")
+
+        store.updateLocale(Locale(identifier: "en"))
+
+        XCTAssertEqual(
+            store.fatalError?.message,
+            "Unable to connect to Spott. Check your network and try again."
+        )
+        let queryCount = await service.recordedQueryCount()
+        XCTAssertEqual(queryCount, 1)
     }
 
     func testFilteredResultsDoNotOverwriteTheCanonicalCache() async throws {

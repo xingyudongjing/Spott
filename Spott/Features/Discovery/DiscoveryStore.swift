@@ -57,6 +57,7 @@ final class DiscoveryStore {
     @ObservationIgnored private var paginationRequest: Task<DiscoveryPage, Error>?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var nextCursor: String?
+    @ObservationIgnored private var paginationBaseQuery: EventDiscoveryQuery?
     @ObservationIgnored private var paginationRecoveryRequiresReplacement = false
     @ObservationIgnored private var usesFixture = false
 
@@ -135,10 +136,22 @@ final class DiscoveryStore {
         scheduleReplacement()
     }
 
+    func updateLocale(_ locale: Locale) {
+        guard self.locale.identifier != locale.identifier else { return }
+        self.locale = locale
+        fatalError = relocalized(fatalError)
+        refreshError = relocalized(refreshError)
+        paginationError = relocalized(paginationError)
+    }
+
     func loadNextPage() async {
         guard hasMore, !isLoadingNextPage, let requestedCursor = nextCursor else { return }
         let requestGeneration = generation
         let baseQuery = query(cursor: nil)
+        guard paginationBaseQuery == baseQuery else {
+            invalidatePagination()
+            return
+        }
         let requestQuery = query(cursor: requestedCursor)
         isLoadingNextPage = true
         paginationError = nil
@@ -157,7 +170,9 @@ final class DiscoveryStore {
         do {
             let page = try await request.value
             try Task.checkCancellation()
-            guard requestGeneration == generation, nextCursor == requestedCursor else { return }
+            guard requestGeneration == generation,
+                  paginationBaseQuery == baseQuery,
+                  nextCursor == requestedCursor else { return }
 
             items.append(contentsOf: page.items)
             if page.hasMore, page.nextCursor == nil || page.nextCursor == requestedCursor {
@@ -202,6 +217,7 @@ final class DiscoveryStore {
         isLoadingNextPage = false
         hasMore = false
         nextCursor = nil
+        paginationBaseQuery = nil
         paginationRecoveryRequiresReplacement = false
         phase = items.isEmpty ? .initial : .content
     }
@@ -216,6 +232,7 @@ final class DiscoveryStore {
         paginationError = nil
         hasMore = false
         nextCursor = nil
+        paginationBaseQuery = nil
         paginationRecoveryRequiresReplacement = false
         usesFixture = true
     }
@@ -265,6 +282,7 @@ final class DiscoveryStore {
 
             items = page.items
             phase = items.isEmpty ? .empty : .content
+            paginationBaseQuery = requestQuery
             if page.hasMore, page.nextCursor == nil {
                 hasMore = false
                 nextCursor = nil
@@ -304,6 +322,7 @@ final class DiscoveryStore {
         generation += 1
         isLoadingNextPage = false
         paginationError = nil
+        invalidatePagination()
         paginationRecoveryRequiresReplacement = false
     }
 
@@ -314,6 +333,12 @@ final class DiscoveryStore {
         replacementRequest = nil
         paginationRequest?.cancel()
         paginationRequest = nil
+    }
+
+    private func invalidatePagination() {
+        hasMore = false
+        nextCursor = nil
+        paginationBaseQuery = nil
     }
 
     private func persistCanonicalCacheIfNeeded(query: EventDiscoveryQuery) async {
@@ -365,6 +390,20 @@ final class DiscoveryStore {
 
     private func localized(_ key: String.LocalizationValue) -> String {
         DiscoveryLocalization.text(key, locale: locale)
+    }
+
+    private func relocalized(_ error: UserFacingError?) -> UserFacingError? {
+        guard let error else { return nil }
+        let message: String
+        switch error.id {
+        case "NETWORK_UNAVAILABLE":
+            message = localized("暂时无法连接 Spott，请检查网络后重试。")
+        case "DISCOVERY_CURSOR_MISSING", "DISCOVERY_CURSOR_STALLED":
+            message = localized("更多活动暂时无法加载，请稍后重试。")
+        default:
+            return error
+        }
+        return .init(id: error.id, message: message, retryable: error.retryable)
     }
 
     private static func isOffline(_ error: Error) -> Bool {

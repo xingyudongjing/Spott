@@ -37,6 +37,11 @@ final class AppModel {
     let sync: SyncEngine
     let discovery: DiscoveryStore
     @ObservationIgnored let router: AppRouter
+    @ObservationIgnored private let sessionRestorer: any SessionRestoring
+    @ObservationIgnored private let sessionEnder: any SessionEnding
+    @ObservationIgnored private let syncLifecycle: any SyncLifecycleManaging
+    @ObservationIgnored private var authGeneration: UInt64 = 0
+    @ObservationIgnored private var authTask: Task<Void, Never>?
 
     var region: String {
         get { discovery.region }
@@ -48,13 +53,19 @@ final class AppModel {
         analytics: AnalyticsClient,
         persistence: PersistenceStore,
         sync: SyncEngine,
-        router: AppRouter
+        router: AppRouter,
+        sessionRestorer: (any SessionRestoring)? = nil,
+        sessionEnder: (any SessionEnding)? = nil,
+        syncLifecycle: (any SyncLifecycleManaging)? = nil
     ) {
         self.api = api
         self.analytics = analytics
         self.persistence = persistence
         self.sync = sync
         self.router = router
+        self.sessionRestorer = sessionRestorer ?? api
+        self.sessionEnder = sessionEnder ?? api
+        self.syncLifecycle = syncLifecycle ?? sync
         discovery = DiscoveryStore(service: api, cache: persistence)
     }
 
@@ -91,17 +102,31 @@ final class AppModel {
             return
         }
         guard discovery.phase == .initial else { return }
-        await discovery.loadInitial()
+        let generation = beginAuthTransition()
+        if let restoredSession = try? await sessionRestorer.currentSession() {
+            guard isCurrentAuthTransition(generation) else { return }
+            session = restoredSession
+            try? await syncLifecycle.bootstrap(
+                userID: restoredSession.user.id,
+                generation: generation
+            )
+            guard isCurrentAuth(generation, sessionID: restoredSession.sessionId) else { return }
+            await discovery.loadInitial()
+            guard isCurrentAuth(generation, sessionID: restoredSession.sessionId) else { return }
+            await reconcileStorePurchases()
+            guard isCurrentAuth(generation, sessionID: restoredSession.sessionId) else { return }
+            await registerPendingPushToken()
+            guard isCurrentAuth(generation, sessionID: restoredSession.sessionId) else { return }
+        } else {
+            guard isCurrentSignedOut(generation) else { return }
+            await discovery.loadInitial()
+            guard isCurrentSignedOut(generation) else { return }
+        }
         trackAnalytics(.discoveryViewed(
             region: region,
             itemCount: discovery.items.count,
             reason: "initial"
         ))
-        if let session = try? await api.currentSession() {
-            self.session = session
-            await reconcileStorePurchases()
-            await registerPendingPushToken()
-        }
     }
 
     func refresh(reason: SyncReason = .manual) async {
@@ -205,8 +230,10 @@ final class AppModel {
     }
 
     func didAuthenticate(_ newSession: UserSession) {
+        let generation = beginAuthTransition()
         let completedGate = presentedGate
         let authenticatedUserID = newSession.user.id
+        let authenticatedSessionID = newSession.sessionId
         if session?.user.id != newSession.user.id {
             discovery.resetForSessionChange()
         }
@@ -225,13 +252,14 @@ final class AppModel {
             }
             presentedGate = .phoneVerification
         }
-        Task {
-            guard session?.user.id == authenticatedUserID else { return }
-            try? await sync.bootstrap(userID: authenticatedUserID)
-            guard session?.user.id == authenticatedUserID else { return }
+        authTask = Task { [weak self] in
+            guard let self, isCurrentAuth(generation, sessionID: authenticatedSessionID) else { return }
+            try? await syncLifecycle.bootstrap(userID: authenticatedUserID, generation: generation)
+            guard isCurrentAuth(generation, sessionID: authenticatedSessionID) else { return }
             await discovery.refresh()
-            guard session?.user.id == authenticatedUserID else { return }
+            guard isCurrentAuth(generation, sessionID: authenticatedSessionID) else { return }
             await reconcileStorePurchases()
+            guard isCurrentAuth(generation, sessionID: authenticatedSessionID) else { return }
             await registerPendingPushToken()
         }
     }
@@ -289,17 +317,42 @@ final class AppModel {
     }
 
     func signOut() {
+        let endingSessionID = session?.sessionId
+        let generation = beginAuthTransition()
         GoogleSignInManager.shared.signOut()
         session = nil
         presentedGate = nil
         router.resetSensitiveNavigation()
         discovery.resetForSessionChange()
-        Task {
-            try? await api.signOut()
-            try? await sync.resetSensitiveScope(reason: .signOut)
-            guard session == nil else { return }
+        authTask = Task { [weak self] in
+            guard let self else { return }
+            if let endingSessionID {
+                _ = try? await sessionEnder.signOut(expectedSessionID: endingSessionID)
+            }
+            guard isCurrentSignedOut(generation) else { return }
+            try? await syncLifecycle.resetSensitiveScope(reason: .signOut, generation: generation)
+            guard isCurrentSignedOut(generation) else { return }
             await discovery.refresh()
         }
+    }
+
+    private func beginAuthTransition() -> UInt64 {
+        authGeneration &+= 1
+        authTask?.cancel()
+        authTask = nil
+        return authGeneration
+    }
+
+    private func isCurrentAuth(_ generation: UInt64, sessionID: UUID) -> Bool {
+        authGeneration == generation && session?.sessionId == sessionID && !Task.isCancelled
+    }
+
+    private func isCurrentAuthTransition(_ generation: UInt64) -> Bool {
+        authGeneration == generation && !Task.isCancelled
+    }
+
+    private func isCurrentSignedOut(_ generation: UInt64) -> Bool {
+        authGeneration == generation && session == nil && !Task.isCancelled
     }
 
     static func map(_ error: Error) -> UserFacingError {

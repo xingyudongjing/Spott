@@ -42,32 +42,98 @@ struct SyncPushResponse: Codable, Sendable {
     let results: [Result]
 }
 
-actor SyncEngine {
-    private let api: SpottAPIClient
-    private let persistence: PersistenceStore
-    private var pulling = false
-    private var pushing = false
+protocol SyncServing: Actor {
+    func pull(cursor: Int64, topics: [String]) async throws -> SyncPullPage
+    func push(operations: [SyncPushOperation]) async throws -> SyncPushResponse
+}
+
+extension SpottAPIClient: SyncServing {}
+
+protocol SyncPersisting: Actor {
+    func cursor(scope: String) throws -> Int64
+    func apply(changes: [SyncChange], nextCursor: Int64, scope: String) throws
+    func enqueue(_ operation: PendingOperation) throws
+    func pendingOperations() throws -> [PendingOperation]
+    func markApplied(operationIDs: Set<UUID>) throws
+    func resetSensitive() throws
+}
+
+extension PersistenceStore: SyncPersisting {}
+
+protocol SyncLifecycleManaging: Actor {
+    func bootstrap(userID: UUID, generation: UInt64) async throws
+    func resetSensitiveScope(reason: SensitiveResetReason, generation: UInt64) async throws
+}
+
+actor SyncEngine: SyncLifecycleManaging {
+    private struct Context: Equatable, Sendable {
+        let generation: UInt64
+        let userID: UUID?
+        var scope: String { userID?.uuidString.lowercased() ?? "public" }
+    }
+
+    private let api: any SyncServing
+    private let persistence: any SyncPersisting
+    private var pullingGenerations: Set<UInt64> = []
+    private var pushingGenerations: Set<UInt64> = []
     private var userID: UUID?
+    private var generation: UInt64 = 0
     private var latestHint: Int64 = 0
+    private var sensitiveResetTask: Task<Void, Error>?
     private let topics = ["user", "profile", "event", "registration", "group", "wallet", "notification"]
 
-    init(api: SpottAPIClient, persistence: PersistenceStore) { self.api = api; self.persistence = persistence }
+    init(api: any SyncServing, persistence: any SyncPersisting) {
+        self.api = api
+        self.persistence = persistence
+    }
 
-    func bootstrap(userID: UUID) async throws {
+    func bootstrap(userID: UUID, generation requestedGeneration: UInt64) async throws {
+        guard requestedGeneration >= generation else { return }
+        let changesAccount = self.userID != nil && self.userID != userID
+        generation = requestedGeneration
         self.userID = userID
-        _ = try await pull(reason: .bootstrap)
-        _ = await flushPendingOperations()
+        let context = currentContext
+
+        if changesAccount {
+            latestHint = 0
+            sensitiveResetTask = makeSensitiveResetTask(after: sensitiveResetTask)
+        }
+        if let sensitiveResetTask {
+            try await sensitiveResetTask.value
+        }
+        guard isCurrent(context) else { return }
+
+        _ = try await pull(reason: .bootstrap, context: context)
+        guard isCurrent(context) else { return }
+        _ = await flushPendingOperations(context: context)
     }
 
     func pull(reason: SyncReason) async throws -> SyncResult {
-        guard !pulling else { return .init(applied: 0, nextCursor: try await persistence.cursor(scope: scope), hasMore: false) }
-        pulling = true; defer { pulling = false }
-        var cursor = try await persistence.cursor(scope: scope)
+        try await pull(reason: reason, context: currentContext)
+    }
+
+    private func pull(reason: SyncReason, context: Context) async throws -> SyncResult {
+        guard pullingGenerations.insert(context.generation).inserted else {
+            return .init(
+                applied: 0,
+                nextCursor: try await persistence.cursor(scope: context.scope),
+                hasMore: false
+            )
+        }
+        defer { pullingGenerations.remove(context.generation) }
+        var cursor = try await persistence.cursor(scope: context.scope)
+        try ensureCurrent(context)
         var total = 0
         var hasMore = true
         while hasMore {
             let page = try await api.pull(cursor: cursor, topics: topics)
-            try await persistence.apply(changes: page.changes, nextCursor: page.nextCursor, scope: scope)
+            try ensureCurrent(context)
+            try await persistence.apply(
+                changes: page.changes,
+                nextCursor: page.nextCursor,
+                scope: context.scope
+            )
+            try ensureCurrent(context)
             cursor = page.nextCursor; total += page.changes.count; hasMore = page.hasMore
             if reason == .backgroundRefresh && total >= 500 { break }
         }
@@ -77,15 +143,23 @@ actor SyncEngine {
     func enqueue(_ operation: PendingOperation) async throws { try await persistence.enqueue(operation) }
 
     func flushPendingOperations() async -> FlushResult {
-        guard !pushing else { return .init(applied: 0, conflicts: 0, failed: 0) }
-        pushing = true; defer { pushing = false }
+        await flushPendingOperations(context: currentContext)
+    }
+
+    private func flushPendingOperations(context: Context) async -> FlushResult {
+        guard isCurrent(context), pushingGenerations.insert(context.generation).inserted else {
+            return .init(applied: 0, conflicts: 0, failed: 0)
+        }
+        defer { pushingGenerations.remove(context.generation) }
         do {
             let pending = try await persistence.pendingOperations()
+            guard isCurrent(context) else { return .init(applied: 0, conflicts: 0, failed: 0) }
             let sorted = Self.topologicalSort(pending)
             let decoder = JSONDecoder()
             let payload = sorted.map { operation in SyncPushOperation(operationId: operation.operationID, entityType: operation.entityType, entityId: operation.entityID, action: operation.action, baseVersion: operation.baseVersion, payload: (try? decoder.decode(JSONValue.self, from: operation.payload)) ?? .object([:])) }
             guard !payload.isEmpty else { return .init(applied: 0, conflicts: 0, failed: 0) }
             let response = try await api.push(operations: payload)
+            guard isCurrent(context) else { return .init(applied: 0, conflicts: 0, failed: 0) }
             let applied = Set(response.results.filter { $0.state == "applied" }.map(\.operationId))
             try await persistence.markApplied(operationIDs: applied)
             return .init(applied: applied.count, conflicts: response.results.filter { $0.state == "conflict" }.count, failed: response.results.filter { $0.state == "failed" }.count)
@@ -98,13 +172,39 @@ actor SyncEngine {
         _ = try? await pull(reason: .realtimeHint)
     }
 
-    func resetSensitiveScope(reason: SensitiveResetReason) async throws {
+    func resetSensitiveScope(
+        reason: SensitiveResetReason,
+        generation requestedGeneration: UInt64
+    ) async throws {
         _ = reason
-        userID = nil; latestHint = 0
-        try await persistence.resetSensitive()
+        guard requestedGeneration >= generation else { return }
+        generation = requestedGeneration
+        userID = nil
+        latestHint = 0
+        let task = makeSensitiveResetTask(after: sensitiveResetTask)
+        sensitiveResetTask = task
+        try await task.value
     }
 
-    private var scope: String { userID?.uuidString.lowercased() ?? "public" }
+    private var currentContext: Context {
+        Context(generation: generation, userID: userID)
+    }
+
+    private func isCurrent(_ context: Context) -> Bool {
+        context == currentContext
+    }
+
+    private func ensureCurrent(_ context: Context) throws {
+        guard isCurrent(context), !Task.isCancelled else { throw CancellationError() }
+    }
+
+    private func makeSensitiveResetTask(after previous: Task<Void, Error>?) -> Task<Void, Error> {
+        let persistence = persistence
+        return Task {
+            if let previous { try await previous.value }
+            try await persistence.resetSensitive()
+        }
+    }
 
     static func topologicalSort(_ operations: [PendingOperation]) -> [PendingOperation] {
         var result: [PendingOperation] = []

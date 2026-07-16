@@ -1,7 +1,16 @@
 import Foundation
 import Security
 
-actor CredentialVault {
+protocol CredentialStoring: Actor {
+    func save(session: UserSession) throws
+    @discardableResult
+    func replace(session: UserSession, expectedSessionID: UUID) throws -> Bool
+    func session() throws -> UserSession?
+    @discardableResult
+    func clear(expectedSessionID: UUID) throws -> Bool
+}
+
+actor CredentialVault: CredentialStoring {
     private let service: String
     private let account = "active-session"
     private let encoder = JSONEncoder()
@@ -14,6 +23,17 @@ actor CredentialVault {
     }
 
     func save(session: UserSession) throws {
+        try write(session: session)
+    }
+
+    @discardableResult
+    func replace(session: UserSession, expectedSessionID: UUID) throws -> Bool {
+        guard try self.session()?.sessionId == expectedSessionID else { return false }
+        try write(session: session)
+        return true
+    }
+
+    private func write(session: UserSession) throws {
         let data = try encoder.encode(session)
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
         SecItemDelete(query as CFDictionary)
@@ -33,10 +53,13 @@ actor CredentialVault {
         return try decoder.decode(UserSession.self, from: data)
     }
 
-    func clear() throws {
+    @discardableResult
+    func clear(expectedSessionID: UUID) throws -> Bool {
+        guard try session()?.sessionId == expectedSessionID else { return false }
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw VaultError.status(status) }
+        return status == errSecSuccess
     }
 }
 

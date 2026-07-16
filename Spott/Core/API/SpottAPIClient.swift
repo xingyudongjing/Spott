@@ -17,25 +17,59 @@ struct APIEnvironment: Sendable {
     static let preview = APIEnvironment(baseURL: URL(string: "https://api.spott.invalid/v1")!)
 }
 
+struct APIFieldError: Equatable, Sendable {
+    let field: String
+    let message: String
+}
+
 struct APIError: Error, Sendable {
     let status: Int
     let code: String
     let message: String
     let retryable: Bool
+    let fieldErrors: [APIFieldError]
+
+    init(
+        status: Int,
+        code: String,
+        message: String,
+        retryable: Bool,
+        fieldErrors: [APIFieldError] = []
+    ) {
+        self.status = status
+        self.code = code
+        self.message = message
+        self.retryable = retryable
+        self.fieldErrors = fieldErrors
+    }
 }
 
-actor SpottAPIClient {
+protocol SessionEnding: Actor {
+    @discardableResult
+    func signOut(expectedSessionID: UUID) async throws -> Bool
+}
+
+protocol SessionRestoring: Actor {
+    func currentSession() async throws -> UserSession?
+}
+
+actor SpottAPIClient: SessionEnding, SessionRestoring {
+    private struct RefreshFlight {
+        let sessionID: UUID
+        let task: Task<UserSession, Error>
+    }
+
     private let environment: APIEnvironment
-    private let credentials: CredentialVault
+    private let credentials: any CredentialStoring
     private let session: URLSession
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private let usesCredentials: Bool
-    private var refreshTask: Task<UserSession, Error>?
+    private var refreshFlight: RefreshFlight?
 
     init(
         environment: APIEnvironment,
-        credentials: CredentialVault,
+        credentials: any CredentialStoring,
         session: URLSession = .shared,
         usesCredentials: Bool = true
     ) {
@@ -925,7 +959,10 @@ actor SpottAPIClient {
 
     func currentSession() async throws -> UserSession? { try await credentials.session() }
     func refreshCurrentSession() async throws -> UserSession { try await refresh() }
-    func signOut() async throws { try await credentials.clear() }
+    @discardableResult
+    func signOut(expectedSessionID: UUID) async throws -> Bool {
+        try await credentials.clear(expectedSessionID: expectedSessionID)
+    }
 
     private func post<Response: Decodable & Sendable, Body: Encodable & Sendable>(_ path: String, body: Body, authenticated: Bool = true, idempotencyKey: UUID? = nil) async throws -> Response {
         var request = URLRequest(url: environment.baseURL.appending(path: path))
@@ -969,20 +1006,34 @@ actor SpottAPIClient {
     }
 
     private func refresh() async throws -> UserSession {
-        if let refreshTask { return try await refreshTask.value }
+        guard let current = try await credentials.session() else {
+            throw APIError(status: 401, code: "AUTH_REQUIRED", message: "请重新登录。", retryable: false)
+        }
+        if let refreshFlight, refreshFlight.sessionID == current.sessionId {
+            return try await refreshFlight.task.value
+        }
         let task = Task { [credentials, environment, session, encoder, decoder] in
-            guard let current = try await credentials.session() else { throw APIError(status: 401, code: "AUTH_REQUIRED", message: "请重新登录。", retryable: false) }
             var request = URLRequest(url: environment.baseURL.appending(path: "auth/refresh"))
             request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try encoder.encode(["refreshToken": current.refreshToken, "deviceId": DeviceIdentity.current.uuidString.lowercased()])
             let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { try await credentials.clear(); throw APIError(status: 401, code: "TOKEN_EXPIRED", message: "登录已过期。", retryable: false) }
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                _ = try await credentials.clear(expectedSessionID: current.sessionId)
+                throw APIError(status: 401, code: "TOKEN_EXPIRED", message: "登录已过期。", retryable: false)
+            }
             let updated = try decoder.decode(UserSession.self, from: data)
-            try await credentials.save(session: updated)
+            guard try await credentials.replace(
+                session: updated,
+                expectedSessionID: current.sessionId
+            ) else { throw CancellationError() }
             return updated
         }
-        refreshTask = task
-        defer { refreshTask = nil }
+        refreshFlight = .init(sessionID: current.sessionId, task: task)
+        defer {
+            if refreshFlight?.sessionID == current.sessionId {
+                refreshFlight = nil
+            }
+        }
         return try await task.value
     }
 
@@ -992,7 +1043,10 @@ actor SpottAPIClient {
                 status: status,
                 code: problem.error.code,
                 message: problem.error.message,
-                retryable: problem.error.retryable ?? (status >= 500)
+                retryable: problem.error.retryable ?? (status >= 500),
+                fieldErrors: problem.error.fieldErrors?.map {
+                    APIFieldError(field: $0.field, message: $0.message)
+                } ?? []
             )
         }
         return .init(status: status, code: "HTTP_\(status)", message: "请求暂时无法完成。", retryable: status >= 500)

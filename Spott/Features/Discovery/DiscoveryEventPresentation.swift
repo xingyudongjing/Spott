@@ -130,12 +130,13 @@ struct DiscoveryEventPresentation {
         "\(event.title), \(locationText), \(localized("约略位置"))"
     }
 
-    private var eventTimeZone: TimeZone {
-        TimeZone(identifier: event.displayTimeZone) ?? TimeZone(secondsFromGMT: 0)!
+    private var eventTimeZone: TimeZone? {
+        TimeZone(identifier: event.displayTimeZone)
     }
 
     private func formattedStart(date dateStyle: Date.FormatStyle.DateStyle) -> String {
         guard let startsAt = event.startsAt else { return localized("时间待定") }
+        guard let eventTimeZone else { return localized("活动时间不可用") }
         return startsAt.formatted(Date.FormatStyle(
             date: dateStyle,
             time: .shortened,

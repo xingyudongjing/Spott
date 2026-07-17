@@ -24,6 +24,18 @@ export type MediaCapability = z.infer<typeof capabilitySchema>;
 const prefix = 'spott-media-v1';
 const additionalData = Buffer.from(prefix, 'utf8');
 
+// base64url leaves spare low bits in the final character whenever the byte
+// length is not a multiple of 3, so several distinct strings decode to the
+// same bytes. Re-encoding proves the caller sent the one canonical form and
+// keeps the token bytes in 1:1 correspondence with the token string.
+function decodeCanonical(value: string): Buffer {
+  const decoded = Buffer.from(value, 'base64url');
+  if (decoded.toString('base64url') !== value) {
+    throw new Error('non-canonical base64url segment');
+  }
+  return decoded;
+}
+
 export class MediaCapabilityCodec {
   issue(payload: MediaCapability): string {
     const key = this.key();
@@ -43,9 +55,9 @@ export class MediaCapabilityCodec {
       if (tokenPrefix !== prefix || !nonceValue || !ciphertextValue || !tagValue || extra) {
         throw new Error('invalid capability envelope');
       }
-      const nonce = Buffer.from(nonceValue, 'base64url');
-      const ciphertext = Buffer.from(ciphertextValue, 'base64url');
-      const tag = Buffer.from(tagValue, 'base64url');
+      const nonce = decodeCanonical(nonceValue);
+      const ciphertext = decodeCanonical(ciphertextValue);
+      const tag = decodeCanonical(tagValue);
       if (nonce.byteLength !== 12 || tag.byteLength !== 16 || ciphertext.byteLength === 0) {
         throw new Error('invalid capability lengths');
       }

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MediaCapabilityCodec } from './media-capability.js';
 
+const prefix = 'spott-media-v1';
+
 const payload = {
   method: 'PUT' as const,
   routePath: '/v1/media/upload-attempts/019b0000-0000-7000-8000-000000000010/content',
@@ -24,7 +26,17 @@ describe('MediaCapabilityCodec', () => {
 
     expect(token).not.toContain(payload.assetId);
     expect(codec.verify(token)).toEqual(payload);
-    expect(() => codec.verify(`${token.slice(0, -1)}x`)).toThrowError(/上传授权无效/u);
+
+    // Every single-character edit must be rejected, including edits landing on
+    // the spare low bits of a segment's final base64url character.
+    for (let index = prefix.length + 1; index < token.length; index += 1) {
+      const original = token[index];
+      if (original === '.') continue;
+      const replacement = original === 'x' ? 'y' : 'x';
+      const tampered = `${token.slice(0, index)}${replacement}${token.slice(index + 1)}`;
+      expect(tampered).not.toEqual(token);
+      expect(() => codec.verify(tampered)).toThrowError(/上传授权无效/u);
+    }
   });
 
   it('fails closed when the production secret is absent', () => {

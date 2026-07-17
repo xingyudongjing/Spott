@@ -663,9 +663,19 @@ export class CommunityService {
            SELECT date_trunc('month', e.ends_at) AS m FROM events.events e
            WHERE e.organizer_id = $1 AND e.status IN ('ended','archived') AND e.ends_at IS NOT NULL
              AND (SELECT count(*) FROM events.registrations r WHERE r.event_id = e.id AND r.status = 'checked_in') >= $2) months) AS hosting_months,
-        (SELECT (phone_verified_at IS NOT NULL) FROM identity.users WHERE id = $1) AS certified,
-        (NOT EXISTS(SELECT 1 FROM safety.reports WHERE target_type = 'user' AND target_id = $1
-           AND severity = 'p0' AND status IN ('decided','closed'))) AS no_severe_complaint,
+        -- Host certification (认证局头) is deferred in V1, so no one is certified yet.
+        -- Phone verification is NOT certification; using it would wrongly certify every
+        -- verified user. Return false until a real certification flow exists.
+        false AS certified,
+        -- Only an *upheld* severe complaint counts. A p0 report that was investigated and
+        -- dismissed (decision = 'no_action', or still unresolved) must not strip the flag;
+        -- require a moderation decision that actually took action against the user.
+        (NOT EXISTS(SELECT 1 FROM safety.reports rep
+           JOIN safety.moderation_cases mc ON mc.report_id = rep.id
+           WHERE rep.target_type = 'user' AND rep.target_id = $1
+             AND rep.severity = 'p0'
+             AND mc.status IN ('decided','closed')
+             AND mc.decision IS NOT NULL AND mc.decision <> 'no_action')) AS no_severe_complaint,
         (WITH att AS (
            SELECT r.user_id AS attendee, e.ends_at FROM events.registrations r JOIN events.events e ON e.id = r.event_id
            WHERE e.organizer_id = $1 AND r.status = 'checked_in' AND e.ends_at IS NOT NULL)

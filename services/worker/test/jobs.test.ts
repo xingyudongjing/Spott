@@ -185,6 +185,111 @@ describe('worker job registry', () => {
     ]);
   });
 
+  it('releases the seat, settles the registration and nudges the waitlist when a pending hold lapses', async () => {
+    let released = false;
+    const statements: Array<{ text: string; values: readonly unknown[] }> = [];
+    const client = {
+      query: async (text: string, values: readonly unknown[] = []) => {
+        statements.push({ text, values });
+        if (text.includes('FROM events.registrations registration')) {
+          return result(released ? [] : [{
+            registration_id: '50000000-0000-0000-0000-000000000001',
+            event_id: '70000000-0000-0000-0000-000000000001',
+            user_id: '60000000-0000-0000-0000-000000000001',
+            party_size: 2,
+            hold_id: 'a0000000-0000-0000-0000-000000000001',
+            title: 'Coffee walk',
+          }]);
+        }
+        if (text.includes("UPDATE commerce.point_holds SET state = 'expired'")) {
+          return result([{ id: 'a0000000-0000-0000-0000-000000000001' }], 1);
+        }
+        if (text.includes("UPDATE events.registrations SET status = 'cancelled'")) {
+          released = true;
+          return result([{ id: '50000000-0000-0000-0000-000000000001' }], 1);
+        }
+        return result([], 1);
+      },
+    };
+    const database = {
+      transaction: async <T>(work: (value: typeof client) => Promise<T>) => work(client),
+      query: async () => result([{ processed: 0 }]),
+    };
+    const jobs = new WorkerJobs(database as never, config);
+
+    expect(await jobs.expireHoldsAndQuotes()).toMatchObject({ metadata: { releasedSeats: 1 } });
+
+    const find = (needle: string) => statements.find((entry) => entry.text.includes(needle));
+    // The seat must come back to the event, not stay inside `occupied`.
+    const capacity = find('UPDATE events.event_capacity');
+    expect(capacity?.text).toContain('pending_count = GREATEST(0, pending_count - $2)');
+    expect(capacity?.values).toEqual(['70000000-0000-0000-0000-000000000001', 2]);
+    // The waitlist has to be told a seat opened up, or the queue stays frozen.
+    expect(find("'waitlist.promotion_requested'")).toBeTruthy();
+    // Both writes stay conditional so a second worker cannot double release.
+    expect(find("UPDATE commerce.point_holds SET state = 'expired'")?.text)
+      .toContain("WHERE id = $1 AND state = 'active'");
+    expect(find("UPDATE events.registrations SET status = 'cancelled'")?.text)
+      .toContain("WHERE id = $1 AND status = 'pending'");
+  });
+
+  it('locks the registration before the capacity row so hold expiry cannot deadlock a decision', async () => {
+    const order: string[] = [];
+    const client = {
+      query: async (text: string) => {
+        order.push(text);
+        if (text.includes('FROM events.registrations registration')) {
+          expect(text).toContain("registration.status = 'pending'");
+          expect(text).toContain("hold.state = 'active'");
+          expect(text).toContain('FOR UPDATE OF registration SKIP LOCKED');
+          return result([{
+            registration_id: '50000000-0000-0000-0000-000000000001',
+            event_id: '70000000-0000-0000-0000-000000000001',
+            user_id: '60000000-0000-0000-0000-000000000001',
+            party_size: 1,
+            hold_id: 'a0000000-0000-0000-0000-000000000001',
+            title: 'Coffee walk',
+          }]);
+        }
+        // Nothing may progress once the hold flip finds no active row.
+        if (text.includes("UPDATE commerce.point_holds SET state = 'expired'")) return result([], 0);
+        return result([], 1);
+      },
+    };
+    const database = {
+      transaction: async <T>(work: (value: typeof client) => Promise<T>) => work(client),
+      query: async () => result([{ processed: 0 }]),
+    };
+    const jobs = new WorkerJobs(database as never, config);
+
+    expect(await jobs.expireHoldsAndQuotes()).toMatchObject({ metadata: { releasedSeats: 0 } });
+    const registrationLock = order.findIndex((text) => text.includes('FOR UPDATE OF registration SKIP LOCKED'));
+    const capacityLock = order.findIndex((text) => text.includes('FOR UPDATE OF event, capacity'));
+    expect(registrationLock).toBeGreaterThanOrEqual(0);
+    expect(capacityLock).toBeGreaterThan(registrationLock);
+    // A lost race must not touch the counter.
+    expect(order.some((text) => text.includes('UPDATE events.event_capacity'))).toBe(false);
+  });
+
+  it('never bulk expires a hold that still backs a pending seat', async () => {
+    let sweep = '';
+    const database = {
+      transaction: async <T>(work: (value: { query: () => unknown }) => Promise<T>) => work({
+        query: async () => result([]),
+      }),
+      query: async (text: string) => {
+        sweep = text;
+        return result([{ processed: 3 }]);
+      },
+    };
+    const jobs = new WorkerJobs(database as never, config);
+
+    expect(await jobs.expireHoldsAndQuotes()).toMatchObject({ processed: 3, metadata: { swept: 3 } });
+    // Batch overflow must never strand a pending registration behind a dead hold.
+    expect(sweep).toContain('NOT EXISTS');
+    expect(sweep).toContain("registration.status = 'pending'");
+  });
+
   it('rechecks locked capacity and skips a stale promotion that no longer fits', async () => {
     const mutations: string[] = [];
     const client = {

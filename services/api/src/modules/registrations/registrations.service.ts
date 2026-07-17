@@ -426,9 +426,12 @@ export class RegistrationsService {
         });
         return body;
       }
-      const hold = await client.query<{ id: string }>(
-        `SELECT id FROM commerce.point_holds
-         WHERE user_id = $1 AND business_key = $2 FOR UPDATE`,
+      // Only an active hold may be locked here: a captured or released one is
+      // already spent, and feeding it to captureHold would only raise a
+      // confusing POINT_HOLD_EXPIRED on the host's decision.
+      const hold = await client.query<{ id: string; capturable: boolean }>(
+        `SELECT id, expires_at > clock_timestamp() AS capturable FROM commerce.point_holds
+         WHERE user_id = $1 AND business_key = $2 AND state = 'active' FOR UPDATE`,
         [registration.user_id, `registration_hold:${registration.id}`],
       );
       if (input.decision === 'approve') {
@@ -436,6 +439,12 @@ export class RegistrationsService {
           throw new DomainError('REGISTRATION_CAPACITY_FULL', '活动名额已满，无法确认此申请。', 409);
         }
         if (!hold.rows[0]) throw new DomainError('POINT_HOLD_NOT_FOUND', '报名积分预留不存在。', 409);
+        // A hold past its deadline no longer reserves the applicant's points:
+        // they may already be committed elsewhere, so capturing it now could
+        // overdraw the wallet. The expiry job will release this seat shortly.
+        if (!hold.rows[0].capturable) {
+          throw new DomainError('POINT_HOLD_EXPIRED', '报名积分预留已过期，名额即将释放。', 409);
+        }
         await this.points.captureHold(
           client,
           hold.rows[0].id,

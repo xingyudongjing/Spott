@@ -57,6 +57,11 @@
       "kind": "service-integration"
     },
     {
+      "path": "services/api/src/modules/registrations/registrations.hold-expiry.integration.spec.ts",
+      "gate": "postgres-integration",
+      "kind": "service-integration"
+    },
+    {
       "path": "tests/e2e/api-permission-matrix.spec.ts",
       "gate": "web-core-journey",
       "kind": "browser-e2e"

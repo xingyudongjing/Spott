@@ -118,8 +118,8 @@
       "sha256": "9a91ee7a0d0c0a9e6223aabc379b529b2882279c3f93c00e64c797a8763502c3"
     },
     {
-      "sequence": 35,
-      "filename": "0035_group_discussion_reactions.sql",
+      "sequence": 24,
+      "filename": "0024_group_discussion_reactions.sql",
       "sha256": "2e663244268f543f84cc7ed716b5d66d442d3ff39652eb1c264118793ad5a932"
     }
   ]

@@ -382,6 +382,24 @@ describe('EventsService event contract', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
+  it('returns zero-result suggestions when discovery finds nothing', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const service = new EventsService({ query } as never, {} as never, {} as never, {} as never);
+
+    const result = await service.discovery(undefined, {
+      limit: 20,
+      region: 'tokyo',
+      query: 'jazz',
+      category: 'food',
+    }) as { items: unknown[]; suggestions?: { actions: string[]; followKeyword: string | null } };
+
+    expect(result.items).toEqual([]);
+    expect(result.suggestions?.actions).toContain('create_event');
+    expect(result.suggestions?.actions).toContain('switch_region');
+    expect(result.suggestions?.actions).toContain('relax_filters');
+    expect(result.suggestions?.followKeyword).toBe('jazz');
+  });
+
   it('preserves an answered registration question id when the host edits its prompt', async () => {
     const questionId = '019b0000-0000-7000-8200-000000000001';
     const queries: string[] = [];

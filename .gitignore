@@ -18,6 +18,7 @@ outputs/
 work/
 playwright-report/
 test-results/
+/output/playwright/
 *.tsbuildinfo
 *.xcuserstate
 xcuserdata/
@@ -25,6 +26,7 @@ DerivedData/
 *.xccheckout
 .swiftpm/
 *.log
+!artifacts/task20/app-icon/release-build.log
 *.sqlite*
 *.db
 __pycache__/

@@ -1,0 +1,7 @@
+# This internal-test override is safe only because API port 4100 is loopback-bound and the
+# public Nginx server blocks every authentication and write route. It lets the
+# SSH-tunnel-only internal test entry retrieve OTP codes from root-only logs.
+services:
+  api:
+    environment:
+      OTP_PROVIDER: console

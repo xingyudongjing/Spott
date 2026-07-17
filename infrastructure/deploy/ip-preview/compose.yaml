@@ -1,0 +1,211 @@
+name: spott-ip-preview
+
+x-runtime-image: &runtime-image
+  image: spott-ip-preview:${SPOTT_RELEASE_ID:?SPOTT_RELEASE_ID is required}
+
+x-runtime-security: &runtime-security
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  init: true
+
+x-runtime-logging: &runtime-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
+
+x-admin-database-environment: &admin-database-environment
+  DATABASE_URL: postgres://${POSTGRES_ADMIN_USER:?POSTGRES_ADMIN_USER is required}:${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+  APP_DATABASE_USER: ${APP_DATABASE_USER:?APP_DATABASE_USER is required}
+  APP_DATABASE_PASSWORD: ${APP_DATABASE_PASSWORD:?APP_DATABASE_PASSWORD is required}
+
+x-app-database-environment: &app-database-environment
+  DATABASE_URL: postgres://${APP_DATABASE_USER:?APP_DATABASE_USER is required}:${APP_DATABASE_PASSWORD:?APP_DATABASE_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+
+services:
+  postgres:
+    image: postgis/postgis@sha256:05d68c7f0f19b9aa0bf7c4a2049b2e8b38b44a63116392b95726a4c913766cf6
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:?POSTGRES_ADMIN_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    logging: *runtime-logging
+    mem_limit: 768m
+    networks:
+      - app
+
+  migrate:
+    <<: [*runtime-image, *runtime-security]
+    profiles:
+      - tools
+    working_dir: /app
+    command:
+      - pnpm
+      - db:migrate
+    environment:
+      <<: *admin-database-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777
+    logging: *runtime-logging
+    networks:
+      - app
+
+  seed:
+    <<: [*runtime-image, *runtime-security]
+    profiles:
+      - tools
+    working_dir: /app
+    command:
+      - pnpm
+      - exec
+      - tsx
+      - infrastructure/deploy/ip-preview/seed.ts
+    environment:
+      <<: *admin-database-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777
+    logging: *runtime-logging
+    networks:
+      - app
+
+  api:
+    <<: [*runtime-image, *runtime-security]
+    build:
+      context: ../../..
+      dockerfile: infrastructure/deploy/ip-preview/Runtime.Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: /v1
+        NEXT_PUBLIC_SITE_URL: ${SPOTT_PUBLIC_ORIGIN:?SPOTT_PUBLIC_ORIGIN is required}
+        NEXT_PUBLIC_MAP_STYLE_URL: ${NEXT_PUBLIC_MAP_STYLE_URL:?NEXT_PUBLIC_MAP_STYLE_URL is required}
+        API_INTERNAL_URL: http://api:4100/v1
+    restart: unless-stopped
+    working_dir: /app
+    command:
+      - node
+      - services/api/dist/main.js
+    environment:
+      <<: *app-database-environment
+      NODE_ENV: production
+      NODE_OPTIONS: --max-old-space-size=512
+      PORT: '4100'
+      APP_VERSION: ip-preview-${SPOTT_RELEASE_ID:?SPOTT_RELEASE_ID is required}
+      WEB_ORIGIN: ${SPOTT_PUBLIC_ORIGIN:?SPOTT_PUBLIC_ORIGIN is required},http://localhost:8080,http://127.0.0.1:8080
+      OPS_ORIGIN: http://127.0.0.1:3001
+      ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET:?ACCESS_TOKEN_SECRET is required}
+      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:?REFRESH_TOKEN_SECRET is required}
+      FIELD_ENCRYPTION_KEY_BASE64: ${FIELD_ENCRYPTION_KEY_BASE64:?FIELD_ENCRYPTION_KEY_BASE64 is required}
+      LOOKUP_HMAC_PEPPER: ${LOOKUP_HMAC_PEPPER:?LOOKUP_HMAC_PEPPER is required}
+      OTP_PROVIDER: primary
+      APPLE_BUNDLE_ID: com.yaokai.Spott
+      APPLE_STORE_ENVIRONMENT: Production
+      APPLE_ROOT_CA_PATHS: services/api/certs/AppleRootCA-G2.cer,services/api/certs/AppleRootCA-G3.cer
+      APPLE_ENABLE_ONLINE_CHECKS: 'false'
+      SPOTT_WEB_BFF_KEYS: ${SPOTT_WEB_BFF_KEYS:?SPOTT_WEB_BFF_KEYS is required}
+      SPOTT_WEB_BFF_CURRENT_KID: ${SPOTT_WEB_BFF_CURRENT_KID:?SPOTT_WEB_BFF_CURRENT_KID is required}
+      REFRESH_TOKEN_DERIVATION_KEYS: ${REFRESH_TOKEN_DERIVATION_KEYS:?REFRESH_TOKEN_DERIVATION_KEYS is required}
+      REFRESH_TOKEN_DERIVATION_CURRENT_KID: ${REFRESH_TOKEN_DERIVATION_CURRENT_KID:?REFRESH_TOKEN_DERIVATION_CURRENT_KID is required}
+      WEB_SESSION_BFF_ENFORCEMENT: 'off'
+      WEB_SESSION_RECOVERY_SECONDS: '120'
+      SPOTT_WEB_CANONICAL_ORIGIN: ${SPOTT_CANONICAL_ORIGIN:?SPOTT_CANONICAL_ORIGIN is required}
+      ACCOUNT_MERGE_EXECUTION_ENABLED: 'false'
+    ports:
+      - 127.0.0.1:4100:4100
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:4100/v1/health').then(async response => {
+          const body = await response.json(); if (!response.ok || body.status !== 'ok' ||
+          body.dependencies?.postgres !== 'ok') process.exit(1); }).catch(() => process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 15s
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777
+    logging: *runtime-logging
+    mem_limit: 768m
+    networks:
+      - app
+
+  web:
+    <<: [*runtime-image, *runtime-security]
+    restart: unless-stopped
+    working_dir: /app/apps/web
+    command:
+      - pnpm
+      - start
+      - --
+      - --port
+      - '3000'
+      - --hostname
+      - 0.0.0.0
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: --max-old-space-size=768
+      PORT: '3000'
+      NEXT_PUBLIC_API_URL: /v1
+      NEXT_PUBLIC_SITE_URL: ${SPOTT_PUBLIC_ORIGIN:?SPOTT_PUBLIC_ORIGIN is required}
+      NEXT_PUBLIC_MAP_STYLE_URL: ${NEXT_PUBLIC_MAP_STYLE_URL:?NEXT_PUBLIC_MAP_STYLE_URL is required}
+      API_INTERNAL_URL: http://api:4100/v1
+      WRANGLER_WRITE_LOGS: 'false'
+      WRANGLER_LOG_PATH: .wrangler/wrangler.log
+      MINIFLARE_REGISTRY_PATH: .wrangler/registry
+    ports:
+      - 127.0.0.1:3000:3000
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/discover').then(response => {
+          if (!response.ok) process.exit(1); }).catch(() => process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777
+      - /app/apps/web/.wrangler:rw,noexec,nosuid,nodev,mode=0700,uid=1000,gid=1000
+    logging: *runtime-logging
+    mem_limit: 1024m
+    networks:
+      - app
+
+volumes:
+  postgres_data:
+
+networks:
+  app:
+    driver: bridge

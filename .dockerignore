@@ -1,6 +1,7 @@
 **/.DS_Store
 **/.git
 **/.next
+**/.vinext
 **/.turbo
 **/DerivedData
 **/dist
@@ -13,3 +14,9 @@ SpottTests
 SpottUITests
 docs
 packages
+
+# Never send runtime credentials into any Docker build context.
+.env
+.env.*
+**/.env
+**/.env.*

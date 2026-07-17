@@ -21,8 +21,13 @@
     "infra:down": "docker compose -f infrastructure/docker/compose.yaml down",
     "contract:lint": "redocly lint packages/contracts/openapi.yaml",
     "contract:bundle": "redocly bundle packages/contracts/openapi.yaml -o packages/contracts/openapi.bundle.yaml",
-    "test:e2e": "playwright test",
-    "test:load": "k6 run tests/load/registration-last-seat.js"
+    "test:e2e": "node scripts/ci/run-verified-playwright.mjs --lock ci/toolchain-lock.json --package-json node_modules/@playwright/test/package.json --root-prefix / --mode test",
+    "test:e2e:core:web": "tsx scripts/run-core-journey-e2e.ts web",
+    "test:e2e:core:ios": "tsx scripts/run-core-journey-e2e.ts ios",
+    "test:load": "k6 run tests/load/registration-last-seat.js",
+    "test:quality:ci": "node --test tests/quality/*.test.mjs",
+    "check:generated": "scripts/verify-generated-artifacts.sh --repo-root .",
+    "test:integration:postgres": "tsx scripts/ci/run-postgres-integration.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.31.0",
@@ -33,6 +38,7 @@
     "@typescript-eslint/eslint-plugin": "^8.38.0",
     "@typescript-eslint/parser": "^8.38.0",
     "eslint": "^9.31.0",
+    "js-yaml": "4.3.0",
     "pg": "^8.16.3",
     "prettier": "^3.6.2",
     "tsx": "^4.20.3",

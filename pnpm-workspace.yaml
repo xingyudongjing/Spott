@@ -17,3 +17,15 @@ onlyBuiltDependencies:
   - '@nestjs/core'
   - esbuild
   - sharp
+
+# Keep native Vite/Rolldown bindings for both the Apple-silicon developer
+# workstation and the Linux x64 production image in the immutable lockfile.
+supportedArchitectures:
+  os:
+    - darwin
+    - linux
+  cpu:
+    - arm64
+    - x64
+  libc:
+    - glibc

@@ -18,7 +18,26 @@ export default tseslint.config(
       '@typescript-eslint/consistent-type-imports': 'error',
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-misused-promises': 'error',
-      '@typescript-eslint/require-await': 'off'
+      '@typescript-eslint/require-await': 'off',
+    },
+  },
+  {
+    ...tseslint.configs.disableTypeChecked,
+    files: ['**/*.mjs'],
+    languageOptions: {
+      ...tseslint.configs.disableTypeChecked.languageOptions,
+      globals: {
+        Buffer: 'readonly',
+        process: 'readonly',
+        structuredClone: 'readonly',
+        URL: 'readonly',
+      },
+    },
+  },
+  {
+    files: ['scripts/ci/scan-built-artifacts.mjs', 'scripts/ci/scan-repository-secrets.mjs'],
+    rules: {
+      'no-control-regex': 'off',
     },
   },
 );

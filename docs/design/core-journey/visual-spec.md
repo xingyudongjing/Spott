@@ -31,9 +31,6 @@ All colors, radii, spacing, type, and motion map to `packages/design-tokens/src/
 light: canvas #F7F5F0, surface #FFFFFF, ink #17181C, muted #6F737C,
        twilight #6E5BE7, coral #FF745F, mint #3DBD91,
        amber #D99A2B, danger #D84B5B, divider #E6E2DA
-dark:  canvas #0E1014, surface #171A20, ink #F7F6F2, muted #A7ACB7,
-       twilight #9B8CFF, coral #FF866F, mint #51D4A5,
-       amber #F0B84F, danger #FF6B79, divider #2B3038
 spacing: 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64
 radii: control 12, card 18, cover 24, panel 28
 motion: 120 / 220 / 360 ms; 1 ms under reduced motion
@@ -92,7 +89,7 @@ Do not add “recommended for you,” friend attendance, participant avatars, ra
 ## Icon and image treatment
 
 - Icons are simple, optical 18–22 px, rounded outline, approximately 1.5–1.75 px stroke, `currentColor`, aligned to text baselines.
-- Selected navigation may use a filled compass/calendar variant when it remains legible in both themes.
+- Selected navigation may use a filled compass/calendar variant when it remains legible in the required Light theme, high-contrast mode, and forced-colors mode.
 - Cover images use stable aspect ratios, correct responsive sizes, focal cropping, alt text, and a reserved placeholder to prevent CLS.
 - Concept images are QA references only. They do not authorize fake covers, fake avatars, or generated event photos.
 
@@ -100,5 +97,5 @@ Do not add “recommended for you,” friend attendance, participant avatars, ra
 
 - Compare browser screenshots against both reference images at their native dimensions with `view_image`.
 - Check at least: header density, first-event vertical position, search/filter geometry, type hierarchy, surface/border treatment, event fact order, list/map selected state, and safe-area dock.
-- Verify 390, 768, and 1440 px; light/dark; `zh-Hans`, `ja`, and `en`; keyboard focus and reduced motion.
+- Verify 390, 768, and 1440 px; Light only per the latest handoff requirement; `zh-Hans`, `ja`, and `en`; high contrast, forced colors, keyboard focus, and reduced motion. Native iOS owns system dark-appearance verification in its separate specification.
 - A functional pass is not a visual pass. Any clipped content, default-looking control, invented copy, fake fact, or first event below the mobile y = 330 gate blocks completion.

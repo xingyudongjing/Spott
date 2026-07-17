@@ -383,13 +383,14 @@ test("exposes cross-device account, media, transfer, and poster recovery contrac
 });
 
 test("sends the same privacy-gated core funnel analytics from Web", async () => {
-  const [analytics, discovery, eventDetail, registration, composer, settings] = await Promise.all([
+  const [analytics, discovery, eventDetail, registration, composer, settings, wallet] = await Promise.all([
     readFile(new URL("../app/lib/analytics.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/components/discovery/DiscoveryShell.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/e/[slug]/EventDetailClient.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/register/[slug]/RegistrationFlow.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/create/EventComposer.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/me/settings/SettingsClient.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/me/wallet/WalletClient.tsx", import.meta.url), "utf8"),
   ]);
   assert.match(analytics, /\/analytics\/events\/batch/);
   assert.match(analytics, /spott\.analytics\.consent\.v1/);
@@ -400,6 +401,9 @@ test("sends the same privacy-gated core funnel analytics from Web", async () => 
   assert.match(registration, /trackProductEvent\(["']registration_completed["']/);
   assert.match(composer, /trackProductEvent\(["']event_submission_completed["']/);
   assert.match(settings, /setAnalyticsConsent/);
+  // Points funnel (product §P1): 查看钱包 → 进入购买.
+  assert.match(wallet, /trackProductEvent\(["']wallet_viewed["']/);
+  assert.match(wallet, /trackProductEvent\(["']points_purchase_viewed["']/);
 });
 
 test("app source never uses blocking browser confirm, prompt, or alert dialogs", async () => {

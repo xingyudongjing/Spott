@@ -31,6 +31,23 @@ import {
   type DiscoveryTuning,
 } from './events.discovery-sql.js';
 import { buildZeroResultSuggestions } from './events.discovery-suggestions.js';
+import {
+  DEFAULT_COMMENT_BLOCKLIST,
+  screenCommentBody,
+} from './comment-moderation.js';
+
+interface EventCommentRow {
+  id: string;
+  target_id: string;
+  author_id: string;
+  author_name: string | null;
+  body: string;
+  parent_id: string | null;
+  source_language: 'zh-Hans' | 'ja' | 'en';
+  version: string;
+  created_at: Date;
+  updated_at: Date;
+}
 
 const timeCursorSchema = z.object({
   date: z.iso.datetime({ offset: true }),
@@ -404,6 +421,181 @@ export class EventsService {
       [user.id],
     );
     return { items: result.rows.map((row) => this.toView(row, user, false)) };
+  }
+
+  /**
+   * Controlled event comments (product G3). Reads the visible comment thread for
+   * an event page. This is a *controlled* comment surface, not open messaging:
+   * writing is still gated by the event's comment permission in createComment.
+   */
+  async comments(eventId: string, viewerId?: string): Promise<unknown> {
+    const client = await this.database.pool.connect();
+    try {
+      const event = await this.loadEvent(client, eventId, viewerId, false);
+      const result = await client.query<EventCommentRow>(
+        `SELECT comment.id, comment.target_id, comment.author_id, comment.body,
+           comment.parent_id, comment.source_language, comment.version,
+           comment.created_at, comment.updated_at, profile.nickname AS author_name
+         FROM community.comments comment
+         LEFT JOIN identity.profiles profile
+           ON profile.user_id = comment.author_id AND profile.deleted_at IS NULL
+         WHERE comment.target_type = 'event' AND comment.target_id = $1
+           AND comment.status = 'visible' AND comment.deleted_at IS NULL
+         ORDER BY comment.created_at, comment.id`,
+        [event.id],
+      );
+      return {
+        eventId: event.id,
+        commentPermission: event.comment_permission,
+        items: result.rows.map((row) => this.eventCommentView(row)),
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Writes a comment against an event (target_type='event'). Access is bound to
+   * the event's comment permission so this stays a controlled surface — never
+   * open stranger-to-stranger messaging:
+   *   - disabled       → nobody can write
+   *   - participants   → the organizer or a confirmed/checked-in attendee
+   *   - group_members  → the organizer or an active member of the linked group
+   */
+  async createComment(
+    actor: AuthenticatedUser,
+    eventId: string,
+    key: string,
+    input: { body: string; parentId?: string | undefined; locale: 'zh-Hans' | 'ja' | 'en' },
+  ): Promise<unknown> {
+    if (!actor.phoneVerified) {
+      throw new DomainError('PHONE_VERIFICATION_REQUIRED', '发表评论前需要验证日本手机号。', 403, {
+        actions: [{ type: 'verifyPhone', label: '继续验证' }],
+      });
+    }
+    if (actor.restrictions.includes('commentBlocked')) {
+      throw new DomainError('ACCOUNT_RESTRICTED', '当前账号暂不能发表评论。', 403);
+    }
+    return this.database.transaction(async (client) => {
+      const hash = this.idempotency.requestHash('POST', `/events/${eventId}/comments`, input);
+      const replay = await this.idempotency.claim<unknown>(client, actor.id, key, hash);
+      if (replay) return replay.body;
+      const event = await this.loadEvent(client, eventId, actor.id, false);
+      await this.assertCanComment(client, event, actor);
+
+      const blocklist = await this.loadCommentBlocklist(client);
+      const screening = screenCommentBody(input.body, blocklist);
+      if (!screening.clean) {
+        throw new DomainError('COMMENT_CONTENT_BLOCKED', '评论包含不被允许的攻击性内容。', 422, {
+          retryable: false,
+        });
+      }
+
+      if (input.parentId) {
+        const parent = await client.query(
+          `SELECT 1 FROM community.comments
+           WHERE id = $1 AND target_type = 'event' AND target_id = $2
+             AND status = 'visible' AND deleted_at IS NULL`,
+          [input.parentId, event.id],
+        );
+        if (!parent.rowCount) throw new DomainError('COMMENT_PARENT_NOT_FOUND', '回复的评论不存在。', 404);
+      }
+
+      const result = await client.query<EventCommentRow>(
+        `INSERT INTO community.comments(
+           target_type, target_id, author_id, body, parent_id, source_language
+         ) VALUES ('event',$1,$2,$3,$4,$5)
+         RETURNING id, target_id, author_id, body, parent_id, source_language,
+           version, created_at, updated_at, NULL::text AS author_name`,
+        [event.id, actor.id, input.body, input.parentId ?? null, input.locale],
+      );
+      const row = result.rows[0]!;
+      await this.recordChange(client, actor.id, event.id, Number(event.version), 'event.comment.created', ['comments'], {
+        commentId: row.id,
+        parentId: row.parent_id,
+      });
+      const body = this.eventCommentView(row);
+      await this.idempotency.complete(client, actor.id, key, { status: 201, body }, {
+        type: 'comment',
+        id: row.id,
+      });
+      return body;
+    });
+  }
+
+  private async assertCanComment(
+    client: PoolClient,
+    event: EventRow,
+    actor: AuthenticatedUser,
+  ): Promise<void> {
+    const permission = event.comment_permission;
+    if (permission === 'disabled') {
+      throw new DomainError('EVENT_COMMENTS_DISABLED', '该活动已关闭评论。', 422, { retryable: false });
+    }
+    if (['removed', 'rejected', 'draft'].includes(event.status)) {
+      throw new DomainError('EVENT_COMMENT_FORBIDDEN', '该活动当前不接受评论。', 403);
+    }
+    // The organizer always owns the comment surface for their own event.
+    if (actor.id === event.organizer_id) return;
+
+    const blocked = await client.query(
+      `SELECT 1 FROM identity.blocks
+       WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)`,
+      [actor.id, event.organizer_id],
+    );
+    if (blocked.rowCount) throw new DomainError('EVENT_COMMENT_FORBIDDEN', '无法在此活动下评论。', 403);
+
+    if (permission === 'participants') {
+      if (!['confirmed', 'checked_in'].includes(event.registration_status ?? '')) {
+        throw new DomainError('EVENT_COMMENT_FORBIDDEN', '只有已确认报名的参加者可以评论。', 403);
+      }
+      return;
+    }
+    if (permission === 'group_members') {
+      if (!event.group_id) {
+        throw new DomainError('EVENT_COMMENT_FORBIDDEN', '该活动未关联群组，无法开放群成员评论。', 403);
+      }
+      const membership = await client.query(
+        `SELECT 1 FROM community.group_memberships
+         WHERE group_id = $1 AND user_id = $2 AND status = 'active'`,
+        [event.group_id, actor.id],
+      );
+      if (!membership.rowCount) {
+        throw new DomainError('EVENT_COMMENT_FORBIDDEN', '只有关联群组的正式成员可以评论。', 403);
+      }
+      return;
+    }
+    throw new DomainError('EVENT_COMMENT_FORBIDDEN', '该活动当前不接受评论。', 403);
+  }
+
+  private async loadCommentBlocklist(client: PoolClient): Promise<readonly string[]> {
+    const result = await client.query<{ value_json: unknown }>(
+      `SELECT value_json FROM admin.config_revisions
+       WHERE key = 'community.comment.blocklist' AND state = 'active'
+         AND (effective_from IS NULL OR effective_from <= clock_timestamp())
+         AND (effective_to IS NULL OR effective_to > clock_timestamp())
+       ORDER BY version DESC LIMIT 1`,
+    );
+    const value = result.rows[0]?.value_json;
+    if (Array.isArray(value)) {
+      const terms = value.filter((term): term is string => typeof term === 'string');
+      if (terms.length) return terms;
+    }
+    return DEFAULT_COMMENT_BLOCKLIST;
+  }
+
+  private eventCommentView(row: EventCommentRow): Record<string, unknown> {
+    return {
+      id: row.id,
+      eventId: row.target_id,
+      author: { id: row.author_id, name: row.author_name ?? 'Spott 用户' },
+      body: row.body,
+      parentId: row.parent_id,
+      locale: row.source_language,
+      version: Number(row.version),
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+    };
   }
 
   async createDraft(

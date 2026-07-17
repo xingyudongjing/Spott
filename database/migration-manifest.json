@@ -116,6 +116,11 @@
       "sequence": 23,
       "filename": "0023_phone_reward_once_per_phone.sql",
       "sha256": "9a91ee7a0d0c0a9e6223aabc379b529b2882279c3f93c00e64c797a8763502c3"
+    },
+    {
+      "sequence": 34,
+      "filename": "0034_ticketing_shell.sql",
+      "sha256": "a1424a0ccf9479023c6d9a4e8975ff0e94c0f456af9f4fd7e75e00c5a7d1fdc0"
     }
   ]
 }

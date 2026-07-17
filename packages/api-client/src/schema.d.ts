@@ -2604,7 +2604,7 @@ export interface components {
         /** @enum {string} */
         EventStatus: "draft" | "pending_review" | "needs_changes" | "published" | "registration_closed" | "in_progress" | "ended" | "cancelled" | "removed" | "appeal_pending" | "archived" | "deleted" | "rejected";
         /** @enum {string} */
-        AvailableAction: "register" | "joinWaitlist" | "cancelRegistration" | "viewTicket" | "checkIn" | "edit" | "submit" | "cancelEvent" | "appeal" | "joinGroup";
+        AvailableAction: "register" | "joinWaitlist" | "cancelRegistration" | "viewTicket" | "selectTicket" | "checkIn" | "edit" | "submit" | "cancelEvent" | "appeal" | "joinGroup";
         Registration: {
             id: components["schemas"]["UUID"];
             eventId: components["schemas"]["UUID"];

@@ -15,6 +15,7 @@ import { RegistrationsModule } from './modules/registrations/registrations.modul
 import { SafetyModule } from './modules/safety/safety.module.js';
 import { StoreKitModule } from './modules/storekit/storekit.module.js';
 import { SyncModule } from './modules/sync/sync.module.js';
+import { TicketsModule } from './modules/tickets/tickets.module.js';
 import { DatabaseModule } from './platform/database.js';
 import { PlatformModule } from './platform/platform.module.js';
 
@@ -29,6 +30,7 @@ import { PlatformModule } from './platform/platform.module.js';
     StoreKitModule,
     EventsModule,
     RegistrationsModule,
+    TicketsModule,
     GroupsModule,
     GrowthModule,
     CommunityModule,

@@ -1072,6 +1072,7 @@ describe('RegistrationsService privacy-safe itinerary pagination', () => {
           status: 'confirmed',
           partySize: 2,
           attendeeNote: null,
+          ticketTypeId: null,
           offerExpiresAt: null,
           availableActions: ['cancelRegistration', 'viewTicket'],
           version: 4,

@@ -493,6 +493,47 @@ export class EventsService {
       await this.upsertDetails(client, before.id, input);
       const after = await this.loadEvent(client, before.id, user.id);
       const changedFields = Object.keys(input);
+
+      // submit() runs the risk engine, but update() previously did not. That let
+      // an organizer publish benign content (auto-approved) and then PATCH in
+      // prohibited or high-risk content that stayed public with no re-check.
+      // Re-assess whenever risk-bearing content changes.
+      const riskRelevantFields = [
+        'title', 'description', 'tags', 'attendeeRequirements',
+        'riskFlags', 'riskDetails', 'fee', 'startsAt',
+      ];
+      if (changedFields.some((field) => riskRelevantFields.includes(field))) {
+        const assessment = this.assessRisk(after, await this.riskConfig(client));
+        if (assessment.route === 'prohibit') {
+          throw new DomainError('EVENT_RISK_PROHIBITED', '活动内容命中平台禁止发布的规则，无法保存。', 422, {
+            meta: {
+              riskTypes: assessment.riskTypes,
+              explanations: assessment.explanations,
+              score: assessment.score,
+            },
+          });
+        }
+        // A live event that is already public cannot be edited into content that
+        // would need human review: the state machine has no published->review
+        // path, so the change is rejected and the approved content is preserved.
+        if (before.status === 'published' && assessment.route !== 'auto_approve') {
+          throw new DomainError('EVENT_REVIEW_REQUIRED', '该修改会使已发布的活动需要重新审核，无法直接保存。', 422, {
+            meta: {
+              riskTypes: assessment.riskTypes,
+              explanations: assessment.explanations,
+              score: assessment.score,
+            },
+          });
+        }
+        // Keep event_risks in step with the edited content, and pin the
+        // server-computed risk flags so a client cannot self-declare them away.
+        await this.writeRisks(client, before.id, assessment);
+        await client.query(
+          `UPDATE events.events SET risk_flags = $2, updated_by = $3 WHERE id = $1`,
+          [before.id, assessment.riskTypes, user.id],
+        );
+      }
+
       await client.query(
         `INSERT INTO events.event_revisions(
            event_id, base_version, new_version, changed_fields, before_json, after_json,

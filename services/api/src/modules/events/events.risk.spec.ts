@@ -173,3 +173,87 @@ describe('event submission risk engine', () => {
     expect(statusWritten(client)).toBe('published');
   });
 });
+
+/**
+ * update() harness: a published event is reloaded as `after` with the edited
+ * content, mirroring how the service re-reads the row after applying the PATCH.
+ */
+function updateHarness(before: Record<string, unknown>, after: Record<string, unknown>, config?: unknown) {
+  const client = {
+    query: vi.fn(async (sql: string, values?: readonly unknown[]) => {
+      void values;
+      if (sql.includes('FROM admin.config_revisions')) {
+        return { rows: config === undefined ? [] : [{ value_json: config }], rowCount: config === undefined ? 0 : 1 };
+      }
+      if (sql.includes('UPDATE events.events SET') || sql.includes('UPDATE events.events SET updated_by')) {
+        return { rows: [], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 1 };
+    }),
+  };
+  const database = {
+    transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) => work(client)),
+  };
+  const idempotency = {
+    requestHash: vi.fn().mockReturnValue(Buffer.alloc(32)),
+    claim: vi.fn().mockResolvedValue(null),
+    complete: vi.fn(),
+  };
+  const service = new EventsService(database as never, {} as never, idempotency as never, {} as never);
+  Object.assign(service, {
+    loadEvent: vi.fn().mockResolvedValueOnce(before).mockResolvedValue(after),
+    upsertDetails: vi.fn(),
+    recordChange: vi.fn(),
+    toView: vi.fn().mockReturnValue({ id: before.id }),
+  });
+  return { service, client };
+}
+
+function update(service: EventsService, before: Record<string, unknown>, input: Record<string, unknown>) {
+  return service.update(publisher, before.id as string, '019b0000-0000-7000-9000-000000000002', 1, input);
+}
+
+describe('event update re-assesses risk (no submit() bypass)', () => {
+  it('rejects editing a published event into prohibited content', async () => {
+    const before = { ...benignDraft, status: 'published' };
+    const after = { ...before, description: prohibitedDraft.description, version: '2' };
+    const { service } = updateHarness(before, after);
+
+    // Attack: publish a benign event (auto-approved), then PATCH prohibited
+    // content in. Without re-assessment this stays published.
+    await expect(update(service, before, { description: prohibitedDraft.description })).rejects.toMatchObject({
+      code: 'EVENT_RISK_PROHIBITED',
+      status: 422,
+    });
+  });
+
+  it('rejects a risk-raising edit to a published event (state machine has no published->review path)', async () => {
+    const before = { ...benignDraft, status: 'published' };
+    const after = {
+      ...before,
+      title: highRiskDraft.title,
+      description: highRiskDraft.description,
+      starts_at: highRiskDraft.starts_at,
+      version: '2',
+    };
+    const { service } = updateHarness(before, after, { sampleRate: 0 });
+
+    // A live, already-approved event cannot be silently edited into content
+    // that would require manual review. The edit is rejected and the event
+    // keeps its approved content.
+    await expect(
+      update(service, before, { title: highRiskDraft.title, description: highRiskDraft.description }),
+    ).rejects.toMatchObject({ code: 'EVENT_REVIEW_REQUIRED', status: 422 });
+  });
+
+  it('keeps a published event published when the edit stays benign', async () => {
+    const before = { ...benignDraft, status: 'published' };
+    const after = { ...before, description: '换个说法：一起在代代木公园散步聊天，欢迎新朋友。', version: '2' };
+    const { service, client } = updateHarness(before, after, { sampleRate: 0 });
+
+    await update(service, before, { description: after.description });
+
+    // No forced unpublish for an ordinary edit.
+    expect(statusWritten(client)).toBeUndefined();
+  });
+});

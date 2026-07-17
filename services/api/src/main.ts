@@ -3,7 +3,6 @@ import { existsSync } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
 import type { Http2ServerRequest } from 'node:http2';
 import process from 'node:process';
-import fastifyHelmet from '@fastify/helmet';
 import fastifyRateLimit from '@fastify/rate-limit';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
@@ -13,6 +12,7 @@ import { AppModule } from './app.module.js';
 import { configuration, corsOrigins } from './config.js';
 import { APIExceptionFilter } from './platform/http-exception.filter.js';
 import type { SpottRequest } from './platform/request-context.js';
+import { registerSecurityHeaders } from './platform/security-headers.js';
 
 if (existsSync('.env')) process.loadEnvFile('.env');
 
@@ -50,12 +50,7 @@ const app = await NestFactory.create<NestFastifyApplication>(
   { bufferLogs: true, rawBody: true },
 );
 
-await app.register(fastifyHelmet, {
-  contentSecurityPolicy: false,
-  strictTransportSecurity:
-    config.NODE_ENV === 'production' ? { maxAge: 63_072_000, includeSubDomains: true, preload: true } : false,
-  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
-});
+await registerSecurityHeaders(app.getHttpAdapter().getInstance(), config);
 await app.register(fastifyRateLimit, {
   max: 300,
   timeWindow: '1 minute',

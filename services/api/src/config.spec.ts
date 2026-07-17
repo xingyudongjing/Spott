@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { corsOrigins, parseConfiguration, parseVersionedKeyring } from './config.js';
+import {
+  corsOrigins,
+  devHeaderAuthEnabled,
+  parseConfiguration,
+  parseVersionedKeyring,
+} from './config.js';
 
 const bffKey = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY';
 const refreshKey = 'ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA';
@@ -296,6 +301,26 @@ describe('session security configuration', () => {
     expect(() => parseConfiguration(baseEnvironment({
       ACCOUNT_MERGE_EXECUTION_ENABLED: 'yes',
     }))).toThrow(/ACCOUNT_MERGE_EXECUTION_ENABLED/);
+  });
+
+  it('keeps header authentication disabled unless explicitly enabled outside production', () => {
+    expect(parseConfiguration(baseEnvironment()).ENABLE_DEV_HEADER_AUTH).toBe('false');
+    expect(devHeaderAuthEnabled(parseConfiguration(baseEnvironment()))).toBe(false);
+    expect(devHeaderAuthEnabled(parseConfiguration(baseEnvironment({
+      ENABLE_DEV_HEADER_AUTH: 'true',
+    })))).toBe(true);
+    expect(() => parseConfiguration(baseEnvironment({
+      ENABLE_DEV_HEADER_AUTH: 'yes',
+    }))).toThrow(/ENABLE_DEV_HEADER_AUTH/);
+  });
+
+  it('forces header authentication off in production even when the switch asks for it', () => {
+    const config = parseConfiguration(productionEnvironment({ ENABLE_DEV_HEADER_AUTH: 'true' }));
+
+    expect(config.ENABLE_DEV_HEADER_AUTH).toBe('false');
+    expect(devHeaderAuthEnabled(config)).toBe(false);
+    // Second line of defence: the helper refuses production even if the value leaked through.
+    expect(devHeaderAuthEnabled({ NODE_ENV: 'production', ENABLE_DEV_HEADER_AUTH: 'true' })).toBe(false);
   });
 
   it('requires HTTPS for the canonical production origin', () => {

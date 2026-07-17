@@ -59,6 +59,11 @@ const rawConfigurationSchema = z.object({
   WEB_SESSION_RECOVERY_SECONDS: z.coerce.number().int().positive(),
   SPOTT_WEB_CANONICAL_ORIGIN: canonicalOriginSchema,
   ACCOUNT_MERGE_EXECUTION_ENABLED: z.enum(['true', 'false']).default('false'),
+  // Opt-in local-debugging backdoor: trust `x-spott-user-id`/`x-spott-role` request
+  // headers instead of a verified session. Defaults to disabled so a deployment that
+  // forgets NODE_ENV cannot serve every Ops capability to anonymous callers, and is
+  // forced back to 'false' in production by parseConfiguration.
+  ENABLE_DEV_HEADER_AUTH: z.enum(['true', 'false']).default('false'),
 });
 
 type RawConfiguration = z.infer<typeof rawConfigurationSchema>;
@@ -264,9 +269,22 @@ export function parseConfiguration(environment: NodeJS.ProcessEnv): Configuratio
 
   return {
     ...raw,
+    // Production can never carry the header backdoor, whatever the environment says.
+    ENABLE_DEV_HEADER_AUTH: raw.NODE_ENV === 'production' ? 'false' : raw.ENABLE_DEV_HEADER_AUTH,
     SPOTT_WEB_BFF_KEYS: bffKeys,
     REFRESH_TOKEN_DERIVATION_KEYS: refreshDerivationKeys,
   };
+}
+
+/**
+ * The only sanctioned way to ask whether header-based development authentication may run.
+ * Both conditions are re-checked at every call site: an explicit dedicated opt-in, and a
+ * non-production NODE_ENV. Neither alone is sufficient.
+ */
+export function devHeaderAuthEnabled(
+  config: Pick<Configuration, 'NODE_ENV' | 'ENABLE_DEV_HEADER_AUTH'>,
+): boolean {
+  return config.NODE_ENV !== 'production' && config.ENABLE_DEV_HEADER_AUTH === 'true';
 }
 
 export function configuration(): Configuration {

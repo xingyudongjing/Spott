@@ -2,7 +2,7 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { DomainError, transitionEvent, type EventStatus } from '@spott/domain';
 import type { PoolClient } from 'pg';
-import { configuration } from '../../config.js';
+import { configuration, devHeaderAuthEnabled } from '../../config.js';
 import { Database } from '../../platform/database.js';
 import { IdempotencyService } from '../../platform/idempotency.js';
 import type { AuthenticatedUser } from '../../platform/request-context.js';
@@ -1796,7 +1796,7 @@ export class OpsService {
       [user.id, user.sessionId],
     );
     let admin = result.rows[0];
-    if (!admin && configuration().NODE_ENV !== 'production' && user.roles.includes('operator')) {
+    if (!admin && devHeaderAuthEnabled(configuration()) && user.roles.includes('operator')) {
       admin = {
         id: user.id,
         label: 'Development operator',

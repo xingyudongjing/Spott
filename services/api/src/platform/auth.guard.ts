@@ -7,7 +7,7 @@ import {
 import type { CanActivate, ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { jwtVerify } from 'jose';
-import { configuration } from '../config.js';
+import { configuration, devHeaderAuthEnabled } from '../config.js';
 import { IS_PUBLIC_KEY, type SpottRequest } from './request-context.js';
 import { SessionAuthority } from './session-authority.js';
 
@@ -50,7 +50,7 @@ export class AccessTokenGuard implements CanActivate {
         : undefined;
     if (authorization === undefined) {
       const demoUser = request.headers['x-spott-user-id'];
-      if (configuration().NODE_ENV !== 'production' && typeof demoUser === 'string') {
+      if (devHeaderAuthEnabled(configuration()) && typeof demoUser === 'string') {
         request.user = {
           id: demoUser,
           sessionId: 'development-session',

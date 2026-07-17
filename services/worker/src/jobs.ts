@@ -27,6 +27,83 @@ interface DeliveryRow {
   payload_ref: Record<string, unknown>;
 }
 
+type NotificationChannel = 'in_app' | 'push' | 'email';
+
+/**
+ * Delivery policy for a semantic notification type (product doc K).
+ * - `push`/`email`: whether the channel is part of the type's default fan-out.
+ *   The in-app channel is always retained ("站内通知始终保留") and is not modelled here.
+ * - `closable`: whether the user may switch the push/email channels off. Non-closable
+ *   service notices keep their channels regardless of stored preferences.
+ * - `bypassQuiet`: whether push ignores the quiet window (cancel / waitlist / safety).
+ * - `frequencyCapped`: whether push obeys the per-resource daily announcement cap.
+ */
+interface NotificationTypePolicy {
+  push: boolean;
+  email: boolean;
+  closable: boolean;
+  bypassQuiet: boolean;
+  frequencyCapped: boolean;
+}
+
+const DEFAULT_NOTIFICATION_TYPE_POLICY: NotificationTypePolicy = {
+  push: true,
+  email: false,
+  closable: true,
+  bypassQuiet: false,
+  frequencyCapped: false,
+};
+
+// Product doc K trigger matrix. These are safe defaults; each field is overridable at
+// runtime through the `notification.type_policies` config key so nothing is hardcoded.
+const NOTIFICATION_TYPE_POLICIES: Record<string, Partial<NotificationTypePolicy>> = {
+  // 报名成功/待确认/被拒绝 — service notice, cannot be fully switched off.
+  'registration.changed': { push: true, closable: false },
+  'registration.hold_expired': { push: true, closable: true },
+  // 候补递补 — cannot be disabled and is exempt from the quiet window.
+  'waitlist.offered': { push: true, closable: false, bypassQuiet: true },
+  // 活动开始前 24h/2h — adjustable reminders.
+  'event.reminder.24h': { push: true, closable: true },
+  'event.reminder.2h': { push: true, closable: true },
+  // 关键字段变更/活动取消 — mandatory, exempt from quiet, add email.
+  'event.key_fields_changed': { push: true, email: true, closable: false, bypassQuiet: true },
+  'event.cancelled': { push: true, email: true, closable: false, bypassQuiet: true },
+  // 审核/紧急下架 — 站内 + 邮件, mandatory.
+  'event.reviewed': { push: false, email: true, closable: false },
+  'event.removed': { push: false, email: true, closable: false, bypassQuiet: true },
+  // 审核、投诉和账号限制 — safety notices, mandatory, exempt from quiet.
+  'moderation.decided': { push: false, email: true, closable: false, bypassQuiet: true },
+  'account.restricted': { push: false, email: true, closable: false, bypassQuiet: true },
+  // 群组公告/新活动 — closable and subject to the daily frequency cap.
+  'group.announcement': { push: true, closable: true, frequencyCapped: true },
+  'group.dissolution_scheduled': { push: true, closable: false },
+  // 成就/普通积分获得 — 站内 by default, closable.
+  'achievements.awarded': { push: false, closable: true },
+};
+
+const DEFAULT_QUIET_START = '22:00';
+const DEFAULT_QUIET_END = '08:00';
+const DEFAULT_ANNOUNCEMENT_DAILY_CAP = 2;
+
+interface NotificationRuntimeConfig {
+  quietStart: string;
+  quietEnd: string;
+  announcementDailyCap: number;
+  typePolicies: Record<string, Partial<NotificationTypePolicy>>;
+}
+
+const TIME_OF_DAY = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function normalizeTimeOfDay(value: unknown, fallback: string): string {
+  return typeof value === 'string' && TIME_OF_DAY.test(value.trim()) ? value.trim() : fallback;
+}
+
+/** True when `now` (HH:MM, JST) falls inside the [start, end) window, honouring midnight wrap. */
+export function isWithinQuietWindow(now: string, start: string, end: string): boolean {
+  if (start === end) return false;
+  return start < end ? now >= start && now < end : now >= start || now < end;
+}
+
 export class WorkerJobs {
   private readonly adapters: NotificationAdapters;
   private readonly decryptor: FieldDecryptor;
@@ -102,55 +179,136 @@ export class WorkerJobs {
 
   async orchestrateNotifications(): Promise<JobResult> {
     const result = await this.database.transaction(async (client) => {
-      const rows = await client.query<{ id: string; user_id: string; type: string }>(
-        `SELECT n.id, n.user_id, n.type FROM notification.notifications n
+      const runtime = await this.loadNotificationConfig(client);
+      const rows = await client.query<{ id: string; user_id: string; type: string; resource_public_id: string | null }>(
+        `SELECT n.id, n.user_id, n.type, n.resource_public_id FROM notification.notifications n
          WHERE NOT EXISTS (SELECT 1 FROM notification.deliveries d WHERE d.notification_id = n.id)
          ORDER BY n.created_at FOR UPDATE OF n SKIP LOCKED LIMIT $1`,
         [this.config.WORKER_BATCH_SIZE],
       );
       for (const row of rows.rows) {
-        const preferences = await client.query<{ in_app: boolean; push: boolean; email: boolean; quiet: boolean }>(
+        const policy: NotificationTypePolicy = {
+          ...DEFAULT_NOTIFICATION_TYPE_POLICY,
+          ...NOTIFICATION_TYPE_POLICIES[row.type],
+          ...runtime.typePolicies[row.type],
+        };
+        const preference = await client.query<{
+          in_app: boolean; push: boolean; email: boolean;
+          quiet_start: string | null; quiet_end: string | null; now_jst: string;
+        }>(
           `SELECT COALESCE(p.in_app, true) AS in_app, COALESCE(p.push, true) AS push,
              COALESCE(p.email, false) AS email,
-             COALESCE(CASE
-               WHEN p.quiet_hours IS NULL THEN false
-               WHEN lower(p.quiet_hours)::time < upper(p.quiet_hours)::time THEN
-                 (clock_timestamp() AT TIME ZONE 'Asia/Tokyo')::time >= lower(p.quiet_hours)::time
-                 AND (clock_timestamp() AT TIME ZONE 'Asia/Tokyo')::time < upper(p.quiet_hours)::time
-               ELSE
-                 (clock_timestamp() AT TIME ZONE 'Asia/Tokyo')::time >= lower(p.quiet_hours)::time
-                 OR (clock_timestamp() AT TIME ZONE 'Asia/Tokyo')::time < upper(p.quiet_hours)::time
-             END, false) AS quiet
+             to_char(lower(p.quiet_hours) AT TIME ZONE 'Asia/Tokyo', 'HH24:MI') AS quiet_start,
+             to_char(upper(p.quiet_hours) AT TIME ZONE 'Asia/Tokyo', 'HH24:MI') AS quiet_end,
+             to_char(clock_timestamp() AT TIME ZONE 'Asia/Tokyo', 'HH24:MI') AS now_jst
            FROM (SELECT 1) seed
            LEFT JOIN notification.preferences p ON p.user_id = $1 AND p.notification_type = $2`,
           [row.user_id, row.type],
         );
-        const preference = preferences.rows[0] ?? { in_app: true, push: true, email: false, quiet: false };
-        const critical = /cancelled|safety|account_restricted/.test(row.type);
-        const channels = [
-          ...(preference.in_app ? ['in_app'] : []),
-          ...(preference.push && (!preference.quiet || critical) ? ['push'] : []),
-          ...(preference.email && (!preference.quiet || critical) ? ['email'] : []),
-        ];
-        for (const channel of channels) {
+        const pref = preference.rows[0] ?? {
+          in_app: true, push: true, email: false, quiet_start: null, quiet_end: null, now_jst: '',
+        };
+        const quietStart = pref.quiet_start ?? runtime.quietStart;
+        const quietEnd = pref.quiet_end ?? runtime.quietEnd;
+        const quietNow = isWithinQuietWindow(pref.now_jst, quietStart, quietEnd);
+
+        // 站内通知始终保留 — the in-app channel is always delivered.
+        const queued: NotificationChannel[] = ['in_app'];
+        const suppressed: Array<{ channel: NotificationChannel; reason: string }> = [];
+
+        if (policy.push) {
+          const pushAllowed = policy.closable ? pref.push : true;
+          if (!pushAllowed) {
+            // User opted out of a closable push type; in-app already retains the notice.
+          } else if (quietNow && !policy.bypassQuiet) {
+            suppressed.push({ channel: 'push', reason: 'QUIET_HOURS' });
+          } else if (
+            policy.frequencyCapped &&
+            (await this.overAnnouncementCap(client, row, runtime.announcementDailyCap))
+          ) {
+            suppressed.push({ channel: 'push', reason: 'FREQUENCY_CAPPED' });
+          } else {
+            queued.push('push');
+          }
+        }
+
+        if (policy.email) {
+          // Email carries important service notices and is not gated by the quiet window.
+          const emailAllowed = policy.closable ? pref.email : true;
+          if (emailAllowed) queued.push('email');
+        }
+
+        for (const channel of queued) {
           await client.query(
             `INSERT INTO notification.deliveries(notification_id, channel)
              VALUES ($1,$2) ON CONFLICT (notification_id, channel) DO NOTHING`,
             [row.id, channel],
           );
         }
-        if (channels.length === 0) {
+        for (const entry of suppressed) {
           await client.query(
             `INSERT INTO notification.deliveries(notification_id, channel, state, last_error_code)
-             VALUES ($1,'in_app','suppressed','USER_PREFERENCES')
+             VALUES ($1,$2,'suppressed',$3)
              ON CONFLICT (notification_id, channel) DO NOTHING`,
-            [row.id],
+            [row.id, entry.channel, entry.reason],
           );
         }
       }
       return rows.rowCount ?? 0;
     });
     return { processed: result };
+  }
+
+  private async loadNotificationConfig(client: PoolClient): Promise<NotificationRuntimeConfig> {
+    const rows = await client.query<{ key: string; value_json: unknown }>(
+      `SELECT key, value_json FROM admin.config_revisions
+       WHERE key = ANY($1::text[]) AND state = 'active'
+         AND (effective_from IS NULL OR effective_from <= clock_timestamp())
+         AND (effective_to IS NULL OR effective_to > clock_timestamp())
+       ORDER BY key, version DESC`,
+      [['notification.quiet_hours', 'notification.frequency.announcement_daily', 'notification.type_policies']],
+    );
+    const values = new Map<string, unknown>();
+    for (const row of rows.rows) if (!values.has(row.key)) values.set(row.key, row.value_json);
+
+    const [rawStart, rawEnd] = this.parseQuietWindow(values.get('notification.quiet_hours'));
+    const capValue = values.get('notification.frequency.announcement_daily');
+    const cap = typeof capValue === 'number' && Number.isInteger(capValue) && capValue >= 0
+      ? capValue
+      : DEFAULT_ANNOUNCEMENT_DAILY_CAP;
+    const overrides = values.get('notification.type_policies');
+    const typePolicies = overrides && typeof overrides === 'object' && !Array.isArray(overrides)
+      ? (overrides as Record<string, Partial<NotificationTypePolicy>>)
+      : {};
+
+    return { quietStart: rawStart, quietEnd: rawEnd, announcementDailyCap: cap, typePolicies };
+  }
+
+  private parseQuietWindow(value: unknown): [string, string] {
+    if (typeof value === 'string') {
+      const [start, end] = value.replace(/[‒-―−]/g, '-').split('-');
+      return [
+        normalizeTimeOfDay(start, DEFAULT_QUIET_START),
+        normalizeTimeOfDay(end, DEFAULT_QUIET_END),
+      ];
+    }
+    return [DEFAULT_QUIET_START, DEFAULT_QUIET_END];
+  }
+
+  private async overAnnouncementCap(
+    client: PoolClient,
+    row: { user_id: string; type: string; resource_public_id: string | null },
+    cap: number,
+  ): Promise<boolean> {
+    if (!row.resource_public_id) return false;
+    const result = await client.query<{ c: number }>(
+      `SELECT count(*)::int AS c FROM notification.notifications n
+       WHERE n.user_id = $1 AND n.type = $2 AND n.resource_public_id = $3
+         AND (n.created_at AT TIME ZONE 'Asia/Tokyo')::date
+             = (clock_timestamp() AT TIME ZONE 'Asia/Tokyo')::date`,
+      [row.user_id, row.type, row.resource_public_id],
+    );
+    return Number(result.rows[0]?.c ?? 0) > cap;
   }
 
   async deliverNotifications(): Promise<JobResult> {

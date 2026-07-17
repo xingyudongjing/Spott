@@ -9,6 +9,7 @@ import {
   type WalletTransaction,
   type WalletView,
 } from "../../lib/client-api";
+import { trackProductEvent } from "../../lib/analytics";
 import { DashboardNav } from "../DashboardNav";
 
 export function WalletClient() {
@@ -16,6 +17,11 @@ export function WalletClient() {
   const [wallet, setWallet] = useState<WalletView | null>(null);
   const [rows, setRows] = useState<WalletTransaction[]>([]);
   const [message, setMessage] = useState("");
+
+  // Points funnel (product §P1): entering the wallet is the "查看钱包" step.
+  useEffect(() => {
+    void trackProductEvent("wallet_viewed", {});
+  }, []);
 
   useEffect(() => {
     Promise.all([
@@ -103,7 +109,17 @@ export function WalletClient() {
             <h1>{copy.title}</h1>
             <p>{copy.body}</p>
           </div>
-          <button className="create-button" type="button" onClick={() => setMessage(copy.store)}>
+          <button
+            className="create-button"
+            type="button"
+            onClick={() => {
+              // Points funnel (product §P1): opening the purchase path is "进入购买".
+              void trackProductEvent("points_purchase_viewed", {
+                total_balance: wallet?.totalBalance ?? 0,
+              });
+              setMessage(copy.store);
+            }}
+          >
             {copy.get}
           </button>
         </div>

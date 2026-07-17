@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { WorkerConfig } from './config.js';
 import type { WorkerDatabase } from './database.js';
@@ -1077,6 +1078,195 @@ export class WorkerJobs {
     }
   }
 
+  // Server-authoritative product analytics (docs 15.1-15.3 / product §P). Clients
+  // can only self-report the top of each funnel; the trustworthy floor — confirmed
+  // registrations, attendance, the North Star and the business-invariant counters —
+  // is derived here from the authoritative tables and written back as `server`
+  // platform events so the P2 metrics have a real, non-spoofable data source.
+  async deriveAnalyticsMetrics(): Promise<JobResult> {
+    return this.database.transaction(async (client) => {
+      const sessionId = randomUUID();
+      const windowDays = await this.activeConfigInt(client, 'analytics.northstar.window_days', 60);
+      const outboxDelaySeconds = await this.activeConfigInt(client, 'analytics.invariant.outbox_delay_seconds', 60);
+      let emitted = 0;
+
+      // North Star: real users who, after completing an offline activity (a check-in
+      // to an event that has ended), participate in or organise another activity
+      // within the configured retention window.
+      const northStar = await client.query<{ requalified_users: string }>(
+        `/* metric:northstar */
+         WITH completed AS (
+           SELECT c.user_id, e.ends_at
+           FROM events.checkins c
+           JOIN events.events e ON e.id = c.event_id
+           WHERE e.ends_at IS NOT NULL AND e.ends_at < clock_timestamp()
+         )
+         SELECT count(DISTINCT completed.user_id)::text AS requalified_users
+         FROM completed
+         WHERE EXISTS (
+             SELECT 1 FROM events.registrations later
+             WHERE later.user_id = completed.user_id
+               AND later.confirmed_at IS NOT NULL
+               AND later.confirmed_at > completed.ends_at
+               AND later.confirmed_at <= completed.ends_at + make_interval(days => $1)
+           )
+           OR EXISTS (
+             SELECT 1 FROM events.events organised
+             WHERE organised.organizer_id = completed.user_id
+               AND organised.created_at > completed.ends_at
+               AND organised.created_at <= completed.ends_at + make_interval(days => $1)
+               AND organised.status IN ('published','registration_closed','in_progress','ended')
+           )`,
+        [windowDays],
+      );
+      const requalifiedUsers = Number(northStar.rows[0]?.requalified_users ?? '0');
+      await this.emitServerMetric(client, sessionId, 'metrics_northstar_recorded', {
+        window_days: windowDays,
+        requalified_users: requalifiedUsers,
+      });
+      emitted += 1;
+
+      // Participant funnel (product §P1): submit → confirm → attend → feedback.
+      // Aggregate counters only; no identifiers ride along on server metrics.
+      const funnel = await client.query<{
+        registrations_submitted: string;
+        registrations_confirmed: string;
+        attendance_checked_in: string;
+        feedback_submitted: string;
+      }>(
+        `/* metric:funnel_participant */
+         SELECT
+           count(*) FILTER (
+             WHERE status IN ('pending','confirmed','waitlisted','offered','checked_in','no_show','cancelled')
+           )::text AS registrations_submitted,
+           count(*) FILTER (WHERE confirmed_at IS NOT NULL)::text AS registrations_confirmed,
+           count(*) FILTER (WHERE status = 'checked_in')::text AS attendance_checked_in,
+           (SELECT count(*) FROM community.feedback)::text AS feedback_submitted
+         FROM events.registrations`,
+      );
+      const funnelRow = funnel.rows[0];
+      await this.emitServerMetric(client, sessionId, 'funnel_participant_recorded', {
+        registrations_submitted: Number(funnelRow?.registrations_submitted ?? '0'),
+        registrations_confirmed: Number(funnelRow?.registrations_confirmed ?? '0'),
+        attendance_checked_in: Number(funnelRow?.attendance_checked_in ?? '0'),
+        feedback_submitted: Number(funnelRow?.feedback_submitted ?? '0'),
+      });
+      emitted += 1;
+
+      // Business invariants (doc 15.3). P0 breaches (oversell, ledger/balance) must be
+      // impossible under the DB constraints; a non-zero count means defence-in-depth
+      // has caught drift and the value is surfaced as an anomaly for alerting.
+      const invariants: Array<{ name: string; severity: 'p0' | 'p1'; sql: string; params: unknown[] }> = [
+        {
+          name: 'oversell',
+          severity: 'p0',
+          sql: `/* invariant:oversell */
+                SELECT count(*)::text AS count
+                FROM events.event_capacity cap
+                JOIN events.events e ON e.id = cap.event_id
+                WHERE e.capacity IS NOT NULL AND cap.confirmed_count > e.capacity`,
+          params: [],
+        },
+        {
+          name: 'duplicate_checkin',
+          severity: 'p0',
+          sql: `/* invariant:duplicate_checkin */
+                SELECT count(*)::text AS count FROM (
+                  SELECT event_id, user_id FROM events.checkins
+                  GROUP BY event_id, user_id HAVING count(*) > 1
+                ) duplicates`,
+          params: [],
+        },
+        {
+          name: 'negative_total_balance',
+          severity: 'p0',
+          sql: `/* invariant:negative_total_balance */
+                SELECT count(*)::text AS count FROM commerce.wallets
+                WHERE paid_balance + free_balance < 0`,
+          params: [],
+        },
+        {
+          name: 'expired_offer',
+          severity: 'p1',
+          sql: `/* invariant:expired_offer */
+                SELECT count(*)::text AS count FROM events.waitlist_promotions
+                WHERE accepted_at IS NULL AND expired_at IS NULL
+                  AND expires_at < clock_timestamp()`,
+          params: [],
+        },
+        {
+          name: 'outbox_delay',
+          severity: 'p1',
+          sql: `/* invariant:outbox_delay */
+                SELECT count(*)::text AS count FROM sync.outbox_events
+                WHERE published_at IS NULL
+                  AND available_at < clock_timestamp() - make_interval(secs => $1)`,
+          params: [outboxDelaySeconds],
+        },
+        {
+          name: 'sync_cursor_error',
+          severity: 'p1',
+          sql: `/* invariant:sync_cursor_error */
+                SELECT count(*)::text AS count FROM sync.device_cursors dc
+                WHERE dc.cursor > (SELECT COALESCE(max(seq), 0) FROM sync.change_log)`,
+          params: [],
+        },
+      ];
+
+      let invariantsFlagged = 0;
+      let p0Breaches = 0;
+      for (const invariant of invariants) {
+        const row = await client.query<{ count: string }>(invariant.sql, invariant.params);
+        const count = Number(row.rows[0]?.count ?? '0');
+        if (count > 0) {
+          invariantsFlagged += 1;
+          if (invariant.severity === 'p0') p0Breaches += 1;
+        }
+        await this.emitServerMetric(client, sessionId, 'invariant_metric_recorded', {
+          invariant: invariant.name,
+          severity: invariant.severity,
+          count,
+        });
+        emitted += 1;
+      }
+
+      return {
+        processed: emitted,
+        metadata: { requalifiedUsers, windowDays, invariantsFlagged, p0Breaches },
+      };
+    });
+  }
+
+  private async emitServerMetric(
+    client: PoolClient,
+    sessionId: string,
+    eventName: string,
+    properties: Record<string, number | string | boolean>,
+  ): Promise<void> {
+    await client.query(
+      `INSERT INTO analytics.product_events(
+         event_name, schema_version, anonymous_id, user_id, session_id,
+         platform, properties, trace_id, occurred_at
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,clock_timestamp())`,
+      [eventName, 1, null, null, sessionId, 'server', properties, `worker:${sessionId}`],
+    );
+  }
+
+  private async activeConfigInt(client: PoolClient, key: string, fallback: number): Promise<number> {
+    const result = await client.query<{ value_json: unknown }>(
+      `SELECT value_json FROM admin.config_revisions
+       WHERE key = $1 AND state = 'active'
+         AND (effective_from IS NULL OR effective_from <= clock_timestamp())
+         AND (effective_to IS NULL OR effective_to > clock_timestamp())
+       ORDER BY version DESC LIMIT 1`,
+      [key],
+    );
+    const value = result.rows[0]?.value_json;
+    if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value;
+    if (typeof value === 'string' && /^\d+$/.test(value) && Number(value) > 0) return Number(value);
+    return fallback;
+  }
+
   private async upsertReconciliation(
     client: PoolClient,
     kind: string,
@@ -1109,6 +1299,7 @@ export const jobNames = [
   'activateConfiguration',
   'anonymizeDeletedAccounts',
   'reconcileLedger',
+  'deriveAnalyticsMetrics',
 ] as const;
 
 export type JobName = (typeof jobNames)[number];

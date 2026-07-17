@@ -50,6 +50,35 @@ export class CommunityController {
     return this.community.evaluateAchievements(user.id);
   }
 
+  @Post('me/achievements/hidden')
+  hideAll(@CurrentUser() user: AuthenticatedUser, @Body() body: unknown) {
+    const { hidden } = z.object({ hidden: z.boolean() }).parse(body);
+    return this.community.setAllAchievementsHidden(user.id, hidden);
+  }
+
+  @Post('me/achievements/:id/hidden')
+  hideOne(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() body: unknown) {
+    const { hidden } = z.object({ hidden: z.boolean() }).parse(body);
+    return this.community.setAchievementVisibility(user.id, this.uuid(id), hidden);
+  }
+
+  @Get('me/achievements/:id/share-card')
+  shareCard(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.community.achievementShareCard(user.id, this.uuid(id));
+  }
+
+  @Get('users/:userId/achievements')
+  publicAchievements(@CurrentUser() user: AuthenticatedUser, @Param('userId') userId: string) {
+    return this.community.publicAchievements(this.uuid(userId), user.id);
+  }
+
+  private uuid(value: string): string {
+    if (!z.string().uuid().safeParse(value).success) {
+      throw new DomainError('INVALID_IDENTIFIER', '标识符无效。', 400);
+    }
+    return value;
+  }
+
   private key(value: string | undefined): string {
     if (!value || !z.string().uuid().safeParse(value).success) {
       throw new DomainError('IDEMPOTENCY_KEY_REQUIRED', '请求缺少有效的幂等键。', 400);

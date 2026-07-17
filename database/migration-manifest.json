@@ -121,6 +121,11 @@
       "sequence": 24,
       "filename": "0024_group_discussion_reactions.sql",
       "sha256": "2e663244268f543f84cc7ed716b5d66d442d3ff39652eb1c264118793ad5a932"
+    },
+    {
+      "sequence": 25,
+      "filename": "0025_daily_checkin_streaks.sql",
+      "sha256": "2c0e9bf332064b3f624e51f0f4d5660c4134733af873b74fa442c43ea93e7880"
     }
   ]
 }

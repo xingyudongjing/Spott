@@ -27,6 +27,11 @@ export class PointsController {
     return this.points.rules();
   }
 
+  @Post('points/checkin')
+  checkin(@CurrentUser() user: AuthenticatedUser) {
+    return this.points.dailyCheckin(user.id);
+  }
+
   @Post('quotes')
   quote(@CurrentUser() user: AuthenticatedUser, @Body() body: unknown) {
     const input = z.object({ purpose: z.string(), resourceId: z.string().uuid().optional() }).parse(body);

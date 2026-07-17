@@ -149,7 +149,10 @@ describe('registration cancellation and waitlist worker concurrency', () => {
       values: readonly unknown[],
     ) => {
       const result = await client.query<Row>(text, [...values]);
-      if (text.includes('FROM events.event_capacity') && text.includes('FOR UPDATE')) {
+      if (
+        text.includes('FROM events.events e JOIN events.event_capacity c')
+        && text.includes('FOR UPDATE OF e, c')
+      ) {
         cancelHasCapacity.resolve();
         await continueCancel.promise;
       }

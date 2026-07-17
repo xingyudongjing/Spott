@@ -1,6 +1,117 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RegistrationsService } from './registrations.service.js';
 
+const registrationUser = {
+  id: '019b0000-0000-7000-8000-000000000010',
+  sessionId: 'session',
+  phoneVerified: true,
+  restrictions: [],
+  roles: ['verified'],
+};
+
+function registrationIdempotency() {
+  return {
+    requestHash: vi.fn().mockReturnValue(Buffer.alloc(32)),
+    claim: vi.fn().mockResolvedValue(null),
+    complete: vi.fn(),
+  };
+}
+
+describe('RegistrationsService event registration authority', () => {
+  const eventId = '019b0000-0000-7000-8100-000000000010';
+  const input = {
+    partySize: 1,
+    quoteId: '019b0000-0000-7000-9100-000000000010',
+    expectedEventVersion: 6,
+    joinWaitlistIfFull: false,
+    answers: {},
+  };
+
+  it('returns EVENT_CHANGED with the locked current version before writing registration state', async () => {
+    const client = {
+      query: vi.fn().mockResolvedValue({
+        rows: [{
+          id: eventId,
+          status: 'published',
+          capacity: 10,
+          deadline_at: new Date('2099-07-20T00:00:00.000Z'),
+          ends_at: new Date('2099-07-21T00:00:00.000Z'),
+          registration_mode: 'automatic',
+          waitlist_enabled: true,
+          confirmed_count: 0,
+          pending_count: 0,
+          offered_count: 0,
+          version: '7',
+          server_time: new Date('2099-07-16T00:00:00.000Z'),
+        }],
+      }),
+    };
+    const database = {
+      transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const service = new RegistrationsService(
+      database as never,
+      registrationIdempotency() as never,
+      {} as never,
+    );
+
+    await expect(service.register(
+      registrationUser as never,
+      eventId,
+      '019b0000-0000-7000-9000-000000000010',
+      input,
+    )).rejects.toMatchObject({
+      code: 'EVENT_CHANGED',
+      status: 409,
+      meta: { currentVersion: 7 },
+    });
+
+    const [eventSQL] = client.query.mock.calls[0] as unknown as [string, unknown[]];
+    expect(eventSQL).toContain('FOR UPDATE OF e, c');
+    expect(client.query).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed with INVITE_REQUIRED when no event invitation model can authorize the user', async () => {
+    const client = {
+      query: vi.fn().mockResolvedValue({
+        rows: [{
+          id: eventId,
+          status: 'published',
+          capacity: 10,
+          deadline_at: new Date('2099-07-20T00:00:00.000Z'),
+          ends_at: new Date('2099-07-21T00:00:00.000Z'),
+          registration_mode: 'invite_only',
+          waitlist_enabled: true,
+          confirmed_count: 0,
+          pending_count: 0,
+          offered_count: 0,
+          version: '6',
+          server_time: new Date('2099-07-16T00:00:00.000Z'),
+        }],
+      }),
+    };
+    const database = {
+      transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const service = new RegistrationsService(
+      database as never,
+      registrationIdempotency() as never,
+      {} as never,
+    );
+
+    await expect(service.register(
+      registrationUser as never,
+      eventId,
+      '019b0000-0000-7000-9000-000000000011',
+      input,
+    )).rejects.toMatchObject({
+      code: 'INVITE_REQUIRED',
+      status: 403,
+    });
+    expect(client.query).toHaveBeenCalledOnce();
+  });
+});
+
 describe('RegistrationsService correction window', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -332,6 +443,11 @@ describe('RegistrationsService offered capacity accounting', () => {
   };
   const eventId = '019b0000-0000-7000-8100-000000000001';
   const registrationId = '019b0000-0000-7000-8200-000000000001';
+  const acceptanceInput = {
+    quoteId: '019b0000-0000-7000-9100-000000000001',
+    expectedRegistrationVersion: 1,
+    expectedEventVersion: 8,
+  };
   const offered = {
     id: registrationId,
     event_id: eventId,
@@ -353,13 +469,101 @@ describe('RegistrationsService offered capacity accounting', () => {
     };
   }
 
+  function acceptanceHarness(options: {
+    registration?: typeof offered;
+    eventVersion?: string;
+    replay?: { status: number; body: unknown };
+    quoteError?: { code: string; status: number };
+    spendError?: { code: string; status: number };
+  } = {}) {
+    const registration = options.registration ?? offered;
+    const queries: Array<{ text: string; values: readonly unknown[] }> = [];
+    let registrationLoads = 0;
+    const client = {
+      query: vi.fn(async (text: string, values: readonly unknown[] = []) => {
+        queries.push({ text, values });
+        if (text.includes('FROM events.registrations r')) {
+          registrationLoads += 1;
+          return {
+            rows: [registrationLoads === 1
+              ? registration
+              : { ...registration, status: 'confirmed', version: String(Number(registration.version) + 1) }],
+          };
+        }
+        if (text.includes('FROM events.waitlist_promotions') && text.includes('FOR UPDATE')) {
+          return {
+            rows: [{
+              id: '019b0000-0000-7000-8300-000000000001',
+              expires_at: new Date('2099-08-01T00:00:00.000Z'),
+            }],
+          };
+        }
+        if (text.includes('SELECT e.capacity')) {
+          return {
+            rows: [{
+              capacity: 10,
+              confirmed_count: 4,
+              offered_count: 3,
+              status: 'published',
+              ends_at: new Date('2099-08-02T00:00:00.000Z'),
+              deadline_at: new Date('2099-08-01T12:00:00.000Z'),
+              version: options.eventVersion ?? '8',
+              server_time: new Date('2099-07-16T00:00:00.000Z'),
+            }],
+          };
+        }
+        return { rows: [], rowCount: 1 };
+      }),
+    };
+    const database = {
+      transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const idempotencyService = idempotency();
+    if (options.replay) idempotencyService.claim.mockResolvedValue(options.replay);
+    const points = {
+      configBigInt: vi.fn().mockResolvedValue(10n),
+      consumeQuote: options.quoteError
+        ? vi.fn().mockRejectedValue(options.quoteError)
+        : vi.fn().mockResolvedValue(37n),
+      spend: options.spendError
+        ? vi.fn().mockRejectedValue(options.spendError)
+        : vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new RegistrationsService(
+      database as never,
+      idempotencyService as never,
+      points as never,
+    );
+    Object.assign(service, { recordChange: vi.fn() });
+    return { service, client, idempotencyService, points, queries };
+  }
+
   it('moves all offered people to confirmed capacity when an offer is accepted', async () => {
     const queries: Array<{ text: string; values: readonly unknown[] }> = [];
     const client = {
       query: vi.fn(async (text: string, values: readonly unknown[] = []) => {
         queries.push({ text, values });
+        if (text.includes('FROM events.waitlist_promotions') && text.includes('FOR UPDATE')) {
+          return {
+            rows: [{
+              id: '019b0000-0000-7000-8300-000000000001',
+              expires_at: new Date('2026-08-01T00:00:00.000Z'),
+            }],
+          };
+        }
         if (text.includes('SELECT e.capacity')) {
-          return { rows: [{ capacity: 10, confirmed_count: 4, offered_count: 3 }] };
+          return {
+            rows: [{
+              capacity: 10,
+              confirmed_count: 4,
+              offered_count: 3,
+              status: 'published',
+              ends_at: new Date('2026-08-02T00:00:00.000Z'),
+              deadline_at: new Date('2026-08-01T12:00:00.000Z'),
+              version: '8',
+              server_time: new Date('2026-07-16T00:00:00.000Z'),
+            }],
+          };
         }
         return { rows: [], rowCount: 1 };
       }),
@@ -369,9 +573,11 @@ describe('RegistrationsService offered capacity accounting', () => {
     };
     const points = {
       configBigInt: vi.fn().mockResolvedValue(10n),
+      consumeQuote: vi.fn().mockResolvedValue(37n),
       spend: vi.fn().mockResolvedValue(undefined),
     };
-    const service = new RegistrationsService(database as never, idempotency() as never, points as never);
+    const idempotencyService = idempotency();
+    const service = new RegistrationsService(database as never, idempotencyService as never, points as never);
     Object.assign(service, {
       load: vi.fn()
         .mockResolvedValueOnce(offered)
@@ -379,7 +585,12 @@ describe('RegistrationsService offered capacity accounting', () => {
       recordChange: vi.fn(),
     });
 
-    await service.acceptWaitlist(user, registrationId, '019b0000-0000-7000-9000-000000000001');
+    await service.acceptWaitlist(
+      user,
+      registrationId,
+      '019b0000-0000-7000-9000-000000000001',
+      acceptanceInput,
+    );
 
     const promotionLock = queries.findIndex(({ text }) => (
       text.includes('FROM events.waitlist_promotions') && text.includes('FOR UPDATE')
@@ -392,6 +603,231 @@ describe('RegistrationsService offered capacity accounting', () => {
     const update = queries.find(({ text }) => text.includes('UPDATE events.event_capacity'));
     expect(update?.text).toContain('offered_count = GREATEST(0, offered_count - $2)');
     expect(update?.values).toEqual([eventId, 3]);
+    expect(points.consumeQuote).toHaveBeenCalledWith(
+      client,
+      user.id,
+      acceptanceInput.quoteId,
+      'registration',
+      eventId,
+    );
+    expect(points.configBigInt).not.toHaveBeenCalled();
+    expect(points.spend).toHaveBeenCalledWith(
+      client,
+      user.id,
+      37n,
+      'registration_fee',
+      `registration_fee:${registrationId}`,
+      { registrationId, eventId },
+    );
+    expect(idempotencyService.requestHash).toHaveBeenCalledWith(
+      'POST',
+      `/registrations/${registrationId}/waitlist-acceptance`,
+      acceptanceInput,
+    );
+    expect(idempotencyService.complete).toHaveBeenCalledWith(
+      client,
+      user.id,
+      '019b0000-0000-7000-9000-000000000001',
+      expect.objectContaining({ status: 200 }),
+      { type: 'registration', id: registrationId },
+    );
+  });
+
+  it.each([
+    {
+      label: 'the event is no longer published',
+      event: {
+        status: 'registration_closed',
+        ends_at: new Date('2099-07-21T00:00:00.000Z'),
+        deadline_at: new Date('2099-07-20T00:00:00.000Z'),
+      },
+    },
+    {
+      label: 'the event end is exactly the database time',
+      event: {
+        status: 'published',
+        ends_at: new Date('2099-07-16T00:00:00.000Z'),
+        deadline_at: new Date('2099-07-20T00:00:00.000Z'),
+      },
+    },
+    {
+      label: 'the registration deadline is exactly the database time',
+      event: {
+        status: 'published',
+        ends_at: new Date('2099-07-21T00:00:00.000Z'),
+        deadline_at: new Date('2099-07-16T00:00:00.000Z'),
+      },
+    },
+  ])('rejects waitlist acceptance when $label', async ({ event }) => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (text: string, values: readonly unknown[] = []) => {
+        queries.push({ text, values });
+        if (text.includes('FROM events.registrations r')) {
+          return {
+            rows: [{
+              ...offered,
+              offer_expires_at: new Date('2099-07-20T00:00:00.000Z'),
+            }],
+          };
+        }
+        if (text.includes('SELECT e.capacity')) {
+          return {
+            rows: [{
+              capacity: 10,
+              confirmed_count: 4,
+              offered_count: 3,
+              version: '8',
+              server_time: new Date('2099-07-16T00:00:00.000Z'),
+              ...event,
+            }],
+          };
+        }
+        return { rows: [], rowCount: 1 };
+      }),
+    };
+    const database = {
+      transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const points = {
+      configBigInt: vi.fn().mockResolvedValue(10n),
+      consumeQuote: vi.fn().mockResolvedValue(10n),
+      spend: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new RegistrationsService(database as never, idempotency() as never, points as never);
+
+    await expect(service.acceptWaitlist(
+      user,
+      registrationId,
+      '019b0000-0000-7000-9000-000000000009',
+      acceptanceInput,
+    )).rejects.toMatchObject({
+      code: 'WAITLIST_ACCEPTANCE_CLOSED',
+      status: 409,
+    });
+
+    expect(points.spend).not.toHaveBeenCalled();
+    expect(queries.some(({ text }) => text.includes("SET status = 'confirmed'"))).toBe(false);
+  });
+
+  it('rejects a stale reviewed registration version after locking all acceptance state', async () => {
+    const { service, points, queries } = acceptanceHarness({
+      registration: { ...offered, version: '2' },
+    });
+
+    await expect(service.acceptWaitlist(
+      user,
+      registrationId,
+      '019b0000-0000-7000-9000-000000000011',
+      acceptanceInput,
+    )).rejects.toMatchObject({
+      code: 'REGISTRATION_CHANGED',
+      status: 409,
+      meta: { currentVersion: 2 },
+    });
+
+    expect(queries.findIndex(({ text }) => text.includes('FOR UPDATE OF r'))).toBeGreaterThanOrEqual(0);
+    expect(queries.findIndex(({ text }) => text.includes('FROM events.waitlist_promotions'))).toBeGreaterThanOrEqual(0);
+    expect(queries.findIndex(({ text }) => text.includes('FOR UPDATE OF e, c'))).toBeGreaterThanOrEqual(0);
+    expect(points.consumeQuote).not.toHaveBeenCalled();
+    expect(points.spend).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stale reviewed event version after locking capacity', async () => {
+    const { service, points, queries } = acceptanceHarness({ eventVersion: '9' });
+
+    await expect(service.acceptWaitlist(
+      user,
+      registrationId,
+      '019b0000-0000-7000-9000-000000000012',
+      acceptanceInput,
+    )).rejects.toMatchObject({
+      code: 'EVENT_CHANGED',
+      status: 409,
+      meta: { currentVersion: 9 },
+    });
+
+    expect(queries.some(({ text }) => text.includes('FOR UPDATE OF e, c'))).toBe(true);
+    expect(points.consumeQuote).not.toHaveBeenCalled();
+    expect(points.spend).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['has expired', { code: 'QUOTE_EXPIRED', status: 409 }],
+    ['belongs to a different event', { code: 'QUOTE_EXPIRED', status: 409 }],
+  ])('does not mutate acceptance state when the quote %s', async (_label, quoteError) => {
+    const { service, points, queries } = acceptanceHarness({ quoteError });
+
+    await expect(service.acceptWaitlist(
+      user,
+      registrationId,
+      '019b0000-0000-7000-9000-000000000013',
+      acceptanceInput,
+    )).rejects.toMatchObject(quoteError);
+
+    expect(points.consumeQuote).toHaveBeenCalledWith(
+      expect.anything(),
+      user.id,
+      acceptanceInput.quoteId,
+      'registration',
+      eventId,
+    );
+    expect(points.spend).not.toHaveBeenCalled();
+    expect(queries.some(({ text }) => text.includes("SET status = 'confirmed'"))).toBe(false);
+    expect(queries.some(({ text }) => text.includes('SET accepted_at'))).toBe(false);
+  });
+
+  it('does not mutate acceptance state when the locked quote exceeds the available points', async () => {
+    const pointsError = { code: 'POINTS_INSUFFICIENT', status: 409 };
+    const { service, points, queries } = acceptanceHarness({ spendError: pointsError });
+
+    await expect(service.acceptWaitlist(
+      user,
+      registrationId,
+      '019b0000-0000-7000-9000-000000000014',
+      acceptanceInput,
+    )).rejects.toMatchObject(pointsError);
+
+    expect(points.consumeQuote).toHaveBeenCalledOnce();
+    expect(points.configBigInt).not.toHaveBeenCalled();
+    expect(points.spend).toHaveBeenCalledWith(
+      expect.anything(),
+      user.id,
+      37n,
+      'registration_fee',
+      `registration_fee:${registrationId}`,
+      { registrationId, eventId },
+    );
+    expect(queries.some(({ text }) => text.includes("SET status = 'confirmed'"))).toBe(false);
+    expect(queries.some(({ text }) => text.includes('SET accepted_at'))).toBe(false);
+  });
+
+  it('replays a completed response without consuming the quote or charging points again', async () => {
+    const replayed = {
+      id: registrationId,
+      eventId,
+      status: 'confirmed',
+      version: 2,
+    };
+    const { service, client, idempotencyService, points } = acceptanceHarness({
+      replay: { status: 200, body: replayed },
+    });
+
+    await expect(service.acceptWaitlist(
+      user,
+      registrationId,
+      '019b0000-0000-7000-9000-000000000015',
+      acceptanceInput,
+    )).resolves.toEqual(replayed);
+
+    expect(idempotencyService.requestHash).toHaveBeenCalledWith(
+      'POST',
+      `/registrations/${registrationId}/waitlist-acceptance`,
+      acceptanceInput,
+    );
+    expect(client.query).not.toHaveBeenCalled();
+    expect(points.consumeQuote).not.toHaveBeenCalled();
+    expect(points.spend).not.toHaveBeenCalled();
   });
 
   it('releases all offered people when the registration is cancelled', async () => {
@@ -399,8 +835,15 @@ describe('RegistrationsService offered capacity accounting', () => {
     const client = {
       query: vi.fn(async (text: string, values: readonly unknown[] = []) => {
         queries.push({ text, values });
-        if (text.includes('SELECT starts_at')) {
-          return { rows: [{ starts_at: new Date('2026-08-10T00:00:00.000Z') }] };
+        if (text.includes('FROM events.events e JOIN events.event_capacity')) {
+          return {
+            rows: [{
+              status: 'published',
+              starts_at: new Date('2026-08-10T00:00:00.000Z'),
+              ends_at: new Date('2026-08-10T02:00:00.000Z'),
+              server_time: new Date('2026-07-16T00:00:00.000Z'),
+            }],
+          };
         }
         return { rows: [], rowCount: 1 };
       }),
@@ -426,7 +869,7 @@ describe('RegistrationsService offered capacity accounting', () => {
       text.includes('FROM events.waitlist_promotions') && text.includes('FOR UPDATE')
     ));
     const capacityLock = queries.findIndex(({ text }) => (
-      text.includes('FROM events.event_capacity') && text.includes('FOR UPDATE')
+      text.includes('JOIN events.event_capacity') && text.includes('FOR UPDATE OF e, c')
     ));
     expect(promotionLock).toBeGreaterThanOrEqual(0);
     expect(capacityLock).toBeGreaterThan(promotionLock);
@@ -436,6 +879,77 @@ describe('RegistrationsService offered capacity accounting', () => {
     const promotion = queries.find(({ text }) => text.includes('UPDATE events.waitlist_promotions'));
     expect(promotion?.values).toEqual([registrationId]);
     expect(promotion?.text).toContain('accepted_at IS NULL AND expired_at IS NULL');
+  });
+
+  it.each([
+    {
+      label: 'the published event reaches its exact start boundary',
+      status: 'published',
+      startsAt: new Date('2099-07-16T00:00:00.000Z'),
+    },
+    {
+      label: 'the event is in progress',
+      status: 'in_progress',
+      startsAt: new Date('2099-07-17T00:00:00.000Z'),
+    },
+    {
+      label: 'the event has ended',
+      status: 'ended',
+      startsAt: new Date('2099-07-17T00:00:00.000Z'),
+    },
+    {
+      label: 'the event is cancelled',
+      status: 'cancelled',
+      startsAt: new Date('2099-07-17T00:00:00.000Z'),
+    },
+  ])('locks event capacity and rejects cancellation when $label', async ({ status, startsAt }) => {
+    const queries: Array<{ text: string; values: readonly unknown[] }> = [];
+    const client = {
+      query: vi.fn(async (text: string, values: readonly unknown[] = []) => {
+        queries.push({ text, values });
+        if (text.includes('FROM events.events e JOIN events.event_capacity')) {
+          return {
+            rows: [{
+              status,
+              starts_at: startsAt,
+              ends_at: new Date('2099-07-18T00:00:00.000Z'),
+              server_time: new Date('2099-07-16T00:00:00.000Z'),
+            }],
+          };
+        }
+        if (text.includes('SELECT starts_at FROM events.events')) {
+          return { rows: [{ starts_at: startsAt }] };
+        }
+        return { rows: [], rowCount: 1 };
+      }),
+    };
+    const database = {
+      transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const points = {
+      wallet: vi.fn().mockResolvedValue({ totalBalance: 0 }),
+      configBigInt: vi.fn().mockResolvedValue(24n),
+    };
+    const service = new RegistrationsService(database as never, idempotency() as never, points as never);
+    Object.assign(service, {
+      load: vi.fn()
+        .mockResolvedValueOnce(offered)
+        .mockResolvedValueOnce({ ...offered, status: 'cancelled', version: '2' }),
+      recordChange: vi.fn(),
+    });
+
+    await expect(service.cancel(
+      user,
+      registrationId,
+      '019b0000-0000-7000-9000-000000000010',
+    )).rejects.toMatchObject({
+      code: 'REGISTRATION_CANCELLATION_CLOSED',
+      status: 409,
+    });
+
+    const eventLock = queries.find(({ text }) => text.includes('FROM events.events e JOIN events.event_capacity'));
+    expect(eventLock?.text).toContain('FOR UPDATE OF e, c');
+    expect(queries.some(({ text }) => text.includes("SET status = 'cancelled'"))).toBe(false);
   });
 });
 
@@ -493,6 +1007,46 @@ describe('RegistrationsService registration action authority', () => {
       'viewTicket',
       'checkIn',
     ]);
+  });
+
+  it.each([
+    {
+      label: 'the database time reaches the exact event start',
+      overrides: {
+        itinerary_status: 'published',
+        itinerary_starts_at: itineraryServerTime,
+      },
+    },
+    {
+      label: 'the event is in progress',
+      overrides: {
+        itinerary_status: 'in_progress',
+        itinerary_starts_at: new Date('2026-07-20T09:00:00.000Z'),
+      },
+    },
+    {
+      label: 'the event has ended',
+      overrides: {
+        itinerary_status: 'ended',
+        itinerary_starts_at: new Date('2026-07-20T09:00:00.000Z'),
+      },
+    },
+    {
+      label: 'the event was cancelled',
+      overrides: {
+        itinerary_status: 'cancelled',
+        itinerary_starts_at: new Date('2026-07-20T09:00:00.000Z'),
+      },
+    },
+  ])('does not advertise cancellation when $label', ({ overrides }) => {
+    const service = new RegistrationsService({} as never, {} as never, {} as never);
+    const mapper = service as unknown as {
+      toView: (row: ReturnType<typeof itineraryRow>, checkInEligible?: boolean) => {
+        availableActions: string[];
+      };
+    };
+
+    expect(mapper.toView(itineraryRow(overrides)).availableActions).not.toContain('cancelRegistration');
   });
 });
 

@@ -25,10 +25,16 @@ const app = await NestFactory.create<NestFastifyApplication>(
       redact: [
         'req.headers.authorization',
         'req.headers.cookie',
+        'req.headers.x-spott-bff-signature',
+        'req.headers.x-spott-device-binding',
         'body.code',
         'body.phoneNumber',
+        'body.refreshToken',
+        'body.deviceBindingProof',
         'body.signedPayload',
         'body.signedTransaction',
+        'req.rawBody',
+        'rawBody',
       ],
     },
     trustProxy: true,
@@ -41,7 +47,7 @@ const app = await NestFactory.create<NestFastifyApplication>(
         : `req_${randomUUID()}`;
     },
   }),
-  { bufferLogs: true },
+  { bufferLogs: true, rawBody: true },
 );
 
 await app.register(fastifyHelmet, {

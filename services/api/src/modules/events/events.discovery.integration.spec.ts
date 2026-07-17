@@ -364,6 +364,7 @@ describe('PostGIS discovery integration', () => {
       {
         partySize: 4,
         quoteId: '50000000-0000-7000-8000-000000000002',
+        expectedEventVersion: 1,
         joinWaitlistIfFull: false,
         answers: {},
       },

@@ -104,8 +104,31 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Refresh session */
+        /**
+         * Refresh session
+         * @description Rotates the current refresh credential. Idempotency-Key and a persistent device binding proof are optional for compatibility only while the supplied credential is still current and being used for the first time; neither omission permits recovery of a consumed credential.
+         */
         post: operations["refreshSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/bootstrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bootstrap the current session without rotating it
+         * @description Returns a freshly signed access token for the same current stable session only after the refresh credential, device, immutable transport, current generation, current refresh history and active persistent binding all agree. This read-only operation never rotates or extends the refresh credential and never updates session, history or binding time fields.
+         */
+        post: operations["bootstrapSession"];
         delete?: never;
         options?: never;
         head?: never;
@@ -685,7 +708,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Get the current user's private post-event feedback state */
+        get: operations["getOwnEventFeedback"];
         put?: never;
         /** Submit or edit private structured post-event feedback */
         post: operations["submitEventFeedback"];
@@ -1372,8 +1396,45 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create a direct upload intent for an image asset */
+        /** Create or recover a durable image upload intent */
         post: operations["createMediaUploadIntent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/media/upload-attempts/{attemptId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recover one owner-scoped upload attempt after response loss */
+        get: operations["recoverMediaUploadAttempt"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/media/upload-attempts/{attemptId}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Stream exact bytes through the capability-only Spott upload gateway
+         * @description Cookies and Authorization are forbidden. The capability binds this path, MIME, byte length, SHA-256, owner, asset, generation and expiry. The server enforces one total inbound deadline.
+         */
+        put: operations["uploadMediaAttemptContent"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1392,6 +1453,23 @@ export interface paths {
         /** Complete an upload after verifying its content hash */
         post: operations["completeMediaUpload"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/media/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Idempotently abandon an owned unreferenced media asset */
+        delete: operations["abandonMediaAsset"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1442,6 +1520,23 @@ export interface paths {
         put?: never;
         /** Replace a group cover with a ready approved asset owned by the group owner */
         post: operations["attachGroupCover"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/media/events/{eventId}/arrangement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Idempotently replace the order of an event's existing media assets */
+        post: operations["arrangeEventMedia"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2211,11 +2306,19 @@ export interface components {
             code: string;
             deviceId: components["schemas"]["UUID"];
         };
+        PersistentDeviceBindingProof: {
+            bindingId: components["schemas"]["UUID"];
+            generation: number;
+            proof: string;
+            /** @enum {string} */
+            proofClass: "persistent";
+        };
         AuthSession: {
             accessToken: string;
             /** Format: date-time */
             accessTokenExpiresAt: string;
             refreshToken: string;
+            refreshGeneration: number;
             sessionId: components["schemas"]["UUID"];
             user: {
                 id: components["schemas"]["UUID"];
@@ -2608,6 +2711,42 @@ export interface components {
              */
             visibility: "private" | "aggregate_only";
         };
+        /** @enum {string} */
+        FeedbackSubmissionState: "not_submitted" | "edit_available" | "edit_limit_reached" | "window_closed" | "not_eligible";
+        OwnFeedback: {
+            id: components["schemas"]["UUID"];
+            attendanceRating: number;
+            tags: ("friendly" | "well_organized" | "clear_information" | "safe" | "would_join_again")[];
+            comment: string | null;
+            /** @enum {string} */
+            visibility: "private" | "aggregate_only";
+            moderationState: string;
+            editCount: number;
+            /** Format: date-time */
+            createdAt: string | null;
+            /** Format: date-time */
+            updatedAt: string | null;
+        };
+        OwnFeedbackState: {
+            registrationId: components["schemas"]["UUID"];
+            eventId: components["schemas"]["UUID"];
+            state: components["schemas"]["FeedbackSubmissionState"];
+            canSubmit: boolean;
+            canEdit: boolean;
+            /** Format: date-time */
+            windowClosesAt: string | null;
+            feedback: components["schemas"]["OwnFeedback"] | null;
+        };
+        FeedbackReceipt: {
+            id: components["schemas"]["UUID"];
+            eventId: components["schemas"]["UUID"];
+            /** @enum {string} */
+            status: "pending_moderation";
+            editCount: number;
+            rewardPoints: number;
+            /** Format: date-time */
+            createdAt: string;
+        };
         FeedbackSummary: {
             sampleSize: number;
             minimumSampleSize: number;
@@ -2847,6 +2986,10 @@ export interface components {
              */
             locale: "zh-Hans" | "ja" | "en";
         };
+        /** @description Canonical lowercase hexadecimal SHA-256. */
+        SHA256: string;
+        /** @description Case-insensitive hexadecimal SHA-256 input; the server canonicalizes it to lowercase. */
+        SHA256Input: string;
         MediaUploadInput: {
             /** @enum {string} */
             purpose: "event_cover" | "profile_avatar" | "group_cover" | "report_evidence" | "share_poster";
@@ -2858,6 +3001,100 @@ export interface components {
             focalX: number;
             /** @default 0.5 */
             focalY: number;
+            contentSha256: components["schemas"]["SHA256Input"];
+        };
+        MediaUploadRequiredHeaders: {
+            /** @enum {string} */
+            "Content-Type": "image/jpeg" | "image/png" | "image/webp" | "image/heic";
+            "Content-Length": string;
+            "X-Content-SHA256": components["schemas"]["SHA256"];
+            "X-Spott-Upload-Capability": string;
+        };
+        MediaCommittedUploadReceipt: {
+            assetId: components["schemas"]["UUID"];
+            /** @constant */
+            state: "committed";
+            /** @constant */
+            leaseState: "committed";
+            /** Format: date-time */
+            committedAt: string;
+        };
+        MediaUploadCapabilityResponse: {
+            attemptId: components["schemas"]["UUID"];
+            assetId: components["schemas"]["UUID"];
+            /** @constant */
+            state: "pending_upload";
+            /**
+             * Format: uri
+             * @description Same-origin Spott gateway URL; never a provider URL.
+             */
+            uploadUrl: string;
+            capability: string;
+            requiredHeaders: components["schemas"]["MediaUploadRequiredHeaders"];
+            /** Format: date-time */
+            expiresAt: string;
+            maxBytes: number;
+            requestDeadlineMs: number;
+        };
+        MediaUploadUncommittedStateResponse: {
+            attemptId: components["schemas"]["UUID"];
+            assetId: components["schemas"]["UUID"];
+            /** @enum {string} */
+            state: "pending_upload" | "abandoned" | "deleted";
+            /** @enum {string} */
+            leaseState: "idle" | "receiving" | "provider_writing" | "in_progress" | "failed_cleanup_pending" | "failed_clean";
+        };
+        MediaUploadCommittedStateResponse: {
+            attemptId: components["schemas"]["UUID"];
+            assetId: components["schemas"]["UUID"];
+            /** @enum {string} */
+            state: "committed" | "uploaded" | "processing" | "ready" | "rejected" | "abandoned" | "deleted";
+            /** @constant */
+            leaseState: "committed";
+            receipt: components["schemas"]["MediaCommittedUploadReceipt"];
+        };
+        MediaUploadStateResponse: components["schemas"]["MediaUploadUncommittedStateResponse"] | components["schemas"]["MediaUploadCommittedStateResponse"];
+        MediaUploadReplayResponse: components["schemas"]["MediaUploadCapabilityResponse"] | components["schemas"]["MediaUploadStateResponse"];
+        MediaGatewayInProgressResponse: {
+            attemptId: components["schemas"]["UUID"];
+            assetId: components["schemas"]["UUID"];
+            /** @constant */
+            state: "pending_upload";
+            /** @enum {string} */
+            leaseState: "receiving" | "provider_writing" | "in_progress";
+        };
+        MediaGatewayUploadResponse: components["schemas"]["MediaGatewayInProgressResponse"] | components["schemas"]["MediaUploadCommittedStateResponse"];
+        MediaCompletionResponse: {
+            assetId: components["schemas"]["UUID"];
+            /** @enum {string} */
+            state: "uploaded" | "processing" | "ready" | "rejected";
+            /** @enum {string} */
+            moderationState: "pending" | "approved" | "rejected";
+        };
+        MediaAbandonResponse: {
+            assetId: components["schemas"]["UUID"];
+            /** @enum {string} */
+            state: "abandoned" | "deleted";
+            /** @enum {string} */
+            cleanupState: "not_required" | "queued" | "waiting_for_fence" | "complete";
+        };
+        EventMediaAttachmentInput: {
+            /**
+             * @default cover
+             * @enum {string}
+             */
+            kind: "cover" | "gallery";
+            /** @default 0 */
+            sortOrder: number;
+        };
+        EventMediaAttachment: {
+            id: components["schemas"]["UUID"];
+            eventId: components["schemas"]["UUID"];
+            assetId: components["schemas"]["UUID"];
+            /** @enum {string} */
+            kind: "cover" | "gallery";
+            sortOrder: number;
+            mediaCount: number;
         };
         ProfileMediaAttachment: {
             assetId: components["schemas"]["UUID"];
@@ -2872,6 +3109,15 @@ export interface components {
             groupId: components["schemas"]["UUID"];
             /** Format: uri */
             url: string;
+            /** Format: int64 */
+            version: number;
+        };
+        EventMediaArrangementInput: {
+            orderedAssetIds: components["schemas"]["UUID"][];
+        };
+        EventMediaArrangement: {
+            eventId: components["schemas"]["UUID"];
+            orderedAssetIds: components["schemas"]["UUID"][];
             /** Format: int64 */
             version: number;
         };
@@ -3412,11 +3658,19 @@ export interface components {
             userId: components["schemas"]["UUID"];
             blocked: boolean;
         };
+        ReportReceipt: {
+            reference: string;
+            /** @enum {string} */
+            status: "open";
+            /** Format: date-time */
+            submittedAt: string;
+        };
         ReportInput: {
             /** @enum {string} */
             targetType: "event" | "group" | "user" | "comment" | "announcement";
             targetId: components["schemas"]["UUID"];
-            reason: string;
+            /** @enum {string} */
+            reason: "danger" | "personal_safety" | "fraud" | "harassment" | "harassment_or_hate" | "spam" | "minor_safety" | "other" | "unsafe";
             details?: string;
             evidenceAssetIds?: components["schemas"]["UUID"][];
         };
@@ -3636,6 +3890,31 @@ export interface operations {
     refreshSession: {
         parameters: {
             query?: never;
+            header?: {
+                /** @description Stable UUID for an independently retryable refresh attempt. */
+                "Idempotency-Key"?: components["schemas"]["UUID"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    refreshToken: string;
+                    deviceId: components["schemas"]["UUID"];
+                    deviceBindingProof?: components["schemas"]["PersistentDeviceBindingProof"];
+                };
+            };
+        };
+        responses: {
+            200: components["responses"]["AuthSession"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    bootstrapSession: {
+        parameters: {
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -3645,12 +3924,15 @@ export interface operations {
                 "application/json": {
                     refreshToken: string;
                     deviceId: components["schemas"]["UUID"];
+                    deviceBindingProof: components["schemas"]["PersistentDeviceBindingProof"];
                 };
             };
         };
         responses: {
             200: components["responses"]["AuthSession"];
+            400: components["responses"]["Error"];
             401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
         };
     };
     revokeSession: {
@@ -4702,10 +4984,36 @@ export interface operations {
             403: components["responses"]["Error"];
         };
     };
-    submitEventFeedback: {
+    getOwnEventFeedback: {
         parameters: {
             query?: never;
             header?: never;
+            path: {
+                id: components["parameters"]["ResourceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authoritative feedback eligibility and current private feedback */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OwnFeedbackState"];
+                };
+            };
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
+    submitEventFeedback: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 id: components["parameters"]["ResourceId"];
             };
@@ -4722,8 +5030,14 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["FeedbackReceipt"];
+                };
             };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
@@ -5880,7 +6194,9 @@ export interface operations {
     createMediaUploadIntent: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -5890,21 +6206,114 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Upload intent */
+            /** @description Eligible pending replay with a fresh capability, or authoritative state/receipt only */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    Pragma?: "no-cache";
+                    "Referrer-Policy"?: "no-referrer";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaUploadReplayResponse"];
+                };
+            };
+            /** @description New pending upload with a same-origin gateway capability */
             201: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    Pragma?: "no-cache";
+                    "Referrer-Policy"?: "no-referrer";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaUploadCapabilityResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    recoverMediaUploadAttempt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attemptId: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Eligible recovery capability or authoritative in-progress/committed state */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    Pragma?: "no-cache";
+                    "Referrer-Policy"?: "no-referrer";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaUploadReplayResponse"];
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    uploadMediaAttemptContent: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque Spott gateway capability. */
+                "X-Spott-Upload-Capability": string;
+                "Content-Type": "image/jpeg" | "image/png" | "image/webp" | "image/heic";
+                "Content-Length": number;
+                "X-Content-SHA256": components["schemas"]["SHA256Input"];
+            };
+            path: {
+                attemptId: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "image/jpeg": string;
+                "image/png": string;
+                "image/webp": string;
+                "image/heic": string;
+            };
+        };
+        responses: {
+            /** @description Authoritative in-progress or committed gateway outcome */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["MediaGatewayUploadResponse"];
+                };
             };
             400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            408: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            415: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     completeMediaUpload: {
         parameters: {
             query?: never;
             header: {
-                "X-Content-SHA256": string;
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "X-Content-SHA256": components["schemas"]["SHA256Input"];
             };
             path: {
                 id: components["parameters"]["ResourceId"];
@@ -5913,20 +6322,57 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Media queued for processing */
+            /** @description Authoritative processing state; exact replay never queues duplicate work */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["MediaCompletionResponse"];
+                };
             };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    abandonMediaAsset: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["ResourceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authoritative abandonment and cleanup state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaAbandonResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     attachEventMedia: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 id: components["parameters"]["ResourceId"];
                 eventId: components["schemas"]["UUID"];
@@ -5935,32 +6381,32 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    /**
-                     * @default cover
-                     * @enum {string}
-                     */
-                    kind?: "cover" | "gallery";
-                    /** @default 0 */
-                    sortOrder?: number;
-                };
+                "application/json": components["schemas"]["EventMediaAttachmentInput"];
             };
         };
         responses: {
-            /** @description Media attached */
+            /** @description Exact committed event-media attachment envelope */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["EventMediaAttachment"];
+                };
             };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     attachProfileAvatar: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 id: components["parameters"]["ResourceId"];
             };
@@ -5968,7 +6414,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Avatar attached with a usable public derivative URL */
+            /** @description Exact committed avatar attachment envelope */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -5977,6 +6423,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProfileMediaAttachment"];
                 };
             };
+            400: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
@@ -5986,7 +6433,9 @@ export interface operations {
     attachGroupCover: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 id: components["parameters"]["ResourceId"];
                 groupId: components["schemas"]["UUID"];
@@ -5995,7 +6444,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Group cover attached with a usable public derivative URL */
+            /** @description Exact committed group-cover attachment envelope */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -6004,6 +6453,40 @@ export interface operations {
                     "application/json": components["schemas"]["GroupMediaAttachment"];
                 };
             };
+            400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    arrangeEventMedia: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                eventId: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EventMediaArrangementInput"];
+            };
+        };
+        responses: {
+            /** @description Exact committed arrangement envelope */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventMediaArrangement"];
+                };
+            };
+            400: components["responses"]["Error"];
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             409: components["responses"]["Error"];
@@ -6145,13 +6628,14 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        reference: string;
-                        status: string;
-                    };
+                    "application/json": components["schemas"]["ReportReceipt"];
                 };
             };
             400: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     createAppeal: {

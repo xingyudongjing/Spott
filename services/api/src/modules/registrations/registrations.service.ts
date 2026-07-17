@@ -120,6 +120,7 @@ export class RegistrationsService {
     input: {
       partySize: number;
       quoteId: string;
+      expectedEventVersion: number;
       joinWaitlistIfFull: boolean;
       answers: Record<string, unknown>;
       attendeeNote?: string | undefined;
@@ -135,21 +136,39 @@ export class RegistrationsService {
         status: string;
         capacity: number;
         deadline_at: Date | null;
+        ends_at: Date | null;
         registration_mode: string;
         waitlist_enabled: boolean;
         confirmed_count: number;
         pending_count: number;
         offered_count: number;
+        version: string;
+        server_time: Date;
       }>(
-        `SELECT e.id, e.status, e.capacity, e.deadline_at, e.registration_mode,
-           e.waitlist_enabled, c.confirmed_count, c.pending_count, c.offered_count
+        `SELECT e.id, e.status, e.capacity, e.deadline_at, e.ends_at, e.registration_mode,
+           e.waitlist_enabled, c.confirmed_count, c.pending_count, c.offered_count,
+           e.version::text AS version, clock_timestamp() AS server_time
          FROM events.events e JOIN events.event_capacity c ON c.event_id = e.id
          WHERE e.id = $1 FOR UPDATE OF e, c`,
         [eventId],
       );
       const event = eventResult.rows[0];
       if (!event) throw new DomainError('EVENT_NOT_FOUND', '活动不存在。', 404);
-      if (event.status !== 'published' || (event.deadline_at && event.deadline_at <= new Date())) {
+      const currentVersion = Number(event.version);
+      if (currentVersion !== input.expectedEventVersion) {
+        throw new DomainError('EVENT_CHANGED', '活动内容已更新，请重新确认后报名。', 409, {
+          meta: { currentVersion },
+        });
+      }
+      if (event.registration_mode === 'invite_only') {
+        throw new DomainError('INVITE_REQUIRED', '此活动仅限受邀用户报名。', 403);
+      }
+      if (
+        event.status !== 'published'
+        || !event.ends_at
+        || event.ends_at <= event.server_time
+        || (event.deadline_at && event.deadline_at <= event.server_time)
+      ) {
         throw new DomainError('REGISTRATION_CLOSED', '活动报名已截止。', 422);
       }
       const duplicate = await client.query<RegistrationRow>(
@@ -462,28 +481,83 @@ export class RegistrationsService {
     });
   }
 
-  async acceptWaitlist(user: AuthenticatedUser, registrationId: string, key: string): Promise<unknown> {
+  async acceptWaitlist(
+    user: AuthenticatedUser,
+    registrationId: string,
+    key: string,
+    input: {
+      quoteId: string;
+      expectedRegistrationVersion: number;
+      expectedEventVersion: number;
+    },
+  ): Promise<unknown> {
     return this.database.transaction(async (client) => {
-      const hash = this.idempotency.requestHash('POST', `/registrations/${registrationId}/waitlist-acceptance`, {});
+      const hash = this.idempotency.requestHash(
+        'POST',
+        `/registrations/${registrationId}/waitlist-acceptance`,
+        input,
+      );
       const replay = await this.idempotency.claim<unknown>(client, user.id, key, hash);
       if (replay) return replay.body;
       const registration = await this.load(client, registrationId, true);
       if (registration.user_id !== user.id) throw new DomainError('REGISTRATION_FORBIDDEN', '无权操作此报名。', 403);
-      await this.lockActiveWaitlistPromotion(client, registration.id);
-      if (registration.status !== 'offered' || !registration.offer_expires_at || registration.offer_expires_at <= new Date()) {
-        throw new DomainError('WAITLIST_OFFER_EXPIRED', '候补确认已过期。', 409);
-      }
-      const capacity = await client.query<{ capacity: number; confirmed_count: number; offered_count: number }>(
-        `SELECT e.capacity, c.confirmed_count, c.offered_count
+      const promotion = await this.lockActiveWaitlistPromotion(client, registration.id);
+      const capacity = await client.query<{
+        capacity: number;
+        confirmed_count: number;
+        offered_count: number;
+        status: string;
+        ends_at: Date | null;
+        deadline_at: Date | null;
+        version: string;
+        server_time: Date;
+      }>(
+        `SELECT e.capacity, c.confirmed_count, c.offered_count, e.status,
+           e.ends_at, e.deadline_at, e.version::text AS version,
+           clock_timestamp() AS server_time
          FROM events.events e JOIN events.event_capacity c ON c.event_id = e.id
          WHERE e.id = $1 FOR UPDATE OF e, c`,
         [registration.event_id],
       );
       const event = capacity.rows[0];
-      if (!event || event.confirmed_count + registration.party_size > event.capacity) {
+      if (!event) throw new DomainError('EVENT_NOT_FOUND', '活动不存在。', 404);
+      const currentRegistrationVersion = Number(registration.version);
+      if (currentRegistrationVersion !== input.expectedRegistrationVersion) {
+        throw new DomainError('REGISTRATION_CHANGED', '候补状态已更新，请重新确认。', 409, {
+          meta: { currentVersion: currentRegistrationVersion },
+        });
+      }
+      const currentEventVersion = Number(event.version);
+      if (currentEventVersion !== input.expectedEventVersion) {
+        throw new DomainError('EVENT_CHANGED', '活动内容已更新，请重新确认候补名额。', 409, {
+          meta: { currentVersion: currentEventVersion },
+        });
+      }
+      if (
+        event.status !== 'published'
+        || !event.ends_at
+        || event.ends_at <= event.server_time
+        || (event.deadline_at && event.deadline_at <= event.server_time)
+      ) {
+        throw new DomainError('WAITLIST_ACCEPTANCE_CLOSED', '当前活动已不能确认候补名额。', 409);
+      }
+      if (
+        registration.status !== 'offered'
+        || !promotion
+        || promotion.expires_at <= event.server_time
+      ) {
+        throw new DomainError('WAITLIST_OFFER_EXPIRED', '候补确认已过期。', 409);
+      }
+      if (event.confirmed_count + registration.party_size > event.capacity) {
         throw new DomainError('REGISTRATION_CAPACITY_FULL', '预留名额已不可用。', 409);
       }
-      const cost = await this.points.configBigInt(client, 'points.cost.registration', 10n);
+      const cost = await this.points.consumeQuote(
+        client,
+        user.id,
+        input.quoteId,
+        'registration',
+        registration.event_id,
+      );
       await this.points.spend(
         client,
         user.id,
@@ -529,9 +603,26 @@ export class RegistrationsService {
         throw new DomainError('INVALID_STATE_TRANSITION', '当前报名状态不能取消。', 422);
       }
       await this.lockActiveWaitlistPromotion(client, registration.id);
-      await client.query('SELECT event_id FROM events.event_capacity WHERE event_id = $1 FOR UPDATE', [
-        registration.event_id,
-      ]);
+      const eventResult = await client.query<{
+        status: string;
+        starts_at: Date | null;
+        ends_at: Date | null;
+        server_time: Date;
+      }>(
+        `SELECT e.status, e.starts_at, e.ends_at, clock_timestamp() AS server_time
+         FROM events.events e JOIN events.event_capacity c ON c.event_id = e.id
+         WHERE e.id = $1 FOR UPDATE OF e, c`,
+        [registration.event_id],
+      );
+      const event = eventResult.rows[0];
+      if (!event) throw new DomainError('EVENT_NOT_FOUND', '活动不存在。', 404);
+      if (
+        !['published', 'registration_closed'].includes(event.status)
+        || !event.starts_at
+        || event.starts_at <= event.server_time
+      ) {
+        throw new DomainError('REGISTRATION_CANCELLATION_CLOSED', '活动已开始或结束，不能再取消报名。', 409);
+      }
       await client.query(
         "UPDATE events.registrations SET status = 'cancelled', cancelled_at = clock_timestamp() WHERE id = $1",
         [registration.id],
@@ -553,14 +644,9 @@ export class RegistrationsService {
       );
       let refundedPoints = 0;
       let wallet = await this.points.wallet(user.id);
-      const refundPolicy = await client.query<{ starts_at: Date }>(
-        'SELECT starts_at FROM events.events WHERE id = $1',
-        [registration.event_id],
-      );
       const refundHours = await this.points.configBigInt(client, 'registration.cancel_refund_hours', 24n);
       const refundable = Boolean(
-        refundPolicy.rows[0]?.starts_at &&
-        refundPolicy.rows[0].starts_at.getTime() - Date.now() >= Number(refundHours) * 3_600_000,
+        event.starts_at.getTime() - event.server_time.getTime() >= Number(refundHours) * 3_600_000,
       );
       const transaction = await client.query<{ id: string }>(
         `SELECT id FROM commerce.point_transactions
@@ -1124,9 +1210,12 @@ export class RegistrationsService {
     return row;
   }
 
-  private async lockActiveWaitlistPromotion(client: PoolClient, registrationId: string): Promise<void> {
-    await client.query(
-      `SELECT promotion.id
+  private async lockActiveWaitlistPromotion(
+    client: PoolClient,
+    registrationId: string,
+  ): Promise<{ id: string; expires_at: Date } | null> {
+    const result = await client.query<{ id: string; expires_at: Date }>(
+      `SELECT promotion.id, promotion.expires_at
        FROM events.waitlist_promotions promotion
        WHERE promotion.registration_id = $1
          AND promotion.accepted_at IS NULL AND promotion.expired_at IS NULL
@@ -1134,11 +1223,24 @@ export class RegistrationsService {
        LIMIT 1 FOR UPDATE`,
       [registrationId],
     );
+    return result.rows[0] ?? null;
   }
 
   private toView(row: RegistrationRow, checkInEligible = false): Record<string, unknown> {
     const actions: AvailableAction[] = [];
-    if (['pending', 'confirmed', 'waitlisted', 'offered'].includes(row.status)) actions.push('cancelRegistration');
+    const itinerary = row as Partial<RegistrationItineraryRow>;
+    const hasItineraryAuthority = itinerary.server_time instanceof Date;
+    const cancellationOpen = !hasItineraryAuthority || Boolean(
+      itinerary.itinerary_event_id
+      && ['published', 'registration_closed'].includes(itinerary.itinerary_status ?? '')
+      && itinerary.itinerary_starts_at
+      && itinerary.server_time
+      && itinerary.itinerary_starts_at > itinerary.server_time,
+    );
+    if (
+      cancellationOpen
+      && ['pending', 'confirmed', 'waitlisted', 'offered'].includes(row.status)
+    ) actions.push('cancelRegistration');
     if (row.status === 'offered') actions.push('register');
     if (row.status === 'confirmed') {
       actions.push('viewTicket');

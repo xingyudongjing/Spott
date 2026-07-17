@@ -19,6 +19,7 @@ export class RegistrationsController {
       .object({
         partySize: z.number().int().min(1).max(10),
         quoteId: z.string().uuid(),
+        expectedEventVersion: z.number().int().positive(),
         joinWaitlistIfFull: z.boolean().default(false),
         answers: z.record(z.string().uuid(), z.unknown()).default({}),
         attendeeNote: z.string().trim().max(1000).optional(),
@@ -60,8 +61,14 @@ export class RegistrationsController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
     @Headers('idempotency-key') key: string,
+    @Body() body: unknown,
   ) {
-    return this.registrations.acceptWaitlist(user, id, this.key(key));
+    const input = z.object({
+      quoteId: z.string().uuid(),
+      expectedRegistrationVersion: z.number().int().positive(),
+      expectedEventVersion: z.number().int().positive(),
+    }).parse(body);
+    return this.registrations.acceptWaitlist(user, id, this.key(key), input);
   }
 
   @Post('registrations/:id/cancel')

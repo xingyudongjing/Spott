@@ -1,14 +1,15 @@
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --spott-canvas: #f7f5f0;
   --spott-surface: #ffffff;
   --spott-ink: #17181c;
-  --spott-muted: #6f737c;
+  --spott-muted: #6b6f77;
   --spott-twilight: #6e5be7;
   --spott-coral: #ff745f;
+  --spott-coral-strong: #bf493a;
   --spott-mint: #3dbd91;
   --spott-amber: #d99a2b;
-  --spott-danger: #d84b5b;
+  --spott-danger: #c83f50;
   --spott-divider: #e6e2da;
   --spott-font-sans: InterVariable, Inter, "Noto Sans SC", "Noto Sans JP", system-ui, sans-serif;
   --spott-radius-control: 12px;
@@ -18,21 +19,6 @@
   --spott-motion-fast: 120ms;
   --spott-motion-standard: 220ms;
   --spott-motion-narrative: 360ms;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --spott-canvas: #0e1014;
-    --spott-surface: #171a20;
-    --spott-ink: #f7f6f2;
-    --spott-muted: #a7acb7;
-    --spott-twilight: #9b8cff;
-    --spott-coral: #ff866f;
-    --spott-mint: #51d4a5;
-    --spott-amber: #f0b84f;
-    --spott-danger: #ff6b79;
-    --spott-divider: #2b3038;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

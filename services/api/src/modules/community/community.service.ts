@@ -1,17 +1,46 @@
 import { Injectable } from '@nestjs/common';
 import { DomainError } from '@spott/domain';
 import { Database } from '../../platform/database.js';
+import { IdempotencyService } from '../../platform/idempotency.js';
 import type { AuthenticatedUser } from '../../platform/request-context.js';
 import { PointsService } from '../points/points.service.js';
 
 @Injectable()
 export class CommunityService {
-  constructor(private readonly database: Database, private readonly points: PointsService) {}
+  constructor(
+    private readonly database: Database,
+    private readonly points: PointsService,
+    private readonly idempotency: IdempotencyService,
+  ) {}
 
-  async feedback(userId: string, registrationId: string, input: { attendanceRating: number; tags: string[]; comment?: string | undefined; visibility: string }): Promise<unknown> {
+  async feedback(
+    userId: string,
+    registrationId: string,
+    key: string,
+    input: {
+      attendanceRating: number;
+      tags: string[];
+      comment?: string | undefined;
+      visibility: string;
+    },
+  ): Promise<unknown> {
     return this.database.transaction(async (client) => {
-      const registration = await client.query<{ event_id: string; status: string; ends_at: Date }>(
-        `SELECT registration.event_id, registration.status, event.ends_at
+      const hash = this.idempotency.requestHash(
+        'POST',
+        `/registrations/${registrationId}/feedback`,
+        input,
+      );
+      const replay = await this.idempotency.claim<unknown>(client, userId, key, hash);
+      if (replay) return replay.body;
+
+      const registration = await client.query<{
+        event_id: string;
+        status: string;
+        ends_at: Date | null;
+        server_time: Date;
+      }>(
+        `SELECT registration.event_id, registration.status, event.ends_at,
+           clock_timestamp() AS server_time
          FROM events.registrations registration
          JOIN events.events event ON event.id = registration.event_id
          WHERE registration.id = $1 AND registration.user_id = $2`,
@@ -20,7 +49,11 @@ export class CommunityService {
       const row = registration.rows[0];
       if (!row) throw new DomainError('REGISTRATION_NOT_FOUND', '报名记录不存在。', 404);
       if (row.status !== 'checked_in') throw new DomainError('FEEDBACK_NOT_ALLOWED', '完成签到后才能提交反馈。', 422);
-      if (!row.ends_at || row.ends_at > new Date() || row.ends_at.getTime() < Date.now() - 30 * 86_400_000) {
+      if (
+        !row.ends_at
+        || row.ends_at > row.server_time
+        || row.ends_at.getTime() < row.server_time.getTime() - 30 * 86_400_000
+      ) {
         throw new DomainError('FEEDBACK_WINDOW_CLOSED', '反馈需在活动结束后 30 天内提交。', 422);
       }
       const result = await client.query<{ id: string; created_at: Date; edit_count: number }>(
@@ -62,7 +95,7 @@ export class CommunityService {
         );
         rewardPoints = Number(reward);
       }
-      return {
+      const body = {
         id: feedback.id,
         eventId: row.event_id,
         status: 'pending_moderation',
@@ -70,7 +103,92 @@ export class CommunityService {
         rewardPoints,
         createdAt: feedback.created_at.toISOString(),
       };
+      await this.idempotency.complete(client, userId, key, { status: 201, body }, {
+        type: 'feedback',
+        id: feedback.id,
+      });
+      return body;
     });
+  }
+
+  async ownFeedback(userId: string, registrationId: string): Promise<unknown> {
+    const result = await this.database.query<{
+      registration_id: string;
+      event_id: string;
+      registration_status: string;
+      ends_at: Date | null;
+      server_time: Date;
+      feedback_id: string | null;
+      attendance_rating: number | null;
+      tags: string[] | null;
+      comment: string | null;
+      visibility: string | null;
+      moderation_state: string | null;
+      edit_count: number | null;
+      created_at: Date | null;
+      updated_at: Date | null;
+    }>(
+      `SELECT registration.id AS registration_id, registration.event_id,
+         registration.status AS registration_status, event.ends_at,
+         clock_timestamp() AS server_time,
+         feedback.id AS feedback_id, feedback.attendance_rating, feedback.tags,
+         feedback.comment, feedback.visibility, feedback.moderation_state,
+         feedback.edit_count, feedback.created_at, feedback.updated_at
+       FROM events.registrations registration
+       JOIN events.events event ON event.id = registration.event_id
+       LEFT JOIN community.feedback feedback
+         ON feedback.registration_id = registration.id
+        AND feedback.author_id = registration.user_id
+       WHERE registration.id = $1 AND registration.user_id = $2`,
+      [registrationId, userId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new DomainError('REGISTRATION_NOT_FOUND', '报名记录不存在。', 404);
+
+    const windowClosesAt = row.ends_at
+      ? new Date(row.ends_at.getTime() + 30 * 86_400_000)
+      : null;
+    const inWindow = Boolean(
+      row.registration_status === 'checked_in'
+      && row.ends_at
+      && row.ends_at <= row.server_time
+      && windowClosesAt
+      && row.server_time <= windowClosesAt,
+    );
+    const hasFeedback = row.feedback_id !== null;
+    const canEdit = inWindow && hasFeedback && (row.edit_count ?? 0) < 1;
+    const canSubmit = inWindow && (!hasFeedback || canEdit);
+    const state = !inWindow
+      ? row.registration_status === 'checked_in' && windowClosesAt && row.server_time > windowClosesAt
+        ? 'window_closed'
+        : 'not_eligible'
+      : !hasFeedback
+        ? 'not_submitted'
+        : canEdit
+          ? 'edit_available'
+          : 'edit_limit_reached';
+
+    return {
+      registrationId: row.registration_id,
+      eventId: row.event_id,
+      state,
+      canSubmit,
+      canEdit,
+      windowClosesAt: windowClosesAt?.toISOString() ?? null,
+      feedback: hasFeedback
+        ? {
+            id: row.feedback_id,
+            attendanceRating: row.attendance_rating,
+            tags: row.tags ?? [],
+            comment: row.comment,
+            visibility: row.visibility,
+            moderationState: row.moderation_state,
+            editCount: row.edit_count ?? 0,
+            createdAt: row.created_at?.toISOString() ?? null,
+            updatedAt: row.updated_at?.toISOString() ?? null,
+          }
+        : null,
+    };
   }
 
   async feedbackSummary(eventId: string): Promise<unknown> {

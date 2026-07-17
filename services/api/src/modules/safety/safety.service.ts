@@ -3,16 +3,19 @@ import { Injectable } from '@nestjs/common';
 import { DomainError } from '@spott/domain';
 import { Database } from '../../platform/database.js';
 import { FieldCrypto } from '../../platform/crypto.js';
+import { IdempotencyService } from '../../platform/idempotency.js';
 
 @Injectable()
 export class SafetyService {
   constructor(
     private readonly database: Database,
     private readonly crypto: FieldCrypto,
+    private readonly idempotency: IdempotencyService,
   ) {}
 
   async report(
     reporterId: string,
+    key: string,
     input: {
       targetType: string;
       targetId: string;
@@ -22,6 +25,43 @@ export class SafetyService {
     },
   ): Promise<unknown> {
     return this.database.transaction(async (client) => {
+      const hash = this.idempotency.requestHash('POST', '/reports', input);
+      const replay = await this.idempotency.claim<unknown>(client, reporterId, key, hash);
+      if (replay) return replay.body;
+
+      if (new Set(input.evidenceAssetIds).size !== input.evidenceAssetIds.length) {
+        throw new DomainError('REPORT_EVIDENCE_DUPLICATED', '同一证据图片不能重复提交。', 422, {
+          retryable: false,
+        });
+      }
+      const evidence = input.evidenceAssetIds.length
+        ? await client.query<{ id: string; content_hash: Buffer }>(
+            `SELECT asset.id, asset.content_hash
+             FROM media.assets asset
+             WHERE asset.id = ANY($1::uuid[])
+               AND asset.current_owner_id = $2
+               AND asset.purpose = 'report_evidence'
+               AND asset.state = 'ready'
+               AND asset.moderation_state = 'approved'
+               AND asset.deleted_at IS NULL
+               AND asset.legacy_object_reconciliation_required = false
+               AND asset.content_hash IS NOT NULL
+               AND octet_length(asset.content_hash) = 32
+             ORDER BY asset.id
+             FOR UPDATE OF asset`,
+            [input.evidenceAssetIds, reporterId],
+          )
+        : { rows: [] as { id: string; content_hash: Buffer }[], rowCount: 0 };
+      if (evidence.rows.length !== input.evidenceAssetIds.length) {
+        throw new DomainError(
+          'REPORT_EVIDENCE_NOT_FOUND',
+          '证据图片不存在、尚未通过验证或不可访问。',
+          404,
+          { retryable: false },
+        );
+      }
+      const evidenceById = new Map(evidence.rows.map((asset) => [asset.id, asset.content_hash]));
+
       const severity = this.severity(input.reason, input.details);
       const reference = `SPT-${new Date().getUTCFullYear()}-${randomBytes(6).toString('hex').toUpperCase()}`;
       const report = await client.query<{ id: string; created_at: Date }>(
@@ -40,14 +80,24 @@ export class SafetyService {
         ],
       );
       const row = report.rows[0];
-      if (!row) throw new DomainError('REPORT_CREATE_FAILED', '举报提交失败。', 500, { retryable: true });
-      for (const assetId of input.evidenceAssetIds) {
+      if (!row)
+        throw new DomainError('REPORT_CREATE_FAILED', '举报提交失败。', 500, { retryable: true });
+      for (const [sortOrder, assetId] of input.evidenceAssetIds.entries()) {
+        const contentHash = evidenceById.get(assetId);
+        if (!contentHash) {
+          throw new DomainError(
+            'REPORT_EVIDENCE_NOT_FOUND',
+            '证据图片不存在、尚未通过验证或不可访问。',
+            404,
+            { retryable: false },
+          );
+        }
         await client.query(
           `INSERT INTO safety.evidence_assets(
-             report_id, asset_id, kms_key_ref, content_hash, retention_until
-           ) VALUES ($1,$2,'alias/spott-restricted-evidence',digest($2::text,'sha256'),
+             report_id, asset_id, sort_order, kms_key_ref, content_hash, retention_until
+           ) VALUES ($1,$2,$3,'alias/spott-restricted-evidence',$4,
              clock_timestamp() + interval '365 days')`,
-          [row.id, assetId],
+          [row.id, assetId, sortOrder, contentHash],
         );
       }
       const sla = severity === 'p0' ? '1 hour' : severity === 'p1' ? '24 hours' : '72 hours';
@@ -61,7 +111,18 @@ export class SafetyService {
          VALUES ('safety.report', $1, 'report.created', $2)`,
         [row.id, { reportId: row.id, severity }],
       );
-      return { reference, status: 'open', submittedAt: row.created_at.toISOString() };
+      const body = { reference, status: 'open', submittedAt: row.created_at.toISOString() };
+      await this.idempotency.complete(
+        client,
+        reporterId,
+        key,
+        { status: 201, body },
+        {
+          type: 'safety_report',
+          id: row.id,
+        },
+      );
+      return body;
     });
   }
 
@@ -116,11 +177,11 @@ export class SafetyService {
         [moderationCase.id, userId, input.statement],
       );
       const row = result.rows[0];
-      if (!row) throw new DomainError('APPEAL_CREATE_FAILED', '申诉提交失败。', 500, { retryable: true });
-      await client.query(
-        `UPDATE safety.moderation_cases SET status = 'appealed' WHERE id = $1`,
-        [moderationCase.id],
-      );
+      if (!row)
+        throw new DomainError('APPEAL_CREATE_FAILED', '申诉提交失败。', 500, { retryable: true });
+      await client.query(`UPDATE safety.moderation_cases SET status = 'appealed' WHERE id = $1`, [
+        moderationCase.id,
+      ]);
       await client.query(
         `UPDATE safety.reports SET status = 'appealed', updated_at = clock_timestamp()
          WHERE id = (SELECT report_id FROM safety.moderation_cases WHERE id = $1)`,
@@ -228,7 +289,12 @@ export class SafetyService {
     };
   }
 
-  async setBlock(blockerId: string, identifier: string, blocked: boolean, reason?: string): Promise<unknown> {
+  async setBlock(
+    blockerId: string,
+    identifier: string,
+    blocked: boolean,
+    reason?: string,
+  ): Promise<unknown> {
     return this.database.transaction(async (client) => {
       const target = await client.query<{ id: string }>(
         `SELECT id FROM identity.users
@@ -237,7 +303,8 @@ export class SafetyService {
       );
       const blockedId = target.rows[0]?.id;
       if (!blockedId) throw new DomainError('USER_NOT_FOUND', '用户不存在。', 404);
-      if (blockedId === blockerId) throw new DomainError('BLOCK_SELF_FORBIDDEN', '不能拉黑自己。', 422);
+      if (blockedId === blockerId)
+        throw new DomainError('BLOCK_SELF_FORBIDDEN', '不能拉黑自己。', 422);
       if (blocked) {
         await client.query(
           `INSERT INTO identity.blocks(blocker_id, blocked_id, reason_code)
@@ -254,10 +321,10 @@ export class SafetyService {
           [blockerId, blockedId],
         );
       } else {
-        await client.query('DELETE FROM identity.blocks WHERE blocker_id = $1 AND blocked_id = $2', [
-          blockerId,
-          blockedId,
-        ]);
+        await client.query(
+          'DELETE FROM identity.blocks WHERE blocker_id = $1 AND blocked_id = $2',
+          [blockerId, blockedId],
+        );
       }
       await client.query(
         `SELECT sync.record_change($1, 'block.changed', 'profile', $2, 'upsert', 1,
@@ -269,6 +336,15 @@ export class SafetyService {
   }
 
   private severity(reason: string, details?: string): 'p0' | 'p1' | 'p2' {
+    const reasonCode = reason.trim().toLowerCase();
+    if (['fraud', 'minor_safety'].includes(reasonCode)) return 'p0';
+    if (
+      ['danger', 'personal_safety', 'unsafe', 'harassment', 'harassment_or_hate'].includes(
+        reasonCode,
+      )
+    )
+      return 'p1';
+    if (reasonCode === 'spam') return 'p2';
     const text = `${reason} ${details ?? ''}`.toLowerCase();
     if (/人身|未成年|诈骗|violence|minor|fraud/.test(text)) return 'p0';
     if (/骚扰|危险|仇恨|harass|danger|hate/.test(text)) return 'p1';

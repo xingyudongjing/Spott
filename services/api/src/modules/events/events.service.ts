@@ -716,7 +716,7 @@ export class EventsService {
     }
     const capacity = row.capacity ?? 0;
     const occupied = row.confirmed_count + (row.pending_count ?? 0) + (row.offered_count ?? 0);
-    const actions = availableEventActions(
+    const policyActions = availableEventActions(
       {
         authenticated: Boolean(viewer),
         phoneVerified: viewer?.phoneVerified ?? false,
@@ -734,6 +734,9 @@ export class EventsService {
         registrationStatus: row.registration_status,
       },
     );
+    const actions = row.registration_mode === 'invite_only'
+      ? policyActions.filter((action) => action !== 'register' && action !== 'joinWaitlist')
+      : policyActions;
     const canSeeAddress = canReadExactAddress({
       isOrganizer: viewer?.id === row.organizer_id,
       visibility: row.exact_address_visibility === 'public' ? 'public' : 'confirmed',

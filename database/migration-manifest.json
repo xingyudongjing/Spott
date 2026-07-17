@@ -1,0 +1,116 @@
+{
+  "$schema": "./migration-manifest.schema.json",
+  "schemaVersion": 1,
+  "migrations": [
+    {
+      "sequence": 1,
+      "filename": "0001_platform.sql",
+      "sha256": "78499b48fbab932d16ffa0a3a90b88012b97a00a82ac30088998de20c61e1668"
+    },
+    {
+      "sequence": 2,
+      "filename": "0002_identity_events.sql",
+      "sha256": "f2f04483aaaa03a7ce2d49578cc93666bdb2873874159728006b42ed79505bf0"
+    },
+    {
+      "sequence": 3,
+      "filename": "0003_community_commerce_operations.sql",
+      "sha256": "6c8edc742c9ce0c2577cb49b3eef5aa25434dfc8ad1039dfbdfaa5fffbf69092"
+    },
+    {
+      "sequence": 4,
+      "filename": "0004_sync_growth_security.sql",
+      "sha256": "f59b27b5ad1841538d2f01285b7c0dc4b6da11dd26111ab85003ecbbb8f1bc5e"
+    },
+    {
+      "sequence": 5,
+      "filename": "0005_product_support.sql",
+      "sha256": "279c2fc7d04639dd768124c9bd85147665eca0b57f679db21732b21594e6e196"
+    },
+    {
+      "sequence": 6,
+      "filename": "0006_auth_storekit_delivery.sql",
+      "sha256": "1bca57feaa0fb7f30beaf03e55dbe14c7f3b6dc3bca4972bab1a5738391bb4c9"
+    },
+    {
+      "sequence": 7,
+      "filename": "0007_worker_operations.sql",
+      "sha256": "8800b94ae71496b3ec6ae2770a0636a4c413c3af8976f71d66df53c6a27707e3"
+    },
+    {
+      "sequence": 8,
+      "filename": "0008_growth_content_management.sql",
+      "sha256": "1a2959ac588535fd5daade81ddae6ce93caecf6020818aa875c929702ba79ca0"
+    },
+    {
+      "sequence": 9,
+      "filename": "0009_group_lifecycle.sql",
+      "sha256": "3ee8ab68bfc340ce314a5b38e069297a8259d75ee83fbaf4fd5e182a0543969a"
+    },
+    {
+      "sequence": 10,
+      "filename": "0010_event_publication_fields.sql",
+      "sha256": "44075558f645f9335dc862483b442f723cf9c32fa06a9b845275a3d4d0943370"
+    },
+    {
+      "sequence": 11,
+      "filename": "0011_product_contract_completion.sql",
+      "sha256": "b0eccb1b15fd58880232fc8ea18f3d1e9b92b91c833d24d465193406911f7ccb"
+    },
+    {
+      "sequence": 12,
+      "filename": "0012_worker_delivery_media.sql",
+      "sha256": "58453328de67a0134a96f873491e3ded407a6919aad07f038cf428fc40824358"
+    },
+    {
+      "sequence": 13,
+      "filename": "0013_store_product_catalog.sql",
+      "sha256": "01b1fc7858de64c3518dd8ceb82fa74c8dac405783f51e3d191199fade7c745d"
+    },
+    {
+      "sequence": 14,
+      "filename": "0014_backend_contract_gaps.sql",
+      "sha256": "10a09ec9ec58e5f7762c3009c34caa815d566fae8bad532e077dd783925beb07"
+    },
+    {
+      "sequence": 15,
+      "filename": "0015_ops_contract_completion.sql",
+      "sha256": "55686adbab6c6548750cfb9b26e5c40b4e927f541be16d34f74f838ec6190bfc"
+    },
+    {
+      "sequence": 16,
+      "filename": "0016_core_journey_discovery.sql",
+      "sha256": "ebe2746a01da32d3fb19e550a293d304ef6078b5e6f1c70d66b9967eacf3d8c2"
+    },
+    {
+      "sequence": 17,
+      "filename": "0017_event_completion_fact.sql",
+      "sha256": "0cd7588bbada497a58e076f991cd896f5a41e3fa9c67a87e4cafed4e42b2e911"
+    },
+    {
+      "sequence": 18,
+      "filename": "0018_event_fact_invariants.sql",
+      "sha256": "4be870c9b63a08bc9874cb654ba4c9bdb6647f7f727bc04ffd35e1064b6a7de1"
+    },
+    {
+      "sequence": 19,
+      "filename": "0019_itinerary_registration_index.sql",
+      "sha256": "3f0ad3b73a2440f1913d3f9b620adf81906de41cbbfa73ede7e8757bd8e4433d"
+    },
+    {
+      "sequence": 20,
+      "filename": "0020_sync_correctness.sql",
+      "sha256": "c748cfbcf753f33ddc74aceee68db0ec040f4126f0d5ef2621de55558ac1b984"
+    },
+    {
+      "sequence": 21,
+      "filename": "0021_web_session_security.sql",
+      "sha256": "7f6d7521e53b3be588d30850abf2e41725da02e82bd6c8f75ea5ff64fbf2380c"
+    },
+    {
+      "sequence": 22,
+      "filename": "0022_media_upload_attempts.sql",
+      "sha256": "2eb6ed68ba34835f8eeab212b42fbb7f03049ca775b62b9fd0ac92aef3179088"
+    }
+  ]
+}

@@ -38,12 +38,16 @@ export class APIExceptionFilter implements ExceptionFilter {
       code = status === unauthorizedStatus ? String(exception.message) : `HTTP_${status}`;
       message = status === unauthorizedStatus ? '请登录后继续。' : exception.message;
       retryable = status >= serverErrorStatus;
+    } else if (isFastifyRateLimitError(exception)) {
+      status = 429;
+      code = 'RATE_LIMITED';
+      message = '请求过于频繁，请稍后重试。';
+      retryable = true;
     }
 
     if (status >= 500) {
       this.logger.error(
-        `${request.method} ${request.url} failed (${request.requestId})`,
-        exception instanceof Error ? exception.stack : String(exception),
+        `${request.method} ${request.url} failed (${request.requestId}; exception=${safeExceptionKind(exception)})`,
       );
     }
 
@@ -51,4 +55,18 @@ export class APIExceptionFilter implements ExceptionFilter {
       error: { code, message, requestId: request.requestId, retryable, fieldErrors, actions, meta },
     });
   }
+}
+
+function isFastifyRateLimitError(exception: unknown): exception is Error & { statusCode: 429 } {
+  return exception instanceof Error
+    && 'statusCode' in exception
+    && exception.statusCode === 429;
+}
+
+function safeExceptionKind(exception: unknown): string {
+  if (exception instanceof DomainError) return 'DomainError';
+  if (exception instanceof ZodError) return 'ZodError';
+  if (exception instanceof HttpException) return 'HttpException';
+  if (exception instanceof Error) return 'Error';
+  return 'Unknown';
 }

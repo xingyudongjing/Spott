@@ -264,6 +264,32 @@ describe('EventsService event contract', () => {
     expect(view.availableActions).not.toContain('register');
   });
 
+  it('does not expose registration actions when an invite-only event has no invitation authority', () => {
+    const service = new EventsService({} as never, {} as never, {} as never, {} as never);
+    const mapper = service as unknown as {
+      toView: (
+        row: ReturnType<typeof eventRow>,
+        viewer: typeof publisher,
+        includeDetail: boolean,
+      ) => Record<string, unknown>;
+    };
+    const unrelated = { ...publisher, id: '019b0000-0000-7000-8000-000000000099' };
+
+    const view = mapper.toView(eventRow({
+      registration_mode: 'invite_only',
+      registration_id: null,
+      registration_status: null,
+      registration_party_size: null,
+      confirmed_count: 1,
+      pending_count: 0,
+      offered_count: 0,
+      available_capacity: 9,
+    }), unrelated, false) as { availableActions: string[] };
+
+    expect(view.availableActions).not.toContain('register');
+    expect(view.availableActions).not.toContain('joinWaitlist');
+  });
+
   it('writes draft coordinates to PostGIS with longitude before latitude', async () => {
     const client = {
       query: vi.fn(async (_sql: string, _values: readonly unknown[] = []) => {

@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, Param, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Param, Post, Put } from '@nestjs/common';
+import { DomainError } from '@spott/domain';
 import { z } from 'zod';
 import { CurrentUser, type AuthenticatedUser } from '../../platform/request-context.js';
 import { SafetyService } from './safety.service.js';
@@ -8,17 +9,31 @@ export class SafetyController {
   constructor(private readonly safety: SafetyService) {}
 
   @Post('reports')
-  report(@CurrentUser() user: AuthenticatedUser, @Body() body: unknown) {
+  report(
+    @CurrentUser() user: AuthenticatedUser,
+    @Headers('idempotency-key') key: string,
+    @Body() body: unknown,
+  ) {
     const input = z
       .object({
         targetType: z.enum(['event', 'group', 'user', 'comment', 'announcement']),
         targetId: z.string().uuid(),
-        reason: z.string().min(3).max(500),
+        reason: z.enum([
+          'danger',
+          'personal_safety',
+          'fraud',
+          'harassment',
+          'harassment_or_hate',
+          'spam',
+          'minor_safety',
+          'other',
+          'unsafe',
+        ]),
         details: z.string().max(5000).optional(),
         evidenceAssetIds: z.array(z.string().uuid()).max(10).default([]),
       })
       .parse(body);
-    return this.safety.report(user.id, input);
+    return this.safety.report(user.id, this.key(key), input);
   }
 
   @Post('appeals')
@@ -61,5 +76,13 @@ export class SafetyController {
   @Delete('users/:id/block')
   unblock(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     return this.safety.setBlock(user.id, id, false);
+  }
+
+  private key(value: string | undefined): string {
+    const parsed = z.string().uuid().safeParse(value);
+    if (!parsed.success) {
+      throw new DomainError('IDEMPOTENCY_KEY_REQUIRED', '请求缺少有效的幂等键。', 400);
+    }
+    return parsed.data.toLowerCase();
   }
 }

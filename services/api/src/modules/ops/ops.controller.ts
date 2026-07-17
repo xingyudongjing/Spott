@@ -2,10 +2,12 @@ import { Body, Controller, Delete, Get, Headers, HttpCode, Param, Post, Query, R
 import { DomainError } from '@spott/domain';
 import type { FastifyReply } from 'fastify';
 import { z } from 'zod';
+import { OpsRoute } from '../../platform/auth.guard.js';
 import { CurrentUser, Public, type AuthenticatedUser, type SpottRequest } from '../../platform/request-context.js';
 import { AuthService, type SessionResponse } from '../auth/auth.service.js';
 import { OpsService } from './ops.service.js';
 
+@OpsRoute()
 @Controller('ops')
 export class OpsController {
   constructor(private readonly ops: OpsService, private readonly auth: AuthService) {}

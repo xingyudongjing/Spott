@@ -1,6 +1,6 @@
-import { createHash, createHmac, randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
-import { DomainError, transitionEvent } from '@spott/domain';
+import { DomainError, transitionEvent, type EventStatus } from '@spott/domain';
 import type { PoolClient } from 'pg';
 import { configuration } from '../../config.js';
 import { Database } from '../../platform/database.js';
@@ -14,6 +14,313 @@ interface AdminContext {
   roles: string[];
   data_scopes: string[];
   mfa_enrolled_at: Date;
+}
+
+type PgInteger = string | number | bigint;
+
+interface PageRow {
+  id: string;
+  created_at: Date;
+}
+
+interface PageResult<Item> {
+  items: Item[];
+  hasMore: boolean;
+  nextCursor: string | null;
+}
+
+interface UserListRow extends PageRow {
+  public_handle: string;
+  nickname: string;
+  status: string;
+  restriction_flags: string[];
+  phone_verified_at: Date | null;
+  device_risk: string;
+  hosted_count: PgInteger;
+  registration_count: PgInteger;
+  complaint_count: PgInteger;
+  updated_at: Date;
+  version: PgInteger;
+}
+
+interface OrganizerListRow extends PageRow {
+  public_handle: string;
+  nickname: string;
+  status: string;
+  restriction_flags: string[];
+  phone_verified_at: Date | null;
+  hosted_count: PgInteger;
+  upcoming_count: PgInteger;
+  completed_count: PgInteger;
+  checked_in_count: PgInteger;
+  eligible_count: PgInteger;
+  participants_60d: PgInteger;
+  repeat_participants_60d: PgInteger;
+  complaint_count: PgInteger;
+  version: PgInteger;
+}
+
+interface EventListRow extends PageRow {
+  public_slug: string;
+  title: string;
+  status: string;
+  category_id: string | null;
+  starts_at: Date | null;
+  submitted_at: Date;
+  version: PgInteger;
+  organizer_id: string;
+  organizer_handle: string;
+  organizer_nickname: string;
+  public_area: string | null;
+  region_id: string | null;
+  is_free: boolean | null;
+  amount_jpy: PgInteger | null;
+  risk_score: PgInteger;
+  risk_reasons: string[];
+}
+
+interface GroupListRow extends PageRow {
+  slug: string;
+  name: string;
+  status: string;
+  join_mode: string;
+  capacity: PgInteger;
+  version: PgInteger;
+  owner_id: string;
+  owner_handle: string;
+  owner_nickname: string;
+  member_count: PgInteger;
+  open_event_count: PgInteger;
+  report_count: PgInteger;
+  active_transfer_state: string | null;
+  closing_at: Date | null;
+}
+
+interface ModerationCaseListRow extends PageRow {
+  public_reference: string;
+  target_type: string;
+  target_id: string;
+  reason: string;
+  severity: string;
+  status: string;
+  sla_due_at: Date;
+  version: PgInteger;
+  assignee_id: string | null;
+  assignee_label: string | null;
+}
+
+interface PointAdjustmentRow extends PageRow {
+  bucket: string;
+  amount: PgInteger;
+  reason: string;
+  state: string;
+  points_transaction_id: string | null;
+  decided_at: Date | null;
+  executed_at: Date | null;
+  required_approvals: PgInteger;
+  approval_count: PgInteger;
+  version: PgInteger;
+  target_id: string;
+  target_handle: string;
+  target_nickname: string;
+  requester_id: string;
+  requester_label: string;
+  approver_id: string | null;
+  approver_label: string | null;
+}
+
+interface ConfigRevisionRow extends PageRow {
+  key: string;
+  value_json: unknown;
+  version: PgInteger;
+  audience: Record<string, unknown>;
+  region: string | null;
+  min_app_version: string | null;
+  effective_from: Date | null;
+  effective_to: Date | null;
+  state: string;
+  reason: string;
+  submitter_id: string;
+  submitter_label: string;
+  approver_id: string | null;
+  approver_label: string | null;
+}
+
+interface ExportRow extends PageRow {
+  dataset: string;
+  purpose: string;
+  state: string;
+  watermark: string;
+  expires_at: Date;
+  max_downloads: PgInteger;
+  download_count: PgInteger;
+  requester_id: string;
+  requester_label: string;
+  approver_id: string | null;
+  approver_label: string | null;
+}
+
+interface AuditLogRow extends PageRow {
+  actor_id: string | null;
+  actor_label: string | null;
+  action: string;
+  resource: string;
+  resource_id: string | null;
+  purpose: string | null;
+  trace_id: string;
+}
+
+interface AdminUserRow {
+  id: string;
+  identity_user_id: string;
+  roles: string[];
+  data_scopes: string[];
+  mfa_enrolled_at: Date;
+  disabled_at: Date | null;
+  label: string;
+}
+
+interface RestrictionRow {
+  id: string;
+  status: string;
+  restriction_flags: string[];
+  version: PgInteger;
+}
+
+interface GroupLifecycleRow {
+  id: string;
+  owner_id: string;
+  status: string;
+  version: PgInteger;
+}
+
+interface VersionRow {
+  version: PgInteger;
+}
+
+interface ModerationCaseDetailRow extends ModerationCaseListRow {
+  report_id: string;
+  reporter_id: string | null;
+}
+
+interface EvidenceRow {
+  id: string;
+  asset_id: string;
+  retention_until: Date;
+  created_at: Date;
+  mime_type: string | null;
+  byte_size: PgInteger | null;
+}
+
+interface ModerationActionRow {
+  id: string;
+  action_type: string;
+  reason: string;
+  expires_at: Date | null;
+  created_at: Date;
+}
+
+interface AppealRow {
+  id: string;
+  status: string;
+  created_at: Date;
+  decided_at: Date | null;
+}
+
+interface ModerationClaimRow {
+  id: string;
+  assignee_id: string | null;
+  status: string;
+  version: PgInteger;
+}
+
+interface ModerationClaimUpdateRow {
+  id: string;
+  status: string;
+  version: PgInteger;
+  updated_at: Date;
+}
+
+interface ModerationDecisionRow {
+  id: string;
+  report_id: string;
+  version: PgInteger;
+  status: string;
+  target_type: string;
+  target_id: string;
+}
+
+interface EventReviewRow {
+  organizer_id: string;
+  status: EventStatus;
+  version: PgInteger;
+  poster_enabled: boolean;
+  preferred_locale: string | null;
+}
+
+interface PointApprovalRow {
+  id: string;
+  requested_by: string;
+  state: string;
+  required_approvals: PgInteger;
+  approval_count: PgInteger;
+}
+
+interface PointExecutionRow {
+  id: string;
+  target_user_id: string;
+  bucket: 'paid' | 'free';
+  amount: PgInteger;
+  state: string;
+}
+
+interface WalletBalanceRow {
+  paid_balance: PgInteger;
+  free_balance: PgInteger;
+}
+
+interface ConfigApprovalRow {
+  id: string;
+  version: PgInteger;
+  state: string;
+  submitted_by: string;
+}
+
+interface ConfigImpactRow {
+  id: string;
+  key: string;
+  region: string | null;
+  audience: unknown;
+  effective_from: Date | null;
+}
+
+interface ConfigActivationRow {
+  id: string;
+  key: string;
+  version: PgInteger;
+  state: string;
+}
+
+interface ConfigRollbackRow {
+  key: string;
+  value_json: unknown;
+  audience: Record<string, unknown>;
+  region: string | null;
+  min_app_version: string | null;
+}
+
+interface ExportApprovalRow {
+  id: string;
+  requested_by: string;
+  state: string;
+}
+
+interface ExportDownloadRow {
+  id: string;
+  object_key: string | null;
+  expires_at: Date;
+  download_count: PgInteger;
+  max_downloads: PgInteger;
 }
 
 interface CursorValue {
@@ -120,7 +427,7 @@ export class OpsService {
     await this.requireOperator(actor, ['support', 'securityLead', 'moderator', 'analyst']);
     const page = this.decodeCursor(cursor);
     const safeLimit = this.safeLimit(limit);
-    const result = await this.database.query<any>(
+    const result = await this.database.query<UserListRow>(
       `SELECT user_record.id, user_record.public_handle, profile.nickname, user_record.status,
          user_record.restriction_flags, user_record.phone_verified_at,
          COALESCE((SELECT CASE max(CASE device.risk_state WHEN 'blocked' THEN 3 WHEN 'elevated' THEN 2 ELSE 1 END)
@@ -183,7 +490,7 @@ export class OpsService {
       const hash = this.idempotency.requestHash('POST', `/ops/users/${userId}/restriction-decisions`, input);
       const replay = await this.idempotency.claim<unknown>(client, actor.id, key, hash);
       if (replay) return replay.body;
-      const current = await client.query<any>(
+      const current = await client.query<RestrictionRow>(
         `SELECT id, status, restriction_flags, version FROM identity.users
          WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
         [userId],
@@ -211,17 +518,18 @@ export class OpsService {
         await this.idempotency.complete(client, actor.id, key, { status: 200, body }, { type: 'user', id: userId });
         return body;
       }
-      const updated = await client.query<any>(
+      const updated = await client.query<RestrictionRow>(
         `UPDATE identity.users SET status = COALESCE($2::identity.user_status, status),
            restriction_flags = $3::text[] WHERE id = $1
          RETURNING id, status, restriction_flags, version`,
         [userId, input.status ?? null, input.restrictions],
       );
+      const updatedRow = updated.rows[0]!;
       const body = {
         id: userId,
-        status: updated.rows[0].status,
-        restrictions: updated.rows[0].restriction_flags,
-        version: this.integer(updated.rows[0].version),
+        status: updatedRow.status,
+        restrictions: updatedRow.restriction_flags,
+        version: this.integer(updatedRow.version),
         expiresAt: input.expiresAt ?? null,
         requestId: traceId,
       };
@@ -236,7 +544,7 @@ export class OpsService {
     await this.requireOperator(actor, ['moderator', 'analyst', 'eventReviewer']);
     const page = this.decodeCursor(cursor);
     const safeLimit = this.safeLimit(limit);
-    const result = await this.database.query<any>(
+    const result = await this.database.query<OrganizerListRow>(
       `SELECT user_record.id, user_record.public_handle, profile.nickname, user_record.status,
          user_record.restriction_flags, user_record.phone_verified_at, user_record.version,
          user_record.created_at,
@@ -305,7 +613,7 @@ export class OpsService {
     const page = this.decodeCursor(cursor);
     const safeLimit = this.safeLimit(limit);
     const scopedRegions = this.scopedRegions(admin, filters.region);
-    const result = await this.database.query<any>(
+    const result = await this.database.query<EventListRow>(
       `SELECT event_record.id, event_record.public_slug, event_record.title, event_record.status,
          event_record.category_id, event_record.starts_at, event_record.updated_at AS submitted_at,
          event_record.version, event_record.created_at,
@@ -341,7 +649,7 @@ export class OpsService {
     const page = this.decodeCursor(cursor);
     const safeLimit = this.safeLimit(limit);
     const scopedRegions = this.scopedRegions(admin);
-    const result = await this.database.query<any>(
+    const result = await this.database.query<GroupListRow>(
       `SELECT group_record.id, group_record.slug, group_record.name, group_record.status,
          group_record.join_mode, group_record.capacity, group_record.version, group_record.created_at,
          owner.id AS owner_id, owner.public_handle AS owner_handle, profile.nickname AS owner_nickname,
@@ -397,11 +705,11 @@ export class OpsService {
       const hash = this.idempotency.requestHash('POST', `/ops/groups/${groupId}/lifecycle-decision`, input);
       const replay = await this.idempotency.claim<unknown>(client, actor.id, key, hash);
       if (replay) return replay.body;
-      const found = await client.query<any>('SELECT id, owner_id, status, version FROM community.groups WHERE id = $1 FOR UPDATE', [groupId]);
+      const found = await client.query<GroupLifecycleRow>('SELECT id, owner_id, status, version FROM community.groups WHERE id = $1 FOR UPDATE', [groupId]);
       const group = found.rows[0];
       if (!group) throw new DomainError('GROUP_NOT_FOUND', '群组不存在。', 404);
       this.assertVersion(group.version, baseVersion, '群组');
-      let status = group.status as string;
+      let status = group.status;
       if (input.decision === 'remove') status = 'removed';
       if (input.decision === 'restore') status = 'active';
       if (input.decision === 'start_closing') status = 'closing';
@@ -421,8 +729,9 @@ export class OpsService {
           [groupId, actor.id],
         );
       }
-      const updated = await client.query<any>('UPDATE community.groups SET status = $2 WHERE id = $1 RETURNING version', [groupId, status]);
-      const body = { id: groupId, status, version: this.integer(updated.rows[0].version), requestId: traceId };
+      const updated = await client.query<VersionRow>('UPDATE community.groups SET status = $2 WHERE id = $1 RETURNING version', [groupId, status]);
+      const updatedRow = updated.rows[0]!;
+      const body = { id: groupId, status, version: this.integer(updatedRow.version), requestId: traceId };
       await this.audit(client, admin, `group.lifecycle.${input.decision}`, 'group', groupId, traceId, 'community_safety', input);
       await this.outbox(client, 'group', groupId, 'group.lifecycle.updated', body);
       await this.idempotency.complete(client, actor.id, key, { status: 200, body }, { type: 'group', id: groupId });
@@ -434,7 +743,7 @@ export class OpsService {
     await this.requireOperator(actor, ['moderator', 'securityLead', 'support']);
     const page = this.decodeCursor(cursor);
     const safeLimit = this.safeLimit(limit);
-    const result = await this.database.query<any>(
+    const result = await this.database.query<ModerationCaseListRow>(
       `SELECT moderation_case.id, report.public_reference, report.target_type, report.target_id,
          report.reason, report.severity, moderation_case.status, moderation_case.sla_due_at,
          moderation_case.version, moderation_case.created_at,
@@ -459,7 +768,7 @@ export class OpsService {
 
   async moderationCase(actor: AuthenticatedUser, caseId: string, purpose?: string): Promise<unknown> {
     const admin = await this.requireOperator(actor, ['moderator', 'securityLead', 'support']);
-    const result = await this.database.query<any>(
+    const result = await this.database.query<ModerationCaseDetailRow>(
       `SELECT moderation_case.id, moderation_case.report_id, report.public_reference,
          report.target_type, report.target_id, report.reason, report.severity,
          moderation_case.status, moderation_case.sla_due_at, moderation_case.version,
@@ -476,7 +785,7 @@ export class OpsService {
     const row = result.rows[0];
     if (!row) throw new DomainError('CASE_NOT_FOUND', '审核案件不存在。', 404);
     const [evidence, actions, appeals] = await Promise.all([
-      this.database.query<any>(
+      this.database.query<EvidenceRow>(
         `SELECT evidence.id, evidence.asset_id, evidence.retention_until, evidence.created_at,
            asset.mime_type, asset.byte_size
          FROM safety.evidence_assets evidence
@@ -484,12 +793,12 @@ export class OpsService {
          WHERE evidence.report_id = $1 AND evidence.deleted_at IS NULL ORDER BY evidence.created_at`,
         [row.report_id],
       ),
-      this.database.query<any>(
+      this.database.query<ModerationActionRow>(
         `SELECT id, action_type, reason, expires_at, created_at FROM safety.moderation_actions
          WHERE case_id = $1 ORDER BY created_at`,
         [caseId],
       ),
-      this.database.query<any>(
+      this.database.query<AppealRow>(
         `SELECT id, status, created_at, decided_at FROM safety.appeals
          WHERE case_id = $1 ORDER BY created_at`,
         [caseId],
@@ -542,7 +851,7 @@ export class OpsService {
       const hash = this.idempotency.requestHash('POST', `/ops/moderation/cases/${caseId}/claim`, {});
       const replay = await this.idempotency.claim<unknown>(client, actor.id, key, hash);
       if (replay) return replay.body;
-      const found = await client.query<any>(
+      const found = await client.query<ModerationClaimRow>(
         `SELECT id, assignee_id, status, version FROM safety.moderation_cases WHERE id = $1 FOR UPDATE`,
         [caseId],
       );
@@ -550,16 +859,17 @@ export class OpsService {
       if (!row) throw new DomainError('CASE_NOT_FOUND', '审核案件不存在。', 404);
       this.assertVersion(row.version, baseVersion, '案件');
       if (row.assignee_id && row.assignee_id !== admin.id) throw new DomainError('CASE_ALREADY_CLAIMED', '案件已由其他运营认领。', 409);
-      const updated = await client.query<any>(
+      const updated = await client.query<ModerationClaimUpdateRow>(
         `UPDATE safety.moderation_cases SET assignee_id = $2, status = CASE WHEN status = 'open' THEN 'claimed' ELSE status END
          WHERE id = $1 RETURNING id, status, version, updated_at`,
         [caseId, admin.id],
       );
+      const updatedRow = updated.rows[0]!;
       const body = {
         id: caseId,
-        status: updated.rows[0].status,
+        status: updatedRow.status,
         assignee: { id: admin.id, label: admin.label },
-        version: this.integer(updated.rows[0].version),
+        version: this.integer(updatedRow.version),
         requestId: traceId,
       };
       await this.audit(client, admin, 'moderation.case.claimed', 'moderation_case', caseId, traceId, 'moderation', body);
@@ -586,7 +896,7 @@ export class OpsService {
       const hash = this.idempotency.requestHash('POST', `/ops/moderation/cases/${caseId}/decision`, input);
       const replay = await this.idempotency.claim<unknown>(client, actor.id, key, hash);
       if (replay) return replay.body;
-      const result = await client.query<any>(
+      const result = await client.query<ModerationDecisionRow>(
         `SELECT moderation_case.id, moderation_case.report_id, moderation_case.version,
            moderation_case.status, report.target_type, report.target_id
          FROM safety.moderation_cases moderation_case
@@ -600,11 +910,12 @@ export class OpsService {
       if (moderationCase.status === 'decided' || moderationCase.status === 'closed') {
         throw new DomainError('CASE_ALREADY_DECIDED', '案件已经处理。', 409);
       }
-      const updated = await client.query<any>(
+      const updated = await client.query<VersionRow>(
         `UPDATE safety.moderation_cases SET status = 'decided', decision = $2
          WHERE id = $1 RETURNING version`,
         [caseId, input.decision],
       );
+      const updatedRow = updated.rows[0]!;
       await client.query("UPDATE safety.reports SET status = 'decided', updated_at = clock_timestamp() WHERE id = $1", [moderationCase.report_id]);
       if (moderationCase.target_type === 'event' && ['hide', 'remove'].includes(input.decision)) {
         await client.query("UPDATE events.events SET status = 'removed' WHERE id = $1 AND status <> 'removed'", [moderationCase.target_id]);
@@ -636,7 +947,7 @@ export class OpsService {
         id: caseId,
         status: 'decided',
         decision: input.decision,
-        version: this.integer(updated.rows[0].version),
+        version: this.integer(updatedRow.version),
         requestId: traceId,
       };
       await this.audit(client, admin, 'moderation.decision', 'moderation_case', caseId, traceId, 'moderation', decisionPayload);
@@ -661,7 +972,7 @@ export class OpsService {
       const hash = this.idempotency.requestHash('POST', `/ops/events/${eventId}/review`, request);
       const replay = await this.idempotency.claim<unknown>(client, actor.id, key, hash);
       if (replay) return replay.body;
-      const event = await client.query<any>(
+      const event = await client.query<EventReviewRow>(
         `SELECT event_record.organizer_id,event_record.status,event_record.version,
            event_record.poster_enabled,profile.preferred_locale
          FROM events.events event_record
@@ -740,7 +1051,7 @@ export class OpsService {
     await this.requireOperator(actor, ['pointsRequester', 'pointsApprover', 'financeRead', 'financeLead']);
     const page = this.decodeCursor(cursor);
     const safeLimit = this.safeLimit(limit);
-    const result = await this.database.query<any>(
+    const result = await this.database.query<PointAdjustmentRow>(
       `${this.pointAdjustmentSelect()}
        WHERE ($1::text IS NULL OR request.state = $1)
          AND ($2::timestamptz IS NULL OR (request.created_at, request.id) < ($2, $3::uuid))
@@ -790,7 +1101,7 @@ export class OpsService {
       const hash = this.idempotency.requestHash('POST', `/ops/points/adjustments/${adjustmentId}/decision`, input);
       const replay = await this.idempotency.claim<unknown>(client, actor.id, key, hash);
       if (replay) return replay.body;
-      const found = await client.query<any>(
+      const found = await client.query<PointApprovalRow>(
         `SELECT id,requested_by,state,required_approvals,approval_count
          FROM admin.point_adjustment_requests WHERE id = $1 FOR UPDATE`,
         [adjustmentId],
@@ -834,7 +1145,7 @@ export class OpsService {
       const hash = this.idempotency.requestHash('POST', `/ops/points/adjustments/${adjustmentId}/execute`, {});
       const replay = await this.idempotency.claim<unknown>(client, actor.id, key, hash);
       if (replay) return replay.body;
-      const found = await client.query<any>(
+      const found = await client.query<PointExecutionRow>(
         `SELECT id,target_user_id,bucket,amount,state FROM admin.point_adjustment_requests
          WHERE id = $1 FOR UPDATE`,
         [adjustmentId],
@@ -847,8 +1158,10 @@ export class OpsService {
          ON CONFLICT (user_id) DO NOTHING`,
         [row.target_user_id],
       );
-      const wallet = await client.query<any>('SELECT paid_balance,free_balance FROM commerce.wallets WHERE user_id = $1 FOR UPDATE', [row.target_user_id]);
-      const balance = BigInt(row.bucket === 'paid' ? wallet.rows[0].paid_balance : wallet.rows[0].free_balance);
+      const wallet = await client.query<WalletBalanceRow>('SELECT paid_balance,free_balance FROM commerce.wallets WHERE user_id = $1 FOR UPDATE', [row.target_user_id]);
+      const balance = BigInt(row.bucket === 'paid'
+        ? wallet.rows[0]!.paid_balance
+        : wallet.rows[0]!.free_balance);
       const amount = BigInt(row.amount);
       if (amount < 0n && balance + amount < 0n) throw new DomainError('POINT_ADJUSTMENT_INSUFFICIENT', '扣减后钱包余额不能为负。', 409);
       const transaction = await client.query<{ id: string }>(
@@ -913,7 +1226,7 @@ export class OpsService {
     const admin = await this.requireOperator(actor, ['configEditor', 'configApprover', 'analyst']);
     const page = this.decodeCursor(cursor);
     const safeLimit = this.safeLimit(limit);
-    const result = await this.database.query<any>(
+    const result = await this.database.query<ConfigRevisionRow>(
       `${this.configRevisionSelect()}
        WHERE ($1::text IS NULL OR revision.state = $1)
          AND ($2::text IS NULL OR revision.key ILIKE '%' || $2 || '%')
@@ -957,7 +1270,7 @@ export class OpsService {
 
   async configImpact(actor: AuthenticatedUser, revisionId: string): Promise<unknown> {
     await this.requireOperator(actor, ['configEditor', 'configApprover', 'analyst']);
-    const result = await this.database.query<any>(
+    const result = await this.database.query<ConfigImpactRow>(
       `SELECT id,key,region,audience,effective_from FROM admin.config_revisions WHERE id = $1`,
       [revisionId],
     );
@@ -988,7 +1301,7 @@ export class OpsService {
       const hash = this.idempotency.requestHash('POST', `/ops/config-revisions/${revisionId}/approve`, { baseVersion });
       const replay = await this.idempotency.claim<unknown>(client, actor.id, key, hash);
       if (replay) return replay.body;
-      const found = await client.query<any>('SELECT id,version,state,submitted_by FROM admin.config_revisions WHERE id = $1 FOR UPDATE', [revisionId]);
+      const found = await client.query<ConfigApprovalRow>('SELECT id,version,state,submitted_by FROM admin.config_revisions WHERE id = $1 FOR UPDATE', [revisionId]);
       const row = found.rows[0];
       if (!row) throw new DomainError('CONFIG_REVISION_NOT_FOUND', '配置修订不存在。', 404);
       this.assertVersion(row.version, baseVersion, '配置修订');
@@ -1010,7 +1323,7 @@ export class OpsService {
       const hash = this.idempotency.requestHash('POST', `/ops/config-revisions/${revisionId}/activate`, {});
       const replay = await this.idempotency.claim<unknown>(client, actor.id, key, hash);
       if (replay) return replay.body;
-      const found = await client.query<any>('SELECT id,key,version,state FROM admin.config_revisions WHERE id=$1 FOR UPDATE', [revisionId]);
+      const found = await client.query<ConfigActivationRow>('SELECT id,key,version,state FROM admin.config_revisions WHERE id=$1 FOR UPDATE', [revisionId]);
       const row = found.rows[0];
       if (!row) throw new DomainError('CONFIG_REVISION_NOT_FOUND', '配置修订不存在。', 404);
       if (row.state !== 'approved') throw new DomainError('CONFIG_REVISION_NOT_APPROVED', '配置修订尚未审批。', 409);
@@ -1030,7 +1343,11 @@ export class OpsService {
       const hash = this.idempotency.requestHash('POST', `/ops/config-revisions/${revisionId}/rollback`, { reason });
       const replay = await this.idempotency.claim<unknown>(client, actor.id, key, hash);
       if (replay) return replay.body;
-      const source = await client.query<any>('SELECT * FROM admin.config_revisions WHERE id=$1', [revisionId]);
+      const source = await client.query<ConfigRollbackRow>(
+        `SELECT key,value_json,audience,region,min_app_version
+         FROM admin.config_revisions WHERE id=$1`,
+        [revisionId],
+      );
       const row = source.rows[0];
       if (!row) throw new DomainError('CONFIG_REVISION_NOT_FOUND', '配置修订不存在。', 404);
       const inserted = await client.query<{ id: string }>(
@@ -1134,7 +1451,7 @@ export class OpsService {
     await this.requireOperator(actor, ['auditReader', 'securityLead']);
     const page = this.decodeCursor(cursor);
     const safeLimit = this.safeLimit(limit);
-    const result = await this.database.query<any>(
+    const result = await this.database.query<AuditLogRow>(
       `SELECT audit.id,audit.created_at,audit.actor_id,audit.action,audit.resource,audit.resource_id,
          audit.purpose,audit.trace_id,COALESCE(profile.nickname,actor_user.public_handle::text) AS actor_label
        FROM admin.audit_logs audit
@@ -1167,7 +1484,7 @@ export class OpsService {
 
   async adminUsers(actor: AuthenticatedUser): Promise<unknown> {
     await this.requireOperator(actor, ['auditReader', 'securityLead']);
-    const result = await this.database.query<any>(
+    const result = await this.database.query<AdminUserRow>(
       `SELECT admin_user.id,admin_user.identity_user_id,admin_user.roles,admin_user.data_scopes,
          admin_user.mfa_enrolled_at,admin_user.disabled_at,
          COALESCE(profile.nickname,user_record.public_handle::text) AS label
@@ -1214,7 +1531,7 @@ export class OpsService {
     await this.requireOperator(actor, ['auditReader', 'securityLead', 'financeRead', 'moderator']);
     const page = this.decodeCursor(cursor);
     const safeLimit = this.safeLimit(limit);
-    const result = await this.database.query<any>(
+    const result = await this.database.query<ExportRow>(
       `${this.exportSelect()} WHERE ($1::text IS NULL OR export_record.state=$1)
        AND ($2::timestamptz IS NULL OR (export_record.created_at,export_record.id)<($2,$3::uuid))
        ORDER BY export_record.created_at DESC,export_record.id DESC LIMIT $4`,
@@ -1260,7 +1577,7 @@ export class OpsService {
       const hash = this.idempotency.requestHash('POST', `/ops/exports/${exportId}/approve`, input);
       const replay = await this.idempotency.claim<unknown>(client, actor.id, key, hash);
       if (replay) return replay.body;
-      const found = await client.query<any>('SELECT id,requested_by,state FROM admin.exports WHERE id=$1 FOR UPDATE', [exportId]);
+      const found = await client.query<ExportApprovalRow>('SELECT id,requested_by,state FROM admin.exports WHERE id=$1 FOR UPDATE', [exportId]);
       const row = found.rows[0];
       if (!row) throw new DomainError('EXPORT_NOT_FOUND', '导出任务不存在。', 404);
       if (row.requested_by === admin.id) throw new DomainError('APPROVAL_SEPARATION_REQUIRED', '导出申请人与审批人必须分离。', 409);
@@ -1283,7 +1600,7 @@ export class OpsService {
   async exportDownloadTicket(actor: AuthenticatedUser, exportId: string, purpose: string, traceId: string): Promise<unknown> {
     const admin = await this.requireOperator(actor, ['securityLead', 'financeRead', 'auditReader']);
     return this.database.transaction(async (client) => {
-      const result = await client.query<any>(
+      const result = await client.query<ExportDownloadRow>(
         `UPDATE admin.exports SET download_count=download_count+1,updated_at=clock_timestamp()
          WHERE id=$1 AND state='ready' AND expires_at>clock_timestamp()
            AND download_count<max_downloads
@@ -1323,12 +1640,12 @@ export class OpsService {
   }
 
   private async loadPointAdjustment(client: PoolClient, id: string): Promise<unknown> {
-    const result = await client.query<any>(`${this.pointAdjustmentSelect()} WHERE request.id=$1`, [id]);
+    const result = await client.query<PointAdjustmentRow>(`${this.pointAdjustmentSelect()} WHERE request.id=$1`, [id]);
     if (!result.rows[0]) throw new DomainError('POINT_ADJUSTMENT_NOT_FOUND', '积分调整申请不存在。', 404);
     return this.mapPointAdjustment(result.rows[0]);
   }
 
-  private mapPointAdjustment(row: any): unknown {
+  private mapPointAdjustment(row: PointAdjustmentRow): unknown {
     return {
       id: row.id,
       target: { id: row.target_id, handle: row.target_handle, nickname: row.target_nickname },
@@ -1364,12 +1681,12 @@ export class OpsService {
   }
 
   private async loadConfigRevision(client: PoolClient, id: string, actor: AdminContext): Promise<unknown> {
-    const result = await client.query<any>(`${this.configRevisionSelect()} WHERE revision.id=$1`, [id]);
+    const result = await client.query<ConfigRevisionRow>(`${this.configRevisionSelect()} WHERE revision.id=$1`, [id]);
     if (!result.rows[0]) throw new DomainError('CONFIG_REVISION_NOT_FOUND', '配置修订不存在。', 404);
     return this.mapConfigRevision(result.rows[0], actor);
   }
 
-  private mapConfigRevision(row: any, actor: AdminContext): unknown {
+  private mapConfigRevision(row: ConfigRevisionRow, actor: AdminContext): unknown {
     return {
       id: row.id,
       key: row.key,
@@ -1406,12 +1723,12 @@ export class OpsService {
   }
 
   private async loadExport(client: PoolClient, id: string): Promise<unknown> {
-    const result = await client.query<any>(`${this.exportSelect()} WHERE export_record.id=$1`, [id]);
+    const result = await client.query<ExportRow>(`${this.exportSelect()} WHERE export_record.id=$1`, [id]);
     if (!result.rows[0]) throw new DomainError('EXPORT_NOT_FOUND', '导出任务不存在。', 404);
     return this.mapExport(result.rows[0]);
   }
 
-  private mapExport(row: any): unknown {
+  private mapExport(row: ExportRow): unknown {
     return {
       id: row.id,
       dataset: row.dataset,
@@ -1427,7 +1744,7 @@ export class OpsService {
     };
   }
 
-  private mapEvent(row: any): unknown {
+  private mapEvent(row: EventListRow): unknown {
     return {
       id: row.id,
       slug: row.public_slug,
@@ -1446,7 +1763,7 @@ export class OpsService {
     };
   }
 
-  private mapCase(row: any): Record<string, unknown> {
+  private mapCase(row: ModerationCaseListRow): Record<string, unknown> {
     return {
       id: row.id,
       reference: row.public_reference,
@@ -1490,7 +1807,7 @@ export class OpsService {
     }
     if (!admin) throw new DomainError('OPS_FORBIDDEN', '需要有效的运营权限与 MFA。', 403);
     if (allowedRoles.length && !admin.roles.includes('superAdmin')
-      && !allowedRoles.some((role) => admin!.roles.includes(role))) {
+      && !allowedRoles.some((role) => admin.roles.includes(role))) {
       throw new DomainError('OPS_ROLE_FORBIDDEN', '当前运营角色无权执行此操作。', 403);
     }
     return admin;
@@ -1528,7 +1845,11 @@ export class OpsService {
     );
   }
 
-  private page(rows: any[], limit: number, map: (row: any) => unknown): unknown {
+  private page<Row extends PageRow, Item>(
+    rows: readonly Row[],
+    limit: number,
+    map: (row: Row) => Item,
+  ): PageResult<Item> {
     const hasMore = rows.length > limit;
     const visible = rows.slice(0, limit);
     const last = visible.at(-1);
@@ -1558,8 +1879,10 @@ export class OpsService {
     return Math.min(Math.max(Number.isFinite(limit) ? Math.floor(limit) : 20, 1), 100);
   }
 
-  private assertVersion(actual: string | number, expected: number, label: string): void {
-    if (this.integer(actual) !== expected) throw new DomainError('VERSION_CONFLICT', `${label}已被其他运营更新。`, 409);
+  private assertVersion(actual: PgInteger, expected: number, label: string): void {
+    if (this.integer(actual) !== expected) {
+      throw new DomainError('VERSION_CONFLICT', `${label}已被其他运营更新。`, 409);
+    }
   }
 
   private integer(value: unknown): number {

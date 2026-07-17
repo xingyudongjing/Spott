@@ -26,15 +26,17 @@ describe('media processing pipeline', () => {
 
     let claimed = false;
     let derivatives: Record<string, { url: string; mimeType: string }> | undefined;
+    let claimSQL = '';
     const client = {
       query: async (text: string, values: readonly unknown[] = []) => {
         if (text.includes('FROM media.assets')) {
+          claimSQL = text;
           if (claimed) return { rows: [], rowCount: 0 };
           claimed = true;
           return { rows: [{
             id: '10000000-0000-0000-0000-000000000001',
             purpose: 'event_cover',
-            object_key: 'original/user/photo.png',
+            authoritative_object_key: 'original/user/photo.png',
             mime_type: 'image/png',
             byte_size: String(input.byteLength),
             content_hash: createHash('sha256').update(input).digest(),
@@ -67,6 +69,9 @@ describe('media processing pipeline', () => {
     const result = await new MediaProcessor(database as never, config).processAssets(1);
 
     expect(result).toEqual({ processed: 1, ready: 1, rejected: 0 });
+    expect(claimSQL).toContain('authoritative_object_key');
+    expect(claimSQL).toContain('legacy_object_reconciliation_required = false');
+    expect(claimSQL).not.toMatch(/\bobject_key\b/u);
     expect(writes).toHaveLength(3);
     expect(writes.map((write) => write.input.Key)).toEqual([
       'public/derivatives/10000000-0000-0000-0000-000000000001/thumb.webp',
@@ -83,6 +88,7 @@ describe('media processing pipeline', () => {
     vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({} as never);
     let claimed = false;
     let notificationPayload: unknown;
+    let mediaInsertSQL = '';
     const client = {
       query: async (text: string, values: readonly unknown[] = []) => {
         if (text.includes('FROM growth.poster_jobs')) {
@@ -101,6 +107,7 @@ describe('media processing pipeline', () => {
           return { rows: [{ title: '东京玻璃体验会' }], rowCount: 1 };
         }
         if (text.includes('INSERT INTO media.assets')) {
+          mediaInsertSQL = text;
           return { rows: [{ id: '10000000-0000-0000-0000-000000000013' }], rowCount: 1 };
         }
         if (text.includes('INSERT INTO notification.notifications')) {
@@ -133,5 +140,10 @@ describe('media processing pipeline', () => {
       posterJobId: '10000000-0000-0000-0000-000000000010',
       eventId: '10000000-0000-0000-0000-000000000012',
     });
+    expect(mediaInsertSQL).toContain('current_owner_id');
+    expect(mediaInsertSQL).toContain('created_owner_id');
+    expect(mediaInsertSQL).toContain('legacy_preallocated_object_key');
+    expect(mediaInsertSQL).not.toMatch(/\bowner_id\b/u);
+    expect(mediaInsertSQL).not.toMatch(/\bobject_key\b/u);
   });
 });

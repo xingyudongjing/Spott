@@ -1,8 +1,26 @@
-import { Body, Controller, Delete, Headers, HttpCode, Param, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Headers, HttpCode, Param, Post, Req } from '@nestjs/common';
 import { DomainError } from '@spott/domain';
 import { z } from 'zod';
-import { CurrentUser, Public, type AuthenticatedUser } from '../../platform/request-context.js';
+import {
+  CurrentUser,
+  Public,
+  type AuthenticatedUser,
+  type SpottRequest,
+} from '../../platform/request-context.js';
+import type {
+  SessionRequestChannel,
+  SessionTransportClass,
+} from '../../platform/web-bff-authority.js';
 import { AuthService } from './auth.service.js';
+
+const persistentDeviceBindingProofSchema = z
+  .object({
+    bindingId: z.string().uuid(),
+    generation: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    proof: z.string().min(32).max(1_024),
+    proofClass: z.literal('persistent'),
+  })
+  .strict();
 
 @Controller()
 export class AuthController {
@@ -17,16 +35,21 @@ export class AuthController {
 
   @Public()
   @Post('auth/email/verify')
-  verifyEmail(@Body() body: unknown) {
+  verifyEmail(@Req() request: SpottRequest, @Body() body: unknown) {
     const input = z
       .object({ challengeId: z.string(), code: z.string(), deviceId: z.string() })
       .parse(body);
-    return this.auth.verifyEmailChallenge(input);
+    const transportClass = this.issuanceTransport(request);
+    return this.auth.verifyEmailChallenge(
+      input,
+      transportClass === 'native' ? 'ios' : 'web',
+      transportClass,
+    );
   }
 
   @Public()
   @Post('auth/apple')
-  apple(@Body() body: unknown) {
+  apple(@Req() request: SpottRequest, @Body() body: unknown) {
     const input = z
       .object({
         identityToken: z.string().min(1),
@@ -35,26 +58,67 @@ export class AuthController {
         platform: z.enum(['ios', 'web']).default('ios'),
       })
       .parse(body);
-    return this.auth.authenticateApple(input);
+    return this.auth.authenticateApple(input, this.issuanceTransport(request));
   }
 
   @Public()
   @Post('auth/google')
-  google(@Body() body: unknown) {
+  google(@Req() request: SpottRequest, @Body() body: unknown) {
     const input = z.object({ idToken: z.string(), deviceId: z.string() }).parse(body);
-    return this.auth.authenticateGoogle(input);
+    return this.auth.authenticateGoogle(input, this.issuanceTransport(request));
   }
 
   @Public()
   @Post('auth/refresh')
-  refresh(@Body() body: unknown) {
-    const input = z.object({ refreshToken: z.string(), deviceId: z.string() }).parse(body);
-    return this.auth.refresh(input.refreshToken, input.deviceId);
+  refresh(
+    @Req() request: SpottRequest,
+    @Body() body: unknown,
+    @Headers('idempotency-key') key?: string,
+  ) {
+    const input = z
+      .object({
+        refreshToken: z.string(),
+        deviceId: z.string().uuid(),
+        deviceBindingProof: persistentDeviceBindingProofSchema.optional(),
+      })
+      .parse(body);
+    return this.auth.refresh(
+      input.refreshToken,
+      input.deviceId,
+      'web',
+      request.verifiedBFFAuthority,
+      this.requestChannel(request),
+      this.optionalKey(key),
+      input.deviceBindingProof,
+    );
+  }
+
+  @Public()
+  @Post('auth/bootstrap')
+  bootstrap(@Req() request: SpottRequest, @Body() body: unknown) {
+    const input = z
+      .object({
+        refreshToken: z.string(),
+        deviceId: z.string().uuid(),
+        deviceBindingProof: persistentDeviceBindingProofSchema,
+      })
+      .strict()
+      .parse(body);
+    return this.auth.bootstrap(
+      input.refreshToken,
+      input.deviceId,
+      input.deviceBindingProof,
+      request.verifiedBFFAuthority,
+      this.requestChannel(request),
+    );
   }
 
   @Delete('sessions/:id')
   @HttpCode(204)
-  async revoke(@CurrentUser() user: AuthenticatedUser, @Param('id') sessionId: string): Promise<void> {
+  async revoke(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') sessionId: string,
+  ): Promise<void> {
     await this.auth.revokeSession(user.id, sessionId);
   }
 
@@ -82,20 +146,22 @@ export class AuthController {
   @Post('accounts/merge/preview')
   @HttpCode(200)
   mergePreview(@CurrentUser() user: AuthenticatedUser, @Body() body: unknown) {
-    const credential = z.discriminatedUnion('provider', [
-      z.object({
-        provider: z.literal('apple'),
-        identityToken: z.string().min(1),
-        nonce: z.string().min(32).max(512),
-        platform: z.enum(['ios', 'web']).default('ios'),
-      }),
-      z.object({ provider: z.literal('google'), idToken: z.string().min(1) }),
-      z.object({
-        provider: z.literal('email'),
-        challengeId: z.string().uuid(),
-        code: z.string().regex(/^[0-9]{6}$/),
-      }),
-    ]).parse((body as { credential?: unknown } | null)?.credential);
+    const credential = z
+      .discriminatedUnion('provider', [
+        z.object({
+          provider: z.literal('apple'),
+          identityToken: z.string().min(1),
+          nonce: z.string().min(32).max(512),
+          platform: z.enum(['ios', 'web']).default('ios'),
+        }),
+        z.object({ provider: z.literal('google'), idToken: z.string().min(1) }),
+        z.object({
+          provider: z.literal('email'),
+          challengeId: z.string().uuid(),
+          code: z.string().regex(/^[0-9]{6}$/),
+        }),
+      ])
+      .parse((body as { credential?: unknown } | null)?.credential);
     return this.auth.mergePreview(user.id, credential);
   }
 
@@ -103,16 +169,26 @@ export class AuthController {
   @HttpCode(200)
   mergeCommit(
     @CurrentUser() user: AuthenticatedUser,
+    @Req() request: SpottRequest,
     @Headers('idempotency-key') key: string,
     @Body() body: unknown,
   ) {
-    const input = z.object({
-      jobId: z.string().uuid(),
-      mergeToken: z.string().min(32).max(256),
-      deviceId: z.string().uuid(),
-      platform: z.enum(['ios', 'web']).default('web'),
-    }).parse(body);
-    return this.auth.mergeCommit(user.id, this.key(key), input);
+    const input = z
+      .object({
+        jobId: z.string().uuid(),
+        mergeToken: z.string().min(32).max(256),
+        deviceId: z.string().uuid(),
+        platform: z.enum(['ios', 'web']).default('web'),
+      })
+      .parse(body);
+    return this.auth.mergeCommit(
+      user.id,
+      user.sessionId,
+      this.key(key),
+      input,
+      request.verifiedBFFAuthority,
+      this.requestChannel(request),
+    );
   }
 
   @Post('accounts/deletion-request')
@@ -130,5 +206,34 @@ export class AuthController {
       throw new DomainError('IDEMPOTENCY_KEY_REQUIRED', '请求缺少有效的幂等键。', 400);
     }
     return value;
+  }
+
+  private optionalKey(value: string | undefined): string | undefined {
+    if (value === undefined) return undefined;
+    if (!z.string().uuid().safeParse(value).success) {
+      throw new DomainError('IDEMPOTENCY_KEY_INVALID', '幂等键格式无效。', 400, {
+        retryable: false,
+      });
+    }
+    return value;
+  }
+
+  private issuanceTransport(request: SpottRequest): SessionTransportClass {
+    const transportClass = request.issuedSessionTransportClass;
+    if (!transportClass || transportClass === 'ops') {
+      throw new DomainError('SESSION_TRANSPORT_MISMATCH', '会话通道校验失败，请重新登录。', 403, {
+        retryable: false,
+      });
+    }
+    return transportClass;
+  }
+
+  private requestChannel(request: SpottRequest): SessionRequestChannel {
+    if (!request.sessionRequestChannel) {
+      throw new DomainError('SESSION_TRANSPORT_MISMATCH', '会话通道校验失败，请重新登录。', 403, {
+        retryable: false,
+      });
+    }
+    return request.sessionRequestChannel;
   }
 }

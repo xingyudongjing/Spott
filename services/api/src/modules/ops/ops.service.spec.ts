@@ -17,6 +17,56 @@ const admin = {
   mfa_enrolled_at: new Date('2026-07-01T00:00:00.000Z'),
 };
 
+interface OverviewResult {
+  queues: { p0Open: number; outboxBacklog: number };
+  health: { deliverySuccessRate1h: number };
+  growth: { checkinRate30d: number };
+}
+
+interface AuditLogPageResult {
+  items: Array<{ resourceIdMasked: string; resourceId?: never }>;
+}
+
+interface OrganizerPageResult {
+  items: Array<{ repeatRate60d: number }>;
+}
+
+interface EventPageResult {
+  items: Array<{
+    id: string;
+    categoryId: string | null;
+    startsAt: string | null;
+    publicArea: string | null;
+    isFree: boolean | null;
+    amountJpy: number | null;
+    riskReasons: string[];
+  }>;
+  hasMore: boolean;
+  nextCursor: string | null;
+}
+
+interface ConfigPageResult {
+  items: Array<{
+    value: unknown;
+    region: string | null;
+    effectiveFrom: string | null;
+    effectiveTo: string | null;
+    approvedBy: { id: string; label: string } | null;
+  }>;
+}
+
+interface ModerationCaseResult {
+  assignee: { id: string; label: string } | null;
+  reporter: { present: boolean };
+  evidence: Array<{
+    mimeType: string | null;
+    byteSize: number;
+    signedUrl: string | null;
+  }>;
+  actions: Array<{ expiresAt: string | null }>;
+  appeals: Array<{ decidedAt: string | null }>;
+}
+
 function serviceWith(query: ReturnType<typeof vi.fn>) {
   const database = {
     query,
@@ -51,7 +101,7 @@ describe('OpsService contract', () => {
       });
     const { service } = serviceWith(query);
 
-    const result = await service.overview(operator) as Record<string, any>;
+    const result = await service.overview(operator) as OverviewResult;
 
     expect(result.queues).toEqual(expect.objectContaining({ p0Open: 1, outboxBacklog: 5 }));
     expect(result.health.deliverySuccessRate1h).toBe(0.95);
@@ -77,9 +127,9 @@ describe('OpsService contract', () => {
       });
     const { service } = serviceWith(query);
 
-    const result = await service.auditLogs(operator, {}, undefined, 20) as Record<string, any>;
+    const result = await service.auditLogs(operator, {}, undefined, 20) as AuditLogPageResult;
 
-    expect(result.items[0].resourceIdMasked).toBe('019f1234…9abc');
+    expect(result.items[0]?.resourceIdMasked).toBe('019f1234…9abc');
     expect(result.items[0]).not.toHaveProperty('resourceId');
   });
 
@@ -109,9 +159,9 @@ describe('OpsService contract', () => {
       });
     const { service } = serviceWith(query);
 
-    const result = await service.organizers(operator, {}, undefined, 20) as Record<string, any>;
+    const result = await service.organizers(operator, {}, undefined, 20) as OrganizerPageResult;
 
-    expect(result.items[0].repeatRate60d).toBe(0.4);
+    expect(result.items[0]?.repeatRate60d).toBe(0.4);
     expect(String(query.mock.calls[1]?.[0])).toContain('repeat_participants_60d');
   });
 
@@ -225,5 +275,299 @@ describe('OpsService contract', () => {
 
     const approvalUpdate = query.mock.calls.find(([sql]) => String(sql).includes('UPDATE admin.exports SET state'));
     expect(String(approvalUpdate?.[0])).toContain('THEN $3::uuid');
+  });
+});
+
+describe('OpsService typed core read models', () => {
+  it('preserves nullable event joins and derives the cursor from the last visible row', async () => {
+    const first = {
+      id: '00000000-0000-4000-8000-000000000021',
+      public_slug: 'night-walk',
+      title: 'Night walk',
+      status: 'pending_review',
+      category_id: null,
+      starts_at: null,
+      submitted_at: new Date('2026-07-17T10:00:00.000Z'),
+      version: '3',
+      created_at: new Date('2026-07-17T09:00:00.000Z'),
+      organizer_id: '00000000-0000-4000-8000-000000000011',
+      organizer_handle: 'city_host',
+      organizer_nickname: 'City Host',
+      public_area: null,
+      region_id: null,
+      is_free: null,
+      amount_jpy: null,
+      risk_score: '0',
+      risk_reasons: [],
+    };
+    const overFetched = {
+      ...first,
+      id: '00000000-0000-4000-8000-000000000020',
+      created_at: new Date('2026-07-17T08:00:00.000Z'),
+    };
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [admin], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [first, overFetched], rowCount: 2 });
+    const { service } = serviceWith(query);
+
+    const result = await service.events(operator, {}, undefined, 1) as EventPageResult;
+
+    expect(result.items).toEqual([expect.objectContaining({
+      id: first.id,
+      categoryId: null,
+      startsAt: null,
+      publicArea: null,
+      isFree: null,
+      amountJpy: null,
+      riskReasons: [],
+    })]);
+    const expectedCursor = Buffer.from(JSON.stringify({
+      at: first.created_at.toISOString(),
+      id: first.id,
+    })).toString('base64url');
+    expect(result.hasMore).toBe(true);
+    expect(result.nextCursor).toBe(expectedCursor);
+  });
+});
+
+describe('OpsService typed finance and admin read models', () => {
+  it('forwards config JSONB unchanged and preserves nullable read fields', async () => {
+    const value = ['city', { enabled: true, threshold: 3 }];
+    const configAdmin = { ...admin, roles: ['configApprover'] };
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [configAdmin], rowCount: 1 })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: '00000000-0000-4000-8000-000000000041',
+          key: 'discovery.ranking',
+          value_json: value,
+          version: '7',
+          audience: { locale: ['ja', 'zh-Hans', 'en'] },
+          region: null,
+          min_app_version: null,
+          effective_from: null,
+          effective_to: null,
+          state: 'draft',
+          created_at: new Date('2026-07-17T00:00:00.000Z'),
+          reason: 'typed boundary',
+          submitter_id: '00000000-0000-4000-8000-000000000042',
+          submitter_label: 'Submitter',
+          approver_id: null,
+          approver_label: null,
+        }],
+        rowCount: 1,
+      });
+    const { service } = serviceWith(query);
+
+    const result = await service.configRevisions(operator, {}, undefined, 20) as ConfigPageResult;
+
+    expect(result.items[0]).toMatchObject({
+      value,
+      region: null,
+      effectiveFrom: null,
+      effectiveTo: null,
+      approvedBy: null,
+    });
+    expect(result.items[0]?.value).toBe(value);
+  });
+});
+
+describe('OpsService typed safety mutations', () => {
+  it('preserves nullable moderation evidence, action, and appeal fields', async () => {
+    const caseId = '00000000-0000-4000-8000-000000000051';
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [admin], rowCount: 1 })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: caseId,
+          report_id: '00000000-0000-4000-8000-000000000052',
+          public_reference: 'SPOTT-CASE-1',
+          target_type: 'event',
+          target_id: '00000000-0000-4000-8000-000000000053',
+          reason: 'evidence review',
+          severity: 'p1',
+          status: 'open',
+          sla_due_at: new Date('2026-07-18T00:00:00.000Z'),
+          version: '4',
+          created_at: new Date('2026-07-17T00:00:00.000Z'),
+          reporter_id: null,
+          assignee_id: null,
+          assignee_label: null,
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: '00000000-0000-4000-8000-000000000054',
+          asset_id: '00000000-0000-4000-8000-000000000055',
+          retention_until: new Date('2026-08-17T00:00:00.000Z'),
+          created_at: new Date('2026-07-17T00:00:00.000Z'),
+          mime_type: null,
+          byte_size: null,
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: '00000000-0000-4000-8000-000000000056',
+          action_type: 'note',
+          reason: 'triaged',
+          expires_at: null,
+          created_at: new Date('2026-07-17T00:00:00.000Z'),
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: '00000000-0000-4000-8000-000000000057',
+          status: 'pending',
+          created_at: new Date('2026-07-17T00:00:00.000Z'),
+          decided_at: null,
+        }],
+        rowCount: 1,
+      });
+    const { service } = serviceWith(query);
+
+    const result = await service.moderationCase(operator, caseId) as ModerationCaseResult;
+
+    expect(result).toMatchObject({
+      assignee: null,
+      reporter: { present: false },
+      evidence: [{ mimeType: null, byteSize: 0, signedUrl: null }],
+      actions: [{ expiresAt: null }],
+      appeals: [{ decidedAt: null }],
+    });
+  });
+});
+
+describe('OpsService typed approval and execution mutations', () => {
+  it('keeps point execution arithmetic in bigint space', async () => {
+    const adjustmentId = '00000000-0000-4000-8000-000000000061';
+    const targetUserId = '00000000-0000-4000-8000-000000000062';
+    const transactionId = '00000000-0000-4000-8000-000000000063';
+    const loaded = {
+      id: adjustmentId,
+      bucket: 'paid',
+      amount: '9007199254740993',
+      reason: 'restore verified balance',
+      state: 'executed',
+      points_transaction_id: transactionId,
+      created_at: new Date('2026-07-17T00:00:00.000Z'),
+      decided_at: new Date('2026-07-17T00:01:00.000Z'),
+      executed_at: new Date('2026-07-17T00:02:00.000Z'),
+      required_approvals: '2',
+      approval_count: '2',
+      version: '4',
+      target_id: targetUserId,
+      target_handle: 'balance_owner',
+      target_nickname: 'Balance Owner',
+      requester_id: '00000000-0000-4000-8000-000000000064',
+      requester_label: 'Requester',
+      approver_id: admin.id,
+      approver_label: 'Approver',
+    };
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [admin], rowCount: 1 })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: adjustmentId,
+          target_user_id: targetUserId,
+          bucket: 'paid',
+          amount: '9007199254740993',
+          state: 'approved',
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({
+        rows: [{ paid_balance: '9007199254740993', free_balance: '0' }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{ id: transactionId }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [loaded], rowCount: 1 })
+      .mockResolvedValue({ rows: [], rowCount: 1 });
+    const { service } = serviceWith(query);
+
+    await service.executePointAdjustment(operator, adjustmentId, 'attempt-1', 'trace-bigint');
+
+    const ledgerInsert = query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO commerce.point_entries'));
+    expect(ledgerInsert?.[1]).toEqual([
+      transactionId,
+      targetUserId,
+      'paid',
+      '9007199254740993',
+      '-9007199254740993',
+    ]);
+  });
+
+  it('reads only rollback-owned config columns and forwards JSONB unchanged', async () => {
+    const revisionId = '00000000-0000-4000-8000-000000000071';
+    const replacementId = '00000000-0000-4000-8000-000000000072';
+    const value = { ranking: ['distance', 'quality'], enabled: true };
+    const audience = { locales: ['zh-Hans', 'ja', 'en'] };
+    const configAdmin = { ...admin, roles: ['configEditor'] };
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [configAdmin], rowCount: 1 })
+      .mockResolvedValueOnce({
+        rows: [{
+          key: 'discovery.ranking',
+          value_json: value,
+          audience,
+          region: null,
+          min_app_version: null,
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rows: [{ id: replacementId }], rowCount: 1 })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: replacementId,
+          key: 'discovery.ranking',
+          value_json: value,
+          version: '8',
+          audience,
+          region: null,
+          min_app_version: null,
+          effective_from: null,
+          effective_to: null,
+          state: 'draft',
+          created_at: new Date('2026-07-17T00:00:00.000Z'),
+          reason: 'rollback verified revision',
+          submitter_id: configAdmin.id,
+          submitter_label: 'Config Editor',
+          approver_id: null,
+          approver_label: null,
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValue({ rows: [], rowCount: 1 });
+    const { service } = serviceWith(query);
+
+    await service.rollbackConfig(
+      operator,
+      revisionId,
+      'rollback-attempt-1',
+      'rollback verified revision',
+      'trace-rollback',
+    );
+
+    expect(String(query.mock.calls[1]?.[0]).replace(/\s+/g, ' ').trim()).toBe(
+      'SELECT key,value_json,audience,region,min_app_version FROM admin.config_revisions WHERE id=$1',
+    );
+    expect(query.mock.calls[2]?.[1]).toEqual([
+      'discovery.ranking',
+      value,
+      audience,
+      null,
+      null,
+      configAdmin.id,
+      'rollback verified revision',
+    ]);
   });
 });

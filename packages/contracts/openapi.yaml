@@ -3,7 +3,9 @@ info:
   title: Spott API
   version: 1.0.0
   description: >-
-    Spott iOS/Web 单一契约。所有副作用写入均支持幂等键；业务状态由服务端裁决。
+    Spott iOS/Web 单一契约。具备 Idempotency-Key 参数的副作用写入由调用方提供稳定幂等键；
+    媒体上传、完成、附件与举报均以调用方保留的 UUID 和服务端持久回执支持响应丢失恢复；
+    业务状态始终由服务端裁决。
   contact:
     name: Spott Engineering
   license:
@@ -147,8 +149,19 @@ paths:
     post:
       operationId: refreshSession
       summary: Refresh session
+      description: >-
+        Rotates the current refresh credential. Idempotency-Key and a persistent
+        device binding proof are optional for compatibility only while the
+        supplied credential is still current and being used for the first time;
+        neither omission permits recovery of a consumed credential.
       tags: [Auth]
       security: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: Stable UUID for an independently retryable refresh attempt.
+          schema: { $ref: '#/components/schemas/UUID' }
       requestBody:
         required: true
         content:
@@ -159,9 +172,41 @@ paths:
               properties:
                 refreshToken: { type: string }
                 deviceId: { $ref: '#/components/schemas/UUID' }
+                deviceBindingProof: { $ref: '#/components/schemas/PersistentDeviceBindingProof' }
       responses:
         '200': { $ref: '#/components/responses/AuthSession' }
         '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /auth/bootstrap:
+    post:
+      operationId: bootstrapSession
+      summary: Bootstrap the current session without rotating it
+      description: >-
+        Returns a freshly signed access token for the same current stable
+        session only after the refresh credential, device, immutable transport,
+        current generation, current refresh history and active persistent
+        binding all agree. This read-only operation never rotates or extends the
+        refresh credential and never updates session, history or binding time
+        fields.
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [refreshToken, deviceId, deviceBindingProof]
+              properties:
+                refreshToken: { type: string }
+                deviceId: { $ref: '#/components/schemas/UUID' }
+                deviceBindingProof: { $ref: '#/components/schemas/PersistentDeviceBindingProof' }
+      responses:
+        '200': { $ref: '#/components/responses/AuthSession' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
   /sessions/{id}:
     delete:
       operationId: revokeSession
@@ -857,18 +902,41 @@ paths:
         '200': { description: Correction decision }
         '403': { $ref: '#/components/responses/Error' }
   /registrations/{id}/feedback:
+    get:
+      operationId: getOwnEventFeedback
+      summary: Get the current user's private post-event feedback state
+      tags: [Feedback]
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200':
+          description: Authoritative feedback eligibility and current private feedback
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OwnFeedbackState' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
     post:
       operationId: submitEventFeedback
       summary: Submit or edit private structured post-event feedback
       tags: [Feedback]
-      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      parameters:
+        - { $ref: '#/components/parameters/ResourceId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/FeedbackInput' }
       responses:
-        '201': { description: Feedback pending moderation }
+        '201':
+          description: Feedback pending moderation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FeedbackReceipt' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
         '422': { $ref: '#/components/responses/Error' }
   /events/{id}/feedback-summary:
     get:
@@ -1470,16 +1538,94 @@ paths:
   /media/upload-intents:
     post:
       operationId: createMediaUploadIntent
-      summary: Create a direct upload intent for an image asset
+      summary: Create or recover a durable image upload intent
       tags: [Media]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/MediaUploadInput' }
       responses:
-        '201': { description: Upload intent }
+        '201':
+          description: New pending upload with a same-origin gateway capability
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+            Pragma: { schema: { type: string, const: no-cache } }
+            Referrer-Policy: { schema: { type: string, const: no-referrer } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaUploadCapabilityResponse' }
+        '200':
+          description: Eligible pending replay with a fresh capability, or authoritative state/receipt only
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+            Pragma: { schema: { type: string, const: no-cache } }
+            Referrer-Policy: { schema: { type: string, const: no-referrer } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaUploadReplayResponse' }
         '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /media/upload-attempts/{attemptId}:
+    get:
+      operationId: recoverMediaUploadAttempt
+      summary: Recover one owner-scoped upload attempt after response loss
+      tags: [Media]
+      parameters:
+        - { name: attemptId, in: path, required: true, schema: { $ref: '#/components/schemas/UUID' } }
+      responses:
+        '200':
+          description: Eligible recovery capability or authoritative in-progress/committed state
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+            Pragma: { schema: { type: string, const: no-cache } }
+            Referrer-Policy: { schema: { type: string, const: no-referrer } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaUploadReplayResponse' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /media/upload-attempts/{attemptId}/content:
+    put:
+      operationId: uploadMediaAttemptContent
+      summary: Stream exact bytes through the capability-only Spott upload gateway
+      description: >-
+        Cookies and Authorization are forbidden. The capability binds this path, MIME, byte length,
+        SHA-256, owner, asset, generation and expiry. The server enforces one total inbound deadline.
+      tags: [Media]
+      security: []
+      parameters:
+        - { name: attemptId, in: path, required: true, schema: { $ref: '#/components/schemas/UUID' } }
+        - { name: X-Spott-Upload-Capability, in: header, required: true, schema: { type: string, minLength: 1, maxLength: 4096 }, description: Opaque Spott gateway capability. }
+        - { name: Content-Type, in: header, required: true, schema: { type: string, enum: [image/jpeg, image/png, image/webp, image/heic] } }
+        - { name: Content-Length, in: header, required: true, schema: { type: integer, minimum: 1, maximum: 20971520 } }
+        - { name: X-Content-SHA256, in: header, required: true, schema: { $ref: '#/components/schemas/SHA256Input' } }
+      requestBody:
+        required: true
+        content:
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/png: { schema: { type: string, format: binary } }
+          image/webp: { schema: { type: string, format: binary } }
+          image/heic: { schema: { type: string, format: binary } }
+      responses:
+        '200':
+          description: Authoritative in-progress or committed gateway outcome
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaGatewayUploadResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '408': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '415': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
   /media/{id}/complete:
     post:
       operationId: completeMediaUpload
@@ -1487,10 +1633,38 @@ paths:
       tags: [Media]
       parameters:
         - $ref: '#/components/parameters/ResourceId'
-        - { name: X-Content-SHA256, in: header, required: true, schema: { type: string, pattern: '^[A-Fa-f0-9]{64}$' } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - { name: X-Content-SHA256, in: header, required: true, schema: { $ref: '#/components/schemas/SHA256Input' } }
       responses:
-        '200': { description: Media queued for processing }
+        '200':
+          description: Authoritative processing state; exact replay never queues duplicate work
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaCompletionResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /media/{id}:
+    delete:
+      operationId: abandonMediaAsset
+      summary: Idempotently abandon an owned unreferenced media asset
+      tags: [Media]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Authoritative abandonment and cleanup state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaAbandonResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
   /media/{id}/attach/event/{eventId}:
     post:
       operationId: attachEventMedia
@@ -1499,30 +1673,38 @@ paths:
       parameters:
         - $ref: '#/components/parameters/ResourceId'
         - { name: eventId, in: path, required: true, schema: { $ref: '#/components/schemas/UUID' } }
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              properties:
-                kind: { type: string, enum: [cover, gallery], default: cover }
-                sortOrder: { type: integer, minimum: 0, maximum: 5, default: 0 }
+            schema: { $ref: '#/components/schemas/EventMediaAttachmentInput' }
       responses:
-        '200': { description: Media attached }
+        '200':
+          description: Exact committed event-media attachment envelope
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventMediaAttachment' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
   /media/{id}/attach/profile:
     post:
       operationId: attachProfileAvatar
       summary: Replace the current user's avatar with a ready approved profile asset
       tags: [Media, Profiles]
-      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
         '201':
-          description: Avatar attached with a usable public derivative URL
+          description: Exact committed avatar attachment envelope
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ProfileMediaAttachment' }
+        '400': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
@@ -1535,12 +1717,38 @@ paths:
       parameters:
         - $ref: '#/components/parameters/ResourceId'
         - { name: groupId, in: path, required: true, schema: { $ref: '#/components/schemas/UUID' } }
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
         '201':
-          description: Group cover attached with a usable public derivative URL
+          description: Exact committed group-cover attachment envelope
           content:
             application/json:
               schema: { $ref: '#/components/schemas/GroupMediaAttachment' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /media/events/{eventId}/arrangement:
+    post:
+      operationId: arrangeEventMedia
+      summary: Idempotently replace the order of an event's existing media assets
+      tags: [Media, Events]
+      parameters:
+        - { name: eventId, in: path, required: true, schema: { $ref: '#/components/schemas/UUID' } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventMediaArrangementInput' }
+      responses:
+        '200':
+          description: Exact committed arrangement envelope
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventMediaArrangement' }
+        '400': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
@@ -1626,12 +1834,11 @@ paths:
           description: Opaque report reference
           content:
             application/json:
-              schema:
-                type: object
-                required: [reference, status]
-                properties:
-                  reference: { type: string }
-                  status: { type: string }
+              schema: { $ref: '#/components/schemas/ReportReceipt' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
   /appeals:
     post:
       operationId: createAppeal
@@ -2340,13 +2547,23 @@ components:
         challengeId: { $ref: '#/components/schemas/UUID' }
         code: { type: string, pattern: '^[0-9]{6}$' }
         deviceId: { $ref: '#/components/schemas/UUID' }
+    PersistentDeviceBindingProof:
+      type: object
+      additionalProperties: false
+      required: [bindingId, generation, proof, proofClass]
+      properties:
+        bindingId: { $ref: '#/components/schemas/UUID' }
+        generation: { type: integer, minimum: 0 }
+        proof: { type: string, minLength: 32, maxLength: 1024, writeOnly: true }
+        proofClass: { type: string, enum: [persistent] }
     AuthSession:
       type: object
-      required: [accessToken, accessTokenExpiresAt, refreshToken, sessionId, user]
+      required: [accessToken, accessTokenExpiresAt, refreshToken, refreshGeneration, sessionId, user]
       properties:
         accessToken: { type: string }
         accessTokenExpiresAt: { type: string, format: date-time }
         refreshToken: { type: string }
+        refreshGeneration: { type: integer, minimum: 0 }
         sessionId: { $ref: '#/components/schemas/UUID' }
         user:
           type: object
@@ -2863,6 +3080,51 @@ components:
             enum: [friendly, well_organized, clear_information, safe, would_join_again]
         comment: { type: string, maxLength: 500 }
         visibility: { type: string, enum: [private, aggregate_only], default: aggregate_only }
+    FeedbackSubmissionState:
+      type: string
+      enum: [not_submitted, edit_available, edit_limit_reached, window_closed, not_eligible]
+    OwnFeedback:
+      type: object
+      required: [id, attendanceRating, tags, comment, visibility, moderationState, editCount, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        attendanceRating: { type: integer, minimum: 1, maximum: 5 }
+        tags:
+          type: array
+          maxItems: 5
+          items:
+            type: string
+            enum: [friendly, well_organized, clear_information, safe, would_join_again]
+        comment: { type: [string, 'null'], maxLength: 500 }
+        visibility: { type: string, enum: [private, aggregate_only] }
+        moderationState: { type: string, minLength: 1 }
+        editCount: { type: integer, minimum: 0, maximum: 1 }
+        createdAt: { type: [string, 'null'], format: date-time }
+        updatedAt: { type: [string, 'null'], format: date-time }
+    OwnFeedbackState:
+      type: object
+      required: [registrationId, eventId, state, canSubmit, canEdit, windowClosesAt, feedback]
+      properties:
+        registrationId: { $ref: '#/components/schemas/UUID' }
+        eventId: { $ref: '#/components/schemas/UUID' }
+        state: { $ref: '#/components/schemas/FeedbackSubmissionState' }
+        canSubmit: { type: boolean }
+        canEdit: { type: boolean }
+        windowClosesAt: { type: [string, 'null'], format: date-time }
+        feedback:
+          anyOf:
+            - { $ref: '#/components/schemas/OwnFeedback' }
+            - { type: 'null' }
+    FeedbackReceipt:
+      type: object
+      required: [id, eventId, status, editCount, rewardPoints, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        eventId: { $ref: '#/components/schemas/UUID' }
+        status: { type: string, enum: [pending_moderation] }
+        editCount: { type: integer, minimum: 0, maximum: 1 }
+        rewardPoints: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
     FeedbackSummary:
       type: object
       required: [sampleSize, minimumSampleSize, published, tags]
@@ -3099,9 +3361,18 @@ components:
         quietStart: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
         quietEnd: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
         locale: { type: string, enum: [zh-Hans, ja, en], default: zh-Hans }
+    SHA256:
+      type: string
+      pattern: '^[a-f0-9]{64}$'
+      description: Canonical lowercase hexadecimal SHA-256.
+    SHA256Input:
+      type: string
+      pattern: '^[A-Fa-f0-9]{64}$'
+      description: Case-insensitive hexadecimal SHA-256 input; the server canonicalizes it to lowercase.
     MediaUploadInput:
       type: object
-      required: [purpose, filename, mimeType, byteSize]
+      additionalProperties: false
+      required: [purpose, filename, mimeType, byteSize, contentSha256]
       properties:
         purpose: { type: string, enum: [event_cover, profile_avatar, group_cover, report_evidence, share_poster] }
         filename: { type: string, minLength: 1, maxLength: 255 }
@@ -3109,8 +3380,115 @@ components:
         byteSize: { type: integer, minimum: 1, maximum: 20971520 }
         focalX: { type: number, minimum: 0, maximum: 1, default: 0.5 }
         focalY: { type: number, minimum: 0, maximum: 1, default: 0.5 }
+        contentSha256: { $ref: '#/components/schemas/SHA256Input' }
+    MediaUploadRequiredHeaders:
+      type: object
+      additionalProperties: false
+      required: [Content-Type, Content-Length, X-Content-SHA256, X-Spott-Upload-Capability]
+      properties:
+        Content-Type: { type: string, enum: [image/jpeg, image/png, image/webp, image/heic] }
+        Content-Length: { type: string, pattern: '^[1-9][0-9]*$' }
+        X-Content-SHA256: { $ref: '#/components/schemas/SHA256' }
+        X-Spott-Upload-Capability: { type: string, minLength: 1, maxLength: 4096 }
+    MediaCommittedUploadReceipt:
+      type: object
+      additionalProperties: false
+      required: [assetId, state, leaseState, committedAt]
+      properties:
+        assetId: { $ref: '#/components/schemas/UUID' }
+        state: { type: string, const: committed }
+        leaseState: { type: string, const: committed }
+        committedAt: { type: string, format: date-time }
+    MediaUploadCapabilityResponse:
+      type: object
+      additionalProperties: false
+      required: [attemptId, assetId, state, uploadUrl, capability, requiredHeaders, expiresAt, maxBytes, requestDeadlineMs]
+      properties:
+        attemptId: { $ref: '#/components/schemas/UUID' }
+        assetId: { $ref: '#/components/schemas/UUID' }
+        state: { type: string, const: pending_upload }
+        uploadUrl: { type: string, format: uri, description: Same-origin Spott gateway URL; never a provider URL. }
+        capability: { type: string, minLength: 1, maxLength: 4096 }
+        requiredHeaders: { $ref: '#/components/schemas/MediaUploadRequiredHeaders' }
+        expiresAt: { type: string, format: date-time }
+        maxBytes: { type: integer, minimum: 1, maximum: 20971520 }
+        requestDeadlineMs: { type: integer, minimum: 1 }
+    MediaUploadUncommittedStateResponse:
+      type: object
+      additionalProperties: false
+      required: [attemptId, assetId, state, leaseState]
+      properties:
+        attemptId: { $ref: '#/components/schemas/UUID' }
+        assetId: { $ref: '#/components/schemas/UUID' }
+        state: { type: string, enum: [pending_upload, abandoned, deleted] }
+        leaseState: { type: string, enum: [idle, receiving, provider_writing, in_progress, failed_cleanup_pending, failed_clean] }
+    MediaUploadCommittedStateResponse:
+      type: object
+      additionalProperties: false
+      required: [attemptId, assetId, state, leaseState, receipt]
+      properties:
+        attemptId: { $ref: '#/components/schemas/UUID' }
+        assetId: { $ref: '#/components/schemas/UUID' }
+        state: { type: string, enum: [committed, uploaded, processing, ready, rejected, abandoned, deleted] }
+        leaseState: { type: string, const: committed }
+        receipt: { $ref: '#/components/schemas/MediaCommittedUploadReceipt' }
+    MediaUploadStateResponse:
+      oneOf:
+        - { $ref: '#/components/schemas/MediaUploadUncommittedStateResponse' }
+        - { $ref: '#/components/schemas/MediaUploadCommittedStateResponse' }
+    MediaUploadReplayResponse:
+      oneOf:
+        - { $ref: '#/components/schemas/MediaUploadCapabilityResponse' }
+        - { $ref: '#/components/schemas/MediaUploadStateResponse' }
+    MediaGatewayInProgressResponse:
+      type: object
+      additionalProperties: false
+      required: [attemptId, assetId, state, leaseState]
+      properties:
+        attemptId: { $ref: '#/components/schemas/UUID' }
+        assetId: { $ref: '#/components/schemas/UUID' }
+        state: { type: string, const: pending_upload }
+        leaseState: { type: string, enum: [receiving, provider_writing, in_progress] }
+    MediaGatewayUploadResponse:
+      oneOf:
+        - { $ref: '#/components/schemas/MediaGatewayInProgressResponse' }
+        - { $ref: '#/components/schemas/MediaUploadCommittedStateResponse' }
+    MediaCompletionResponse:
+      type: object
+      additionalProperties: false
+      required: [assetId, state, moderationState]
+      properties:
+        assetId: { $ref: '#/components/schemas/UUID' }
+        state: { type: string, enum: [uploaded, processing, ready, rejected] }
+        moderationState: { type: string, enum: [pending, approved, rejected] }
+    MediaAbandonResponse:
+      type: object
+      additionalProperties: false
+      required: [assetId, state, cleanupState]
+      properties:
+        assetId: { $ref: '#/components/schemas/UUID' }
+        state: { type: string, enum: [abandoned, deleted] }
+        cleanupState: { type: string, enum: [not_required, queued, waiting_for_fence, complete] }
+    EventMediaAttachmentInput:
+      type: object
+      additionalProperties: false
+      properties:
+        kind: { type: string, enum: [cover, gallery], default: cover }
+        sortOrder: { type: integer, minimum: 0, maximum: 5, default: 0 }
+    EventMediaAttachment:
+      type: object
+      additionalProperties: false
+      required: [id, eventId, assetId, kind, sortOrder, mediaCount]
+      properties:
+        id: { $ref: '#/components/schemas/UUID' }
+        eventId: { $ref: '#/components/schemas/UUID' }
+        assetId: { $ref: '#/components/schemas/UUID' }
+        kind: { type: string, enum: [cover, gallery] }
+        sortOrder: { type: integer, minimum: 0, maximum: 5 }
+        mediaCount: { type: integer, minimum: 1, maximum: 6 }
     ProfileMediaAttachment:
       type: object
+      additionalProperties: false
       required: [assetId, profileId, url, version]
       properties:
         assetId: { $ref: '#/components/schemas/UUID' }
@@ -3119,11 +3497,36 @@ components:
         version: { type: integer, format: int64, minimum: 1 }
     GroupMediaAttachment:
       type: object
+      additionalProperties: false
       required: [assetId, groupId, url, version]
       properties:
         assetId: { $ref: '#/components/schemas/UUID' }
         groupId: { $ref: '#/components/schemas/UUID' }
         url: { type: string, format: uri }
+        version: { type: integer, format: int64, minimum: 1 }
+    EventMediaArrangementInput:
+      type: object
+      additionalProperties: false
+      required: [orderedAssetIds]
+      properties:
+        orderedAssetIds:
+          type: array
+          minItems: 1
+          maxItems: 6
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/UUID' }
+    EventMediaArrangement:
+      type: object
+      additionalProperties: false
+      required: [eventId, orderedAssetIds, version]
+      properties:
+        eventId: { $ref: '#/components/schemas/UUID' }
+        orderedAssetIds:
+          type: array
+          minItems: 1
+          maxItems: 6
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/UUID' }
         version: { type: integer, format: int64, minimum: 1 }
     ShareInput:
       type: object
@@ -3710,13 +4113,21 @@ components:
       properties:
         userId: { $ref: '#/components/schemas/UUID' }
         blocked: { type: boolean }
+    ReportReceipt:
+      type: object
+      additionalProperties: false
+      required: [reference, status, submittedAt]
+      properties:
+        reference: { type: string, pattern: '^SPT-[0-9]{4}-[A-F0-9]{12}$' }
+        status: { type: string, enum: [open] }
+        submittedAt: { type: string, format: date-time }
     ReportInput:
       type: object
       required: [targetType, targetId, reason]
       properties:
         targetType: { type: string, enum: [event, group, user, comment, announcement] }
         targetId: { $ref: '#/components/schemas/UUID' }
-        reason: { type: string, minLength: 3, maxLength: 500 }
+        reason: { type: string, enum: [danger, personal_safety, fraud, harassment, harassment_or_hate, spam, minor_safety, other, unsafe] }
         details: { type: string, maxLength: 5000 }
         evidenceAssetIds: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/UUID' } }
     SyncChange:

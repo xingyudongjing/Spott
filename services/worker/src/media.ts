@@ -8,7 +8,7 @@ import type { WorkerDatabase } from './database.js';
 interface MediaAssetRow {
   id: string;
   purpose: string;
-  object_key: string;
+  authoritative_object_key: string;
   mime_type: string;
   byte_size: string;
   content_hash: Buffer | null;
@@ -118,10 +118,12 @@ export class MediaProcessor {
   private async claimAsset(): Promise<MediaAssetRow | null> {
     return this.database.transaction(async (client) => {
       const result = await client.query<MediaAssetRow>(
-        `SELECT id, purpose, object_key, mime_type, byte_size::text, content_hash, focal_x, focal_y,
+        `SELECT id, purpose, authoritative_object_key, mime_type, byte_size::text, content_hash, focal_x, focal_y,
            processing_attempts
          FROM media.assets
          WHERE state IN ('uploaded','processing') AND processing_available_at <= clock_timestamp()
+           AND legacy_object_reconciliation_required = false
+           AND authoritative_object_key IS NOT NULL
            AND (processing_locked_at IS NULL OR processing_locked_at < clock_timestamp() - interval '5 minutes')
          ORDER BY created_at, id FOR UPDATE SKIP LOCKED LIMIT 1`,
       );
@@ -138,7 +140,7 @@ export class MediaProcessor {
   }
 
   private async processAsset(asset: MediaAssetRow): Promise<void> {
-    const object = await this.readObject(asset.object_key);
+    const object = await this.readObject(asset.authoritative_object_key);
     if (object.byteLength !== Number(asset.byte_size)) throw new MediaFailure('MEDIA_SIZE_MISMATCH', false);
     const digest = createHash('sha256').update(object).digest();
     if (asset.content_hash && !digest.equals(asset.content_hash)) throw new MediaFailure('MEDIA_HASH_MISMATCH', false);
@@ -293,9 +295,11 @@ export class MediaProcessor {
     const hash = createHash('sha256').update(output).digest();
     await this.database.transaction(async (client) => {
       const asset = await client.query<{ id: string }>(
-        `INSERT INTO media.assets(owner_id,purpose,object_key,original_filename,mime_type,byte_size,content_hash,
-           state,moderation_state,derivatives,uploaded_at,ready_at,scan_state,scan_details)
-         VALUES ($1,'share_poster',$2,$3,'image/webp',$4,$5,'ready','approved',$6,
+        `INSERT INTO media.assets(
+           current_owner_id,created_owner_id,purpose,legacy_preallocated_object_key,
+           original_filename,mime_type,byte_size,content_hash,
+           state,moderation_state,derivatives,uploaded_at,ready_at,scan_state,scan_details
+         ) VALUES ($1,$1,'share_poster',$2,$3,'image/webp',$4,$5,'ready','approved',$6,
            clock_timestamp(),clock_timestamp(),'skipped','{"source":"generated"}') RETURNING id`,
         [job.user_id, key, `spott-${job.resource_type}.webp`, output.byteLength, hash, {
           poster: { objectKey: key, url: this.publicUrl(key), width: 1080, height: 1350, byteSize: output.byteLength, mimeType: 'image/webp' },

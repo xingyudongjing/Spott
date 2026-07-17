@@ -2,11 +2,17 @@ import { randomBytes } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import {
   DomainError,
+  assessEventRisk,
   availableEventActions,
   canReadExactAddress,
+  parseRiskEngineConfig,
+  riskReviewState,
+  sampleRoll,
   transitionEvent,
   type EventStatus,
   type RestrictionFlag,
+  type RiskAssessment,
+  type RiskEngineConfig,
   type Role,
 } from '@spott/domain';
 import type { PoolClient } from 'pg';
@@ -534,7 +540,26 @@ export class EventsService {
       if (event.organizer_id !== user.id) throw new DomainError('EVENT_FORBIDDEN', '无权提交此活动。', 403);
       if (Number(event.version) !== baseVersion) throw new DomainError('VERSION_CONFLICT', '草稿版本已变化。', 409);
       this.validateSubmission(event);
+
+      // 风险分流必须在扣积分之前：禁止类活动直接拒绝，不能先把局头的积分吃掉。
+      const assessment = this.assessRisk(event, await this.riskConfig(client));
+      if (assessment.route === 'prohibit') {
+        // 抛错回滚整个事务，局头不扣分、活动留在 draft。判定只依赖内容，
+        // 因此重试必然得到同一结论，不存在靠重试「摇」过审的空间。
+        throw new DomainError('EVENT_RISK_PROHIBITED', '活动内容命中平台禁止发布的规则，无法提交。', 422, {
+          meta: {
+            riskTypes: assessment.riskTypes,
+            explanations: assessment.explanations,
+            score: assessment.score,
+          },
+        });
+      }
+
       transitionEvent(event.status, 'pending_review');
+      const autoApproved = assessment.route === 'auto_approve';
+      if (autoApproved) transitionEvent('pending_review', 'published');
+      const nextStatus: EventStatus = autoApproved ? 'published' : 'pending_review';
+
       const amount = await this.points.consumeQuote(client, user.id, quoteId, 'event_publish', event.id);
       const holdId = await this.points.createHold(
         client,
@@ -544,21 +569,123 @@ export class EventsService {
         '24 hours',
       );
       await client.query(
-        `UPDATE events.events SET status = 'pending_review', updated_by = $2
+        `UPDATE events.events SET status = $4, risk_flags = $5, updated_by = $2
          WHERE id = $1 AND version = $3`,
-        [event.id, user.id, baseVersion],
+        [event.id, user.id, baseVersion, nextStatus, assessment.riskTypes],
       );
+      await this.writeRisks(client, event.id, assessment);
+      if (autoApproved) {
+        // 自动通过没有后续人工决策来结算这笔 hold，这里就地兑现，
+        // 保持与 ops 审核通过路径同样的账本语义。
+        await this.points.captureHold(
+          client,
+          holdId,
+          'event_publish',
+          `event_publish:${event.id}:${event.version}`,
+        );
+      }
       const after = await this.loadEvent(client, event.id, user.id);
-      await this.recordChange(client, user.id, event.id, Number(after.version), 'event.submitted', ['status']);
+      await this.recordChange(client, user.id, event.id, Number(after.version), 'event.submitted', [
+        'status',
+        'riskFlags',
+      ]);
       await client.query(
         `INSERT INTO sync.outbox_events(aggregate, aggregate_id, type, payload)
-         VALUES ('event', $1, 'event.review_requested', $2)`,
-        [event.id, { eventId: event.id, holdId, version: Number(after.version) }],
+         VALUES ('event', $1, $3, $2)`,
+        [
+          event.id,
+          {
+            eventId: event.id,
+            holdId,
+            version: Number(after.version),
+            riskRoute: assessment.route,
+            riskScore: assessment.score,
+            riskTypes: assessment.riskTypes,
+          },
+          autoApproved ? 'event.auto_approved' : 'event.review_requested',
+        ],
       );
-      const body = { ...this.toView(after, user, true), submissionId: event.id, holdId };
+      const body = {
+        ...this.toView(after, user, true),
+        submissionId: event.id,
+        holdId,
+        riskRoute: assessment.route,
+      };
       await this.idempotency.complete(client, user.id, key, { status: 200, body }, { type: 'event', id: event.id });
       return body;
     });
+  }
+
+  /**
+   * 规则与阈值全部来自运营后台的 config revision，服务端基线只是兜底。
+   * 客户端既读不到也改不了。
+   */
+  private async riskConfig(client: PoolClient): Promise<RiskEngineConfig> {
+    const result = await client.query<{ value_json: unknown }>(
+      `SELECT value_json FROM admin.config_revisions
+       WHERE key = 'events.risk.engine' AND state = 'active'
+         AND (effective_from IS NULL OR effective_from <= clock_timestamp())
+         AND (effective_to IS NULL OR effective_to > clock_timestamp())
+       ORDER BY version DESC LIMIT 1`,
+    );
+    return parseRiskEngineConfig(result.rows[0]?.value_json);
+  }
+
+  private assessRisk(event: EventRow, config: RiskEngineConfig): RiskAssessment {
+    return assessEventRisk(
+      {
+        title: event.title,
+        description: event.description,
+        tags: event.tags,
+        attendeeRequirements: event.attendee_requirements,
+        // 局头自报只是输入信号；服务端不会因为自报「无风险」就少判一条。
+        declaredRiskFlags: event.risk_flags,
+        isFree: event.is_free,
+        amountJPY: event.amount_jpy === null ? null : Number(event.amount_jpy),
+        startHourLocal: this.localHour(event.starts_at, event.display_time_zone),
+      },
+      config,
+      // 抽样以活动 id 定种，重放与重试得到同一结论。
+      sampleRoll(event.id),
+    );
+  }
+
+  private localHour(startsAt: Date | null, timeZone: string): number | null {
+    if (!startsAt) return null;
+    try {
+      const hour = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        hour: 'numeric',
+        hourCycle: 'h23',
+      }).format(startsAt);
+      const parsed = Number(hour);
+      return Number.isInteger(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async writeRisks(
+    client: PoolClient,
+    eventId: string,
+    assessment: RiskAssessment,
+  ): Promise<void> {
+    // 重新提交时旧判定必须先失效，否则改稿去掉的风险会一直挂在审核队列上。
+    await client.query('DELETE FROM events.event_risks WHERE event_id = $1', [eventId]);
+    const reviewState = riskReviewState(assessment.route);
+    for (const riskType of assessment.riskTypes) {
+      const explanation = assessment.hits
+        .filter((hit) => hit.riskType === riskType)
+        .map((hit) => hit.explanation)
+        .join(' ');
+      await client.query(
+        `INSERT INTO events.event_risks(event_id, risk_type, declaration, review_state)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (event_id, risk_type)
+         DO UPDATE SET declaration = EXCLUDED.declaration, review_state = EXCLUDED.review_state`,
+        [eventId, riskType, explanation, reviewState],
+      );
+    }
   }
 
   async cancel(user: AuthenticatedUser, identifier: string, key: string, reason: string): Promise<unknown> {

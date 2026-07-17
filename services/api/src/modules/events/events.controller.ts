@@ -107,7 +107,7 @@ export class EventsController {
     @Req() request: SpottRequest,
     @Query() query: Record<string, string | undefined>,
   ) {
-    return this.events.discovery(request.user, parseDiscoveryQuery(query));
+    return this.events.recommendationFeed(request.user, parseDiscoveryQuery(query));
   }
 
   @Public()

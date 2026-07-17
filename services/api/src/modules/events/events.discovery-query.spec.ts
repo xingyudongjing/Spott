@@ -117,9 +117,15 @@ describe('parseDiscoveryQuery', () => {
 });
 
 describe('EventsController discovery query handling', () => {
-  it.each(['discovery', 'search'] as const)('%s forwards the complete parsed query', async (method) => {
+  // The home feed and search deliberately dispatch to different services: `/discovery/feed`
+  // runs the personalised recommender, `/events/search` runs the linear search.
+  it.each([
+    ['discovery', 'recommendationFeed'],
+    ['search', 'discovery'],
+  ] as const)('%s forwards the complete parsed query to service.%s', async (method, serviceMethod) => {
     const discovery = vi.fn().mockResolvedValue({ items: [] });
-    const controller = new EventsController({ discovery } as never, {} as never) as unknown as Record<
+    const recommendationFeed = vi.fn().mockResolvedValue({ modules: [] });
+    const controller = new EventsController({ discovery, recommendationFeed } as never, {} as never) as unknown as Record<
       typeof method,
       (request: { user?: undefined }, query: Record<string, string>) => Promise<unknown>
     >;
@@ -137,7 +143,10 @@ describe('EventsController discovery query handling', () => {
 
     await controller[method]({ user: undefined }, rawQuery);
 
-    expect(discovery).toHaveBeenCalledWith(undefined, expect.objectContaining({
+    const target = serviceMethod === 'discovery' ? discovery : recommendationFeed;
+    const other = serviceMethod === 'discovery' ? recommendationFeed : discovery;
+    expect(other).not.toHaveBeenCalled();
+    expect(target).toHaveBeenCalledWith(undefined, expect.objectContaining({
       query: 'coffee',
       startsAfter: new Date('2026-07-16T00:00:00.000Z'),
       startsBefore: new Date('2026-07-20T00:00:00.000Z'),

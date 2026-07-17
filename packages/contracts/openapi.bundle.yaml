@@ -671,15 +671,14 @@ paths:
           description: west,south,east,north
           schema:
             type: string
-        - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
       responses:
         '200':
-          description: Discovery modules
+          description: Personalised, module-grouped discovery feed with an optional operational banner.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EventPage'
+                $ref: '#/components/schemas/DiscoveryFeed'
         '400':
           $ref: '#/components/responses/Error'
   /events/search:
@@ -4993,6 +4992,126 @@ components:
         hasMore:
           type: boolean
         serverTime:
+          type: string
+          format: date-time
+        queryExplanationId:
+          type: string
+    RecommendationScore:
+      type: object
+      description: Explainable score. `components` sums to `score`; safetyDemotion is negative.
+      required:
+        - score
+        - boosted
+        - components
+      properties:
+        score:
+          type: number
+        boosted:
+          type: boolean
+        components:
+          type: object
+          additionalProperties:
+            type: number
+    RecommendationItem:
+      allOf:
+        - $ref: '#/components/schemas/EventSummary'
+        - type: object
+          required:
+            - recommendation
+          properties:
+            recommendation:
+              $ref: '#/components/schemas/RecommendationScore'
+    RecommendationModule:
+      type: object
+      required:
+        - key
+        - title
+        - items
+      properties:
+        key:
+          type: string
+          enum:
+            - today
+            - weekend
+            - nearby_hot
+            - interest
+            - new_events
+            - verified_hosts
+            - followed_updates
+        title:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecommendationItem'
+    OperationalBanner:
+      type: object
+      description: At most one first-screen operational slot; always flagged promotional.
+      required:
+        - label
+        - kind
+        - promotional
+        - event
+      properties:
+        label:
+          type: string
+          description: Compliance label, e.g. 推广/运营推荐.
+        kind:
+          type: string
+          enum:
+            - promoted
+            - operational
+        promotional:
+          type: boolean
+          const: true
+        headline:
+          type:
+            - string
+            - 'null'
+        imageURL:
+          type:
+            - string
+            - 'null'
+          format: uri
+        event:
+          $ref: '#/components/schemas/EventSummary'
+    DiscoveryFeed:
+      type: object
+      required:
+        - banner
+        - modules
+        - moduleOrder
+        - weights
+        - scoringVersion
+        - naturalResultsMinRatio
+        - serverTime
+        - generatedAt
+        - queryExplanationId
+      properties:
+        banner:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/OperationalBanner'
+        modules:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecommendationModule'
+        moduleOrder:
+          type: array
+          items:
+            type: string
+        weights:
+          type: object
+          additionalProperties:
+            type: number
+        scoringVersion:
+          type: string
+        naturalResultsMinRatio:
+          type: number
+        serverTime:
+          type: string
+          format: date-time
+        generatedAt:
           type: string
           format: date-time
         queryExplanationId:

@@ -2563,6 +2563,51 @@ export interface components {
             serverTime: string;
             queryExplanationId: string;
         };
+        /** @description Explainable score. `components` sums to `score`; safetyDemotion is negative. */
+        RecommendationScore: {
+            score: number;
+            boosted: boolean;
+            components: {
+                [key: string]: number;
+            };
+        };
+        RecommendationItem: components["schemas"]["EventSummary"] & {
+            recommendation: components["schemas"]["RecommendationScore"];
+        };
+        RecommendationModule: {
+            /** @enum {string} */
+            key: "today" | "weekend" | "nearby_hot" | "interest" | "new_events" | "verified_hosts" | "followed_updates";
+            title: string;
+            items: components["schemas"]["RecommendationItem"][];
+        };
+        /** @description At most one first-screen operational slot; always flagged promotional. */
+        OperationalBanner: {
+            /** @description Compliance label, e.g. 推广/运营推荐. */
+            label: string;
+            /** @enum {string} */
+            kind: "promoted" | "operational";
+            /** @constant */
+            promotional: true;
+            headline?: string | null;
+            /** Format: uri */
+            imageURL?: string | null;
+            event: components["schemas"]["EventSummary"];
+        };
+        DiscoveryFeed: {
+            banner: null | components["schemas"]["OperationalBanner"];
+            modules: components["schemas"]["RecommendationModule"][];
+            moduleOrder: string[];
+            weights: {
+                [key: string]: number;
+            };
+            scoringVersion: string;
+            naturalResultsMinRatio: number;
+            /** Format: date-time */
+            serverTime: string;
+            /** Format: date-time */
+            generatedAt: string;
+            queryExplanationId: string;
+        };
         EventDraftInput: {
             title?: string;
             description?: string;
@@ -4364,7 +4409,6 @@ export interface operations {
                 price?: "free" | "paid";
                 /** @description west,south,east,north */
                 bounds?: string;
-                cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
             };
             header?: never;
@@ -4373,13 +4417,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Discovery modules */
+            /** @description Personalised, module-grouped discovery feed with an optional operational banner. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EventPage"];
+                    "application/json": components["schemas"]["DiscoveryFeed"];
                 };
             };
             400: components["responses"]["Error"];

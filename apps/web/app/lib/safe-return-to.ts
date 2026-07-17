@@ -31,5 +31,12 @@ export function safeReturnTo(value: string | null | undefined, fallback = "/disc
   }
   if (resolved.origin !== base) return fallback;
 
-  return `${resolved.pathname}${resolved.search}${resolved.hash}`;
+  // The origin check validated the *input*, but dot segments can collapse a
+  // same-origin input like "/..//evil.example" into pathname "//evil.example".
+  // That reconstructed string is protocol-relative when used as a navigation
+  // target, so re-check the *output* the same way before returning it.
+  const result = `${resolved.pathname}${resolved.search}${resolved.hash}`;
+  if (!result.startsWith("/") || result[1] === "/" || result[1] === "\\") return fallback;
+
+  return result;
 }

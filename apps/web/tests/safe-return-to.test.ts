@@ -29,6 +29,13 @@ describe("safeReturnTo", () => {
     ["/\t/evil.example"],
     ["/\n/evil.example"],
     ["\\/evil.example"],
+    // Dot segments collapse to a protocol-relative pathname: the input origin
+    // still resolves to spott.jp, but the reconstructed output "//evil.example"
+    // is protocol-relative when used as a navigation target.
+    ["/..//evil.example"],
+    ["/.//evil.example"],
+    ["/a/../..//evil.example"],
+    ["/..//evil.example/steal"],
     // Relative, non-absolute paths.
     ["discover"],
     [""],
@@ -46,6 +53,8 @@ describe("safeReturnTo", () => {
       "//evil.example",
       "https://evil.example",
       "/\t/evil.example",
+      "/..//evil.example",
+      "/a/../..//evil.example",
     ];
     for (const value of hostile) {
       const result = safeReturnTo(value);

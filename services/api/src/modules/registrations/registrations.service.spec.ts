@@ -1289,3 +1289,92 @@ describe('RegistrationsService privacy-safe itinerary pagination', () => {
     expect(query).not.toHaveBeenCalled();
   });
 });
+
+describe('RegistrationsService approval decision point hold authority', () => {
+  const hostUser = {
+    id: '019b0000-0000-7000-8000-000000000099',
+    sessionId: 'session',
+    phoneVerified: true,
+    restrictions: [],
+    roles: ['verified'],
+  };
+  const registrationId = '019b0000-0000-7000-8200-000000000010';
+
+  function decideClient(holdRows: Array<{ id: string; capturable: boolean }>) {
+    const seen: string[] = [];
+    const client = {
+      query: vi.fn(async (text: string) => {
+        seen.push(text);
+        if (text.includes('FROM events.registrations r')) {
+          return {
+            rows: [{
+              id: registrationId,
+              event_id: '019b0000-0000-7000-8100-000000000010',
+              user_id: '019b0000-0000-7000-8000-000000000010',
+              status: 'pending',
+              party_size: 1,
+              attendee_note: null,
+              version: '1',
+              waitlist_joined_at: null,
+              updated_at: new Date('2026-07-16T00:00:00.000Z'),
+              offer_expires_at: null,
+            }],
+          };
+        }
+        if (text.includes('FROM events.events event')) {
+          return {
+            rows: [{
+              organizer_id: hostUser.id,
+              capacity: 10,
+              confirmed_count: 0,
+              pending_count: 1,
+              offered_count: 0,
+            }],
+          };
+        }
+        if (text.includes('FROM commerce.point_holds')) return { rows: holdRows };
+        return { rows: [] };
+      }),
+    };
+    return { client, seen };
+  }
+
+  it('only locks an active hold so a dead hold never reaches the capture', async () => {
+    const { client, seen } = decideClient([{ id: 'hold-1', capturable: true }]);
+    const database = {
+      transaction: vi.fn(async (work: (value: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const captureHold = vi.fn().mockResolvedValue({ transactionId: 'tx-1', wallet: {} });
+    const service = new RegistrationsService(
+      database as never,
+      registrationIdempotency() as never,
+      { captureHold, releaseHold: vi.fn() } as never,
+    );
+
+    await service.decide(hostUser as never, registrationId, 'key-1', { decision: 'approve' }).catch(() => undefined);
+
+    const holdSQL = seen.find((text) => text.includes('FROM commerce.point_holds'));
+    expect(holdSQL).toContain("state = 'active'");
+    expect(holdSQL).toContain('FOR UPDATE');
+  });
+
+  it('refuses to approve against a hold whose deadline already passed', async () => {
+    // The hold row can still read `active` between its deadline and the sweep,
+    // but its points are already spendable again, so capture must not run.
+    const { client } = decideClient([{ id: 'hold-1', capturable: false }]);
+    const database = {
+      transaction: vi.fn(async (work: (value: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const captureHold = vi.fn();
+    const service = new RegistrationsService(
+      database as never,
+      registrationIdempotency() as never,
+      { captureHold, releaseHold: vi.fn() } as never,
+    );
+
+    await expect(
+      service.decide(hostUser as never, registrationId, 'key-2', { decision: 'approve' }),
+    ).rejects.toMatchObject({ code: 'POINT_HOLD_EXPIRED', status: 409 });
+    expect(captureHold).not.toHaveBeenCalled();
+  });
+});

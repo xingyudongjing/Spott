@@ -356,16 +356,114 @@ export class WorkerJobs {
   }
 
   async expireHoldsAndQuotes(): Promise<JobResult> {
+    // A pending registration occupies a seat through `pending_count`, and that
+    // seat is only backed by its point hold. Expiring the hold on its own would
+    // strand the registration in `pending` forever: the seat would stay inside
+    // `occupied = confirmed + pending + offered`, new registrations would hit
+    // CAPACITY_FULL, the waitlist could never advance, and the host could not
+    // approve because the capture would reject the dead hold. So each lapsed
+    // seat is released transactionally before the bulk sweep runs.
+    let releasedSeats = 0;
+    for (let index = 0; index < this.config.WORKER_BATCH_SIZE; index += 1) {
+      const released = await this.database.transaction(
+        async (client) => this.releaseLapsedPendingRegistration(client),
+      );
+      if (!released) break;
+      releasedSeats += 1;
+    }
     const result = await this.database.query(
       `WITH holds AS (
-         UPDATE commerce.point_holds SET state = 'expired', updated_at = clock_timestamp()
-         WHERE state = 'active' AND expires_at <= clock_timestamp() RETURNING id
+         UPDATE commerce.point_holds hold SET state = 'expired', updated_at = clock_timestamp()
+         WHERE hold.state = 'active' AND hold.expires_at <= clock_timestamp()
+           AND NOT EXISTS (
+             SELECT 1 FROM events.registrations registration
+             WHERE registration.status = 'pending'
+               AND registration.user_id = hold.user_id
+               AND hold.business_key = 'registration_hold:' || registration.id::text
+           )
+         RETURNING id
        ), quotes AS (
          DELETE FROM commerce.quotes WHERE consumed_at IS NULL AND expires_at < clock_timestamp() - interval '24 hours'
          RETURNING id
        ) SELECT (SELECT count(*) FROM holds)::int + (SELECT count(*) FROM quotes)::int AS processed`,
     );
-    return { processed: Number((result.rows[0] as { processed?: number } | undefined)?.processed ?? 0) };
+    const swept = Number((result.rows[0] as { processed?: number } | undefined)?.processed ?? 0);
+    return { processed: swept + releasedSeats, metadata: { releasedSeats, swept } };
+  }
+
+  /**
+   * Releases a single seat whose pending registration hold has lapsed, or
+   * returns false when nothing is due.
+   *
+   * Locks are taken registration -> event/capacity -> hold, matching the order
+   * used by the approval path, so the job can never deadlock against a host
+   * decision. Exactly-once progress comes from the database itself: the hold
+   * and the registration both move through conditional updates, so a second
+   * worker racing the same row updates nothing and leaves the counter alone.
+   */
+  private async releaseLapsedPendingRegistration(client: PoolClient): Promise<boolean> {
+    const due = await client.query<{
+      registration_id: string;
+      event_id: string;
+      user_id: string;
+      party_size: number;
+      hold_id: string;
+      title: string;
+    }>(
+      `SELECT registration.id AS registration_id, registration.event_id, registration.user_id,
+         registration.party_size, hold.id AS hold_id, event.title
+       FROM events.registrations registration
+       JOIN commerce.point_holds hold ON hold.user_id = registration.user_id
+         AND hold.business_key = 'registration_hold:' || registration.id::text
+       JOIN events.events event ON event.id = registration.event_id
+       WHERE registration.status = 'pending'
+         AND hold.state = 'active' AND hold.expires_at <= clock_timestamp()
+       ORDER BY hold.expires_at, registration.id
+       FOR UPDATE OF registration SKIP LOCKED LIMIT 1`,
+    );
+    const row = due.rows[0];
+    if (!row) return false;
+    await client.query(
+      `SELECT capacity.event_id FROM events.events event
+       JOIN events.event_capacity capacity ON capacity.event_id = event.id
+       WHERE event.id = $1 FOR UPDATE OF event, capacity`,
+      [row.event_id],
+    );
+    const claimedHold = await client.query(
+      `UPDATE commerce.point_holds SET state = 'expired', updated_at = clock_timestamp()
+       WHERE id = $1 AND state = 'active' RETURNING id`,
+      [row.hold_id],
+    );
+    if (!claimedHold.rowCount) return false;
+    // `cancelled` is the terminal state the 12.2 machine allows out of pending
+    // for a seat nobody decided on: `rejected` would falsely record a host
+    // decision, and it is the same state a user cancellation of a pending
+    // registration produces, so the capacity accounting stays identical.
+    const claimedRegistration = await client.query(
+      `UPDATE events.registrations SET status = 'cancelled', cancelled_at = clock_timestamp()
+       WHERE id = $1 AND status = 'pending' RETURNING id`,
+      [row.registration_id],
+    );
+    if (!claimedRegistration.rowCount) return false;
+    await client.query(
+      `UPDATE events.event_capacity SET pending_count = GREATEST(0, pending_count - $2),
+         updated_at = clock_timestamp() WHERE event_id = $1`,
+      [row.event_id, row.party_size],
+    );
+    await client.query(
+      `INSERT INTO sync.outbox_events(aggregate, aggregate_id, type, payload)
+       VALUES ('event', $1, 'waitlist.promotion_requested', $2)`,
+      [row.event_id, { eventId: row.event_id }],
+    );
+    // The hold only reserved points, it never spent them, so the applicant has
+    // nothing to refund: the seat simply went back to the event.
+    await this.createNotification(client, row.user_id, 'registration.hold_expired', 'event', row.event_id, {
+      eventId: row.event_id,
+      registrationId: row.registration_id,
+      eventTitle: row.title,
+      title: row.title,
+    }, `registration-hold-expired:${row.registration_id}`);
+    return true;
   }
 
   async expireFreePointLots(): Promise<JobResult> {

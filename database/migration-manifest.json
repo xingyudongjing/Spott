@@ -116,6 +116,11 @@
       "sequence": 23,
       "filename": "0023_phone_reward_once_per_phone.sql",
       "sha256": "9a91ee7a0d0c0a9e6223aabc379b529b2882279c3f93c00e64c797a8763502c3"
+    },
+    {
+      "sequence": 27,
+      "filename": "0027_daily_checkin_streaks.sql",
+      "sha256": "2c0e9bf332064b3f624e51f0f4d5660c4134733af873b74fa442c43ea93e7880"
     }
   ]
 }

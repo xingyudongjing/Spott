@@ -1,7 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import { DomainError } from '@spott/domain';
+import { DomainError, planDailyCheckin } from '@spott/domain';
 import type { PoolClient } from 'pg';
 import { Database } from '../../platform/database.js';
+
+export interface DailyCheckinResult {
+  alreadyCheckedIn: boolean;
+  streak: number;
+  civilDay: string;
+  rewards: Array<{ type: string; points: number }>;
+  wallet: WalletView;
+}
 
 interface WalletRow {
   paid_balance: string;
@@ -20,6 +28,96 @@ export interface WalletView {
 @Injectable()
 export class PointsService {
   constructor(private readonly database: Database) {}
+
+  // Daily points-center check-in and its 7/30-day continuity bonuses (product
+  // I2). The Asia/Tokyo civil day and streak are authoritative server facts; the
+  // client only triggers this and renders the returned state. Every reward flows
+  // through the shared credit ledger with a day-scoped idempotency key, so a
+  // double tap or retry never double-credits.
+  async dailyCheckin(userId: string): Promise<DailyCheckinResult> {
+    return this.database.transaction(async (client) => {
+      // Serialise concurrent taps for the same user so the first-ever check-in
+      // cannot race two INSERTs, and so the streak read/write is atomic.
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `daily_checkin:${userId}`,
+      ]);
+
+      const state = await client.query<{
+        last_checkin_date: string | null;
+        current_streak: number | null;
+        jp_today: string;
+      }>(
+        `SELECT s.last_checkin_date::text AS last_checkin_date,
+           s.current_streak,
+           (clock_timestamp() AT TIME ZONE 'Asia/Tokyo')::date::text AS jp_today
+         FROM (SELECT 1) seed
+         LEFT JOIN commerce.daily_checkin_streaks s ON s.user_id = $1`,
+        [userId],
+      );
+      const row = state.rows[0];
+      if (!row) throw new DomainError('CHECKIN_STATE_UNAVAILABLE', '签到状态不可用。', 500);
+      const civilDay = row.jp_today;
+      const previous = row.last_checkin_date
+        ? { lastCheckinDate: row.last_checkin_date, currentStreak: Number(row.current_streak) }
+        : null;
+      const plan = planDailyCheckin(previous, civilDay);
+
+      if (plan.alreadyCheckedIn) {
+        return {
+          alreadyCheckedIn: true,
+          streak: plan.newStreak,
+          civilDay,
+          rewards: [],
+          wallet: await this.walletInTransaction(client, userId),
+        };
+      }
+
+      await client.query(
+        `INSERT INTO commerce.daily_checkin_streaks(
+           user_id, last_checkin_date, current_streak, longest_streak, updated_at
+         ) VALUES ($1, $2::date, $3, $3, clock_timestamp())
+         ON CONFLICT (user_id) DO UPDATE SET
+           last_checkin_date = EXCLUDED.last_checkin_date,
+           current_streak = EXCLUDED.current_streak,
+           longest_streak = GREATEST(commerce.daily_checkin_streaks.longest_streak, EXCLUDED.current_streak),
+           updated_at = clock_timestamp()`,
+        [userId, civilDay, plan.newStreak],
+      );
+
+      const rewards: Array<{ type: string; points: number }> = [];
+      const grant = async (
+        configKey: string,
+        fallback: bigint,
+        type: string,
+        businessKey: string,
+      ): Promise<void> => {
+        const amount = await this.configBigInt(client, configKey, fallback);
+        if (amount <= 0n) return;
+        await this.credit(client, userId, amount, 'free', type, businessKey, {
+          metadata: { civilDay, streak: plan.newStreak },
+        });
+        rewards.push({ type, points: Number(amount) });
+      };
+
+      if (plan.grantDaily) {
+        await grant('points.reward.daily_checkin', 10n, 'daily_checkin_reward', `daily_checkin:${civilDay}`);
+      }
+      if (plan.grantStreak7) {
+        await grant('points.reward.streak_7', 50n, 'streak_7_reward', `streak7:${civilDay}`);
+      }
+      if (plan.grantStreak30) {
+        await grant('points.reward.streak_30', 200n, 'streak_30_reward', `streak30:${civilDay}`);
+      }
+
+      return {
+        alreadyCheckedIn: false,
+        streak: plan.newStreak,
+        civilDay,
+        rewards,
+        wallet: await this.walletInTransaction(client, userId),
+      };
+    });
+  }
 
   async wallet(userId: string): Promise<WalletView> {
     const result = await this.database.query<WalletRow & { next_free_expiry: Date | null }>(

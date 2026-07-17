@@ -5,6 +5,7 @@ import {
   assertBalancedEntries,
   availableEventActions,
   canReadExactAddress,
+  planDailyCheckin,
   transitionEvent,
   validateSyncPage,
 } from '../src/index.js';
@@ -178,5 +179,73 @@ describe('sync cursor validation', () => {
         ],
       }),
     ).toThrowError(/严格递增/);
+  });
+});
+
+describe('daily check-in streak planning', () => {
+  it('starts a streak of one and grants the daily reward on a first-ever check-in', () => {
+    const plan = planDailyCheckin(null, '2026-07-18');
+    expect(plan).toEqual({
+      alreadyCheckedIn: false,
+      newStreak: 1,
+      grantDaily: true,
+      grantStreak7: false,
+      grantStreak30: false,
+    });
+  });
+
+  it('is idempotent when the user already checked in on the same Asia/Tokyo day', () => {
+    const plan = planDailyCheckin({ lastCheckinDate: '2026-07-18', currentStreak: 3 }, '2026-07-18');
+    expect(plan).toEqual({
+      alreadyCheckedIn: true,
+      newStreak: 3,
+      grantDaily: false,
+      grantStreak7: false,
+      grantStreak30: false,
+    });
+  });
+
+  it('increments the streak when the previous check-in was the prior civil day', () => {
+    const plan = planDailyCheckin({ lastCheckinDate: '2026-07-17', currentStreak: 3 }, '2026-07-18');
+    expect(plan.alreadyCheckedIn).toBe(false);
+    expect(plan.newStreak).toBe(4);
+    expect(plan.grantDaily).toBe(true);
+  });
+
+  it('handles a month boundary when computing the prior civil day', () => {
+    const plan = planDailyCheckin({ lastCheckinDate: '2026-07-31', currentStreak: 2 }, '2026-08-01');
+    expect(plan.newStreak).toBe(3);
+  });
+
+  it('resets to one after a gap of two or more days', () => {
+    const plan = planDailyCheckin({ lastCheckinDate: '2026-07-15', currentStreak: 9 }, '2026-07-18');
+    expect(plan.newStreak).toBe(1);
+    expect(plan.grantDaily).toBe(true);
+    expect(plan.grantStreak7).toBe(false);
+  });
+
+  it('grants the seven-day bonus at every seventh consecutive day', () => {
+    const day7 = planDailyCheckin({ lastCheckinDate: '2026-07-17', currentStreak: 6 }, '2026-07-18');
+    expect(day7.newStreak).toBe(7);
+    expect(day7.grantStreak7).toBe(true);
+    expect(day7.grantStreak30).toBe(false);
+
+    const day14 = planDailyCheckin({ lastCheckinDate: '2026-07-17', currentStreak: 13 }, '2026-07-18');
+    expect(day14.newStreak).toBe(14);
+    expect(day14.grantStreak7).toBe(true);
+  });
+
+  it('grants the thirty-day bonus once per thirty-day cycle', () => {
+    const day30 = planDailyCheckin({ lastCheckinDate: '2026-07-17', currentStreak: 29 }, '2026-07-18');
+    expect(day30.newStreak).toBe(30);
+    expect(day30.grantStreak7).toBe(false);
+    expect(day30.grantStreak30).toBe(true);
+  });
+
+  it('does not grant streak bonuses on a reset day even if the previous streak was long', () => {
+    const plan = planDailyCheckin({ lastCheckinDate: '2026-06-01', currentStreak: 30 }, '2026-07-18');
+    expect(plan.newStreak).toBe(1);
+    expect(plan.grantStreak7).toBe(false);
+    expect(plan.grantStreak30).toBe(false);
   });
 });

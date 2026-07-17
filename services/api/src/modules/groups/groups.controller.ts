@@ -256,6 +256,85 @@ export class GroupsController {
     return this.groups.setAnnouncementLike(user.id, id, announcementId, false);
   }
 
+  @Get('groups/:id/discussion')
+  discussion(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Query('cursor') cursor?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.groups.discussion(id, user.id, cursor, limit ? Number(limit) : 20);
+  }
+
+  @Post('groups/:id/discussion')
+  createDiscussionPost(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Headers('idempotency-key') key: string,
+    @Body() body: unknown,
+  ) {
+    const input = z.object({
+      body: z.string().trim().min(1).max(2000),
+      locale: z.enum(['zh-Hans', 'ja', 'en']).default('zh-Hans'),
+    }).parse(body);
+    return this.groups.createDiscussionPost(user, id, this.key(key), input);
+  }
+
+  @Get('groups/:id/discussion/:postId/replies')
+  discussionReplies(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('postId') postId: string,
+  ) {
+    return this.groups.discussionReplies(id, postId, user.id);
+  }
+
+  @Post('groups/:id/discussion/:postId/replies')
+  createDiscussionReply(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('postId') postId: string,
+    @Headers('idempotency-key') key: string,
+    @Body() body: unknown,
+  ) {
+    const input = z.object({
+      body: z.string().trim().min(1).max(2000),
+      locale: z.enum(['zh-Hans', 'ja', 'en']).default('zh-Hans'),
+    }).parse(body);
+    return this.groups.createDiscussionReply(user, id, postId, this.key(key), input);
+  }
+
+  @Put('groups/:id/discussion/:commentId/like')
+  likeDiscussion(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('commentId') commentId: string,
+  ) {
+    return this.groups.setDiscussionLike(user.id, id, commentId, true);
+  }
+
+  @Delete('groups/:id/discussion/:commentId/like')
+  unlikeDiscussion(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('commentId') commentId: string,
+  ) {
+    return this.groups.setDiscussionLike(user.id, id, commentId, false);
+  }
+
+  @Patch('groups/:id/discussion/:commentId/moderation')
+  moderateDiscussion(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('commentId') commentId: string,
+    @Body() body: unknown,
+  ) {
+    const input = z.object({
+      status: z.enum(['visible', 'hidden', 'removed']),
+    }).parse(body);
+    return this.groups.moderateDiscussionComment(user, id, commentId, input);
+  }
+
   @Post('groups/:id/transfers')
   transfer(
     @CurrentUser() user: AuthenticatedUser,

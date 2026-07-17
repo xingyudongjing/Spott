@@ -135,6 +135,7 @@ interface EventRow {
     required: boolean;
     options: string[];
   }>;
+  promoted?: boolean;
   media_count: string;
   media_items: Array<{
     id: string;
@@ -170,14 +171,64 @@ export class EventsService {
     const result = await this.database.query<EventRow>(statement.text, statement.values);
     const hasMore = result.rows.length > limit;
     const page = result.rows.slice(0, limit);
-    const last = page.at(-1);
+    // Keyset pagination advances on the chronological tail, so the cursor must be
+    // taken before any promotion reranking reshuffles the visible order.
+    const chronologicalLast = page.at(-1);
+    const ordered = cursor ? page : await this.rankByPromotion(page);
     return {
-      items: page.map((row) => this.toView(row, viewer, false)),
-      nextCursor: hasMore && last?.starts_at ? this.encodeCursor(last.starts_at, last.id) : null,
+      items: ordered.map((row) => this.toView(row, viewer, false)),
+      nextCursor:
+        hasMore && chronologicalLast?.starts_at
+          ? this.encodeCursor(chronologicalLast.starts_at, chronologicalLast.id)
+          : null,
       hasMore,
       serverTime: new Date().toISOString(),
       queryExplanationId: `q_${randomBytes(8).toString('hex')}`,
     };
+  }
+
+  /**
+   * Surfaces commercially promoted events to the top of the first discovery page
+   * while guaranteeing a configurable minimum share of natural results (product
+   * doc §1011 / N: 任何商业置顶必须标记并设置自然结果最低占比). The promoted flag
+   * itself is carried on every card so clients render the 推广 badge; here we only
+   * cap how many promoted cards may occupy the surfaced slots.
+   */
+  private async rankByPromotion(page: EventRow[]): Promise<EventRow[]> {
+    const promoted = page.filter((row) => row.promoted);
+    if (promoted.length === 0) return page;
+    const minNaturalPercent = await this.promotionMinNaturalPercent();
+    const promotedCap = Math.floor((page.length * (100 - minNaturalPercent)) / 100);
+    if (promotedCap <= 0) return page;
+    const natural = page.filter((row) => !row.promoted);
+    return [...promoted.slice(0, promotedCap), ...natural, ...promoted.slice(promotedCap)];
+  }
+
+  private async promotionMinNaturalPercent(): Promise<number> {
+    const result = await this.database.query<{ value: string | null }>(
+      `WITH stage AS (
+         SELECT COALESCE((
+           SELECT value_json #>> '{}' FROM admin.config_revisions
+           WHERE key = 'points.lifecycle.stage' AND state = 'active'
+             AND (effective_from IS NULL OR effective_from <= clock_timestamp())
+             AND (effective_to IS NULL OR effective_to > clock_timestamp())
+           ORDER BY version DESC LIMIT 1
+         ), 'launch') AS value
+       )
+       SELECT COALESCE(
+         (SELECT value_json #>> '{}' FROM admin.config_revisions
+           WHERE key = 'discovery.promotion.min_natural_percent' AND state = 'active'
+             AND (effective_from IS NULL OR effective_from <= clock_timestamp())
+             AND (effective_to IS NULL OR effective_to > clock_timestamp())
+           ORDER BY version DESC LIMIT 1),
+         (SELECT CASE WHEN stage.value = 'stable' THEN catalog.stable_value ELSE catalog.launch_value END::text
+           FROM commerce.point_rule_catalog catalog CROSS JOIN stage
+           WHERE catalog.key = 'discovery.promotion.min_natural_percent')
+       ) AS value`,
+    );
+    const value = Number(result.rows[0]?.value ?? 70);
+    if (!Number.isFinite(value)) return 70;
+    return Math.min(Math.max(value, 0), 100);
   }
 
   async get(identifier: string, viewer?: AuthenticatedUser): Promise<unknown> {
@@ -805,6 +856,7 @@ export class EventsService {
         },
       },
       favorited: row.favorited,
+      promoted: row.promoted ?? false,
       registrationStatus: row.registration_status,
       viewerRegistration: row.registration_id && row.registration_status && row.registration_party_size
         ? {

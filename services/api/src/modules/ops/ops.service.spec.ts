@@ -78,10 +78,12 @@ function serviceWith(query: ReturnType<typeof vi.fn>) {
     claim: vi.fn(async () => null),
     complete: vi.fn(async () => undefined),
   };
+  const promotions = { refund: vi.fn(async () => null) };
   return {
-    service: new OpsService(database as never, points as never, idempotency as never),
+    service: new OpsService(database as never, points as never, idempotency as never, promotions as never),
     database,
     idempotency,
+    promotions,
   };
 }
 
@@ -437,6 +439,46 @@ describe('OpsService typed safety mutations', () => {
       actions: [{ expiresAt: null }],
       appeals: [{ decidedAt: null }],
     });
+  });
+
+  it('refunds an active event promotion when a moderation takedown removes the event', async () => {
+    const caseId = '00000000-0000-4000-8000-000000000071';
+    const eventTargetId = '00000000-0000-4000-8000-000000000072';
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [admin], rowCount: 1 })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: caseId,
+          report_id: '00000000-0000-4000-8000-000000000073',
+          version: '3',
+          status: 'assigned',
+          target_type: 'event',
+          target_id: eventTargetId,
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValue({ rows: [{ version: '4' }], rowCount: 1 });
+    const { service, promotions } = serviceWith(query);
+
+    await service.decide(
+      operator,
+      caseId,
+      3,
+      '00000000-0000-4000-8000-000000000074',
+      { decision: 'remove', reason: 'policy violation' },
+      'trace-remove',
+    );
+
+    expect(promotions.refund).toHaveBeenCalledWith(
+      expect.anything(),
+      eventTargetId,
+      'moderation_remove',
+    );
+    // The event must actually be taken offline before the refund runs.
+    const removal = query.mock.calls.find(
+      (call) => typeof call[0] === 'string' && call[0].includes("UPDATE events.events SET status = 'removed'"),
+    );
+    expect(removal).toBeDefined();
   });
 });
 

@@ -72,7 +72,7 @@ describe('parseDiscoveryQuery', () => {
 describe('EventsController discovery query handling', () => {
   it.each(['discovery', 'search'] as const)('%s forwards the complete parsed query', async (method) => {
     const discovery = vi.fn().mockResolvedValue({ items: [] });
-    const controller = new EventsController({ discovery } as never) as unknown as Record<
+    const controller = new EventsController({ discovery } as never, {} as never) as unknown as Record<
       typeof method,
       (request: { user?: undefined }, query: Record<string, string>) => Promise<unknown>
     >;

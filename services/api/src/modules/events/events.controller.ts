@@ -22,6 +22,7 @@ import {
 } from '../../platform/request-context.js';
 import { parseDiscoveryQuery } from './events.discovery-query.js';
 import { EventsService } from './events.service.js';
+import { EventPromotionService } from './events.promotion.service.js';
 
 export const draftSchema = z.object({
   title: z.string().min(1).max(120).optional(),
@@ -95,7 +96,10 @@ export const draftSchema = z.object({
 
 @Controller()
 export class EventsController {
-  constructor(private readonly events: EventsService) {}
+  constructor(
+    private readonly events: EventsService,
+    private readonly promotions: EventPromotionService,
+  ) {}
 
   @Public()
   @Get('discovery/feed')
@@ -178,6 +182,29 @@ export class EventsController {
   ) {
     const input = z.object({ reason: z.string().min(3).max(500) }).parse(body);
     return this.events.cancel(user, id, this.requiredKey(key), input.reason);
+  }
+
+  @Post('events/:id/promotions')
+  @HttpCode(201)
+  promote(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Headers('idempotency-key') key: string,
+    @Body() body: unknown,
+  ) {
+    const input = z
+      .object({
+        tier: z.enum(['boost_24h', 'boost_72h', 'boost_7d']),
+        quoteId: z.string().uuid(),
+      })
+      .parse(body);
+    return this.promotions.purchase(user, id, input.tier, input.quoteId, this.requiredKey(key));
+  }
+
+  @Public()
+  @Get('events/:id/promotion')
+  activePromotion(@Param('id') id: string) {
+    return this.promotions.active(id);
   }
 
   @Put('events/:id/favorite')

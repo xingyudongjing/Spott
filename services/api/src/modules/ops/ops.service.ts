@@ -7,6 +7,7 @@ import { Database } from '../../platform/database.js';
 import { IdempotencyService } from '../../platform/idempotency.js';
 import type { AuthenticatedUser } from '../../platform/request-context.js';
 import { PointsService } from '../points/points.service.js';
+import { EventPromotionService } from '../events/events.promotion.service.js';
 
 interface AdminContext {
   id: string;
@@ -354,6 +355,7 @@ export class OpsService {
     private readonly database: Database,
     private readonly points: PointsService,
     private readonly idempotency: IdempotencyService,
+    private readonly promotions: EventPromotionService,
   ) {}
 
   async overview(actor: AuthenticatedUser): Promise<unknown> {
@@ -919,6 +921,9 @@ export class OpsService {
       await client.query("UPDATE safety.reports SET status = 'decided', updated_at = clock_timestamp() WHERE id = $1", [moderationCase.report_id]);
       if (moderationCase.target_type === 'event' && ['hide', 'remove'].includes(input.decision)) {
         await client.query("UPDATE events.events SET status = 'removed' WHERE id = $1 AND status <> 'removed'", [moderationCase.target_id]);
+        // A platform takedown invalidates the paid promotion window, so refund
+        // the unused portion pro-rata through a ledger Reversal (product doc N).
+        await this.promotions.refund(client, moderationCase.target_id, `moderation_${input.decision}`);
       }
       if (moderationCase.target_type === 'group' && ['hide', 'remove'].includes(input.decision)) {
         await client.query("UPDATE community.groups SET status = 'removed' WHERE id = $1 AND status <> 'removed'", [moderationCase.target_id]);

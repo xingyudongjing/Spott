@@ -127,7 +127,8 @@ function opsServiceWith(query: ReturnType<typeof vi.fn>) {
     claim: vi.fn(async () => null),
     complete: vi.fn(async () => undefined),
   };
-  return new OpsService(database as never, points as never, idempotency as never);
+  const promotions = { refund: vi.fn(async () => null) };
+  return new OpsService(database as never, points as never, idempotency as never, promotions as never);
 }
 
 describe('OpsService development operator escalation is fail-closed', () => {

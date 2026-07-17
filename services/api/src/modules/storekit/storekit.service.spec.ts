@@ -1,5 +1,143 @@
 import { describe, expect, it, vi } from 'vitest';
+import { FakeCommerceDatabase } from './fake-commerce-database.js';
 import { StoreKitService } from './storekit.service.js';
+
+const REFUND_USER = '019b0000-0000-7000-8000-000000000001';
+const NOTIFICATION_UUID = '019b0000-0000-7000-9000-000000000001';
+
+/**
+ * Rebuilds the exact attack state described in P0-3 against the real production
+ * path (`processNotification` -> `reverseRevokedOrder`):
+ *
+ *   1. user buys the 1000-point pack, which grants 200 promotional free points;
+ *   2. `PointsService.spend` allocates free lots first, so the 200 free points are
+ *      necessarily the first thing spent -> free_balance hits 0, paid stays 1000;
+ *   3. Apple refunds the cash and sends a REFUND notification.
+ *
+ * The refund then has to claw back 1000 paid + 200 free while free_balance is 0.
+ */
+function refundScenario(options: { free?: bigint; paid?: bigint } = {}) {
+  const database = new FakeCommerceDatabase({
+    wallets: { [REFUND_USER]: { paid: options.paid ?? 1000n, free: options.free ?? 0n } },
+    storeOrders: [
+      {
+        id: 'order-row',
+        user_id: REFUND_USER,
+        state: 'credited',
+        points_transaction_id: 'paid-transaction',
+        bonus_points_transaction_id: 'bonus-transaction',
+        revocation_reason: null,
+      },
+    ],
+    pointTransactions: [
+      {
+        id: 'paid-transaction',
+        user_id: REFUND_USER,
+        type: 'storekit_purchase',
+        business_key: 'storekit:apple-transaction:paid',
+        reversal_of: null,
+        metadata: {},
+      },
+      {
+        id: 'bonus-transaction',
+        user_id: REFUND_USER,
+        type: 'storekit_bonus',
+        business_key: 'storekit:apple-transaction:bonus',
+        reversal_of: null,
+        metadata: {},
+      },
+    ],
+    pointEntries: [
+      { transaction_id: 'paid-transaction', account_code: `user:${REFUND_USER}`, bucket: 'paid', amount: 1000n },
+      { transaction_id: 'paid-transaction', account_code: 'platform:credits', bucket: 'paid', amount: -1000n },
+      { transaction_id: 'bonus-transaction', account_code: `user:${REFUND_USER}`, bucket: 'free', amount: 200n },
+      { transaction_id: 'bonus-transaction', account_code: 'platform:credits', bucket: 'free', amount: -200n },
+      // the 200 promotional free points already spent, free-lots-first
+      { transaction_id: 'spend-transaction', account_code: `user:${REFUND_USER}`, bucket: 'free', amount: -200n },
+      { transaction_id: 'spend-transaction', account_code: 'platform:spent', bucket: 'free', amount: 200n },
+    ],
+  });
+  const service = new StoreKitService(database as never, {} as never);
+  const internals = service as unknown as {
+    verifyNotification: (payload: string) => Promise<unknown>;
+    verifyTransaction: (payload: string) => Promise<unknown>;
+  };
+  vi.spyOn(internals, 'verifyNotification').mockResolvedValue({
+    notificationUUID: NOTIFICATION_UUID,
+    notificationType: 'REFUND',
+    data: { signedTransactionInfo: 'signed-transaction-info' },
+  });
+  vi.spyOn(internals, 'verifyTransaction').mockResolvedValue({
+    transactionId: 'apple-transaction',
+    revocationDate: Date.now(),
+    revocationReason: 1,
+    revocationPercentage: 1_000_000,
+  });
+  return { database, service };
+}
+
+describe('StoreKitService Apple refund clawback', () => {
+  it('claws the refunded pack back even when the promotional free points were already spent', async () => {
+    const { database, service } = refundScenario();
+
+    await expect(service.processNotification('signed-payload')).resolves.toBeUndefined();
+
+    const wallet = database.state.wallets.get(REFUND_USER)!;
+    // free_balance must never go below zero: the 200 free points that no longer
+    // exist are carried as paid debt instead of aborting the whole webhook.
+    expect(wallet.free_balance).toBe(0n);
+    expect(wallet.paid_balance).toBe(-200n);
+    expect(database.state.storeOrders[0]!.state).toBe('revoked');
+    expect(database.state.refunds).toEqual([
+      { store_event_id: NOTIFICATION_UUID, points_reversed: 1200n, order_id: 'order-row' },
+    ]);
+    expect(database.state.restrictionFlags.get(REFUND_USER)).toEqual(['pointsBlocked']);
+  });
+
+  it('posts the clawback as a new immutable reversal transaction, never rewriting history', async () => {
+    const { database, service } = refundScenario();
+    const historyBefore = database.state.pointEntries.map((entry) => ({ ...entry }));
+
+    await service.processNotification('signed-payload');
+
+    const reversal = database.state.pointTransactions.find((row) => row.type === 'storekit_refund')!;
+    expect(reversal.reversal_of).toBe('paid-transaction');
+    expect(reversal.business_key).toBe(`storekit_refund:${NOTIFICATION_UUID}`);
+    // original entries are still there, byte for byte
+    expect(database.state.pointEntries.slice(0, historyBefore.length)).toEqual(historyBefore);
+    const reversalEntries = database.state.pointEntries.filter(
+      (entry) => entry.transaction_id === reversal.id && entry.account_code === `user:${REFUND_USER}`,
+    );
+    expect(reversalEntries).toEqual([
+      { transaction_id: reversal.id, account_code: `user:${REFUND_USER}`, bucket: 'paid', amount: -1200n },
+    ]);
+  });
+
+  it('still reverses each bucket in place when the free points are untouched', async () => {
+    const { database, service } = refundScenario({ free: 200n });
+
+    await service.processNotification('signed-payload');
+
+    const wallet = database.state.wallets.get(REFUND_USER)!;
+    expect(wallet.free_balance).toBe(0n);
+    expect(wallet.paid_balance).toBe(0n);
+    expect(database.state.restrictionFlags.get(REFUND_USER)).toBeUndefined();
+  });
+
+  it('books the clawback exactly once when Apple retries the same notification 100 times', async () => {
+    const { database, service } = refundScenario();
+
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await service.processNotification('signed-payload');
+    }
+
+    const wallet = database.state.wallets.get(REFUND_USER)!;
+    expect(wallet.paid_balance).toBe(-200n);
+    expect(wallet.free_balance).toBe(0n);
+    expect(database.state.refunds).toHaveLength(1);
+    expect(database.state.pointTransactions.filter((row) => row.type === 'storekit_refund')).toHaveLength(1);
+  });
+});
 
 describe('StoreKitService catalog', () => {
   it('returns only the server-configured active Apple point products', async () => {
@@ -108,6 +246,9 @@ describe('StoreKitService purchase ledger', () => {
             }],
             rowCount: 1,
           };
+        }
+        if (sql.includes('FROM commerce.wallets')) {
+          return { rows: [{ free_balance: '50' }], rowCount: 1 };
         }
         if (sql.includes('FROM commerce.point_entries')) {
           return values?.[0] === 'paid-transaction'

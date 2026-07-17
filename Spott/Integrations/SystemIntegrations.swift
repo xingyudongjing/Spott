@@ -24,6 +24,38 @@ enum APNSDeviceToken {
 
 extension Notification.Name {
     static let spottPushTokenUpdated = Notification.Name("jp.spott.push-token-updated")
+    static let spottPushDeepLink = Notification.Name("jp.spott.push-deep-link")
+}
+
+/// Buffers a deep link from a notification tap so a cold start (the tap launches
+/// the app and `didReceive` fires before any view is observing) can still route
+/// once the session is restored.
+enum PushDeepLinkBuffer {
+    private static let lock = NSLock()
+    // Guarded by `lock`; the unsafe annotation opts out of Swift 6 static-state
+    // isolation checking because the lock provides the synchronization instead.
+    nonisolated(unsafe) private static var pending: URL?
+
+    static func store(_ url: URL) {
+        lock.lock(); defer { lock.unlock() }
+        pending = url
+    }
+
+    static func take() -> URL? {
+        lock.lock(); defer { lock.unlock() }
+        let url = pending
+        pending = nil
+        return url
+    }
+}
+
+/// Extracts the server-decided deep link from a push payload. The server places
+/// it at `spott.deepLink`; the client never derives routes from the type itself.
+func pushDeepLink(from userInfo: [AnyHashable: Any]) -> URL? {
+    guard let spott = userInfo["spott"] as? [AnyHashable: Any],
+          let raw = spott["deepLink"] as? String,
+          let url = URL(string: raw) else { return nil }
+    return url
 }
 
 final class SpottAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -53,6 +85,20 @@ final class SpottAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
         [.banner, .list, .sound, .badge]
+    }
+
+    // Routing a notification tap. The server decides the destination (spott.deepLink);
+    // we buffer it for cold starts and post it so the app can pull the latest state
+    // and navigate. A tap with no deep link just brings the app forward.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        guard let url = pushDeepLink(from: response.notification.request.content.userInfo) else { return }
+        PushDeepLinkBuffer.store(url)
+        await MainActor.run {
+            NotificationCenter.default.post(name: .spottPushDeepLink, object: nil, userInfo: ["url": url])
+        }
     }
 }
 

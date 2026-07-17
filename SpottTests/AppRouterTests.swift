@@ -238,4 +238,33 @@ final class AppRouterTests: XCTestCase {
         XCTAssertNil(router.pendingRegistrationPresentation)
         XCTAssertNil(router.pendingItineraryRegistrationID)
     }
+
+    func testPushDeepLinkExtractsServerDecidedURL() throws {
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["alert": ["title": "t", "body": "b"]],
+            "spott": ["type": "event.cancelled", "deepLink": "spott://e/tokyo-picnic"],
+        ]
+        let url = try XCTUnwrap(pushDeepLink(from: userInfo))
+        XCTAssertEqual(url, URL(string: "spott://e/tokyo-picnic"))
+
+        // A tapped notification deep link routes through the same validated router path.
+        let router = AppRouter()
+        XCTAssertEqual(router.route(url: url), .opened)
+        XCTAssertEqual(router.selectedTab, .discovery)
+        XCTAssertEqual(router.path(for: .discovery), [.event(.init(id: nil, slug: "tokyo-picnic"))])
+    }
+
+    func testPushDeepLinkIgnoresPayloadsWithoutADeepLink() {
+        XCTAssertNil(pushDeepLink(from: ["spott": ["type": "moderation.decided"]]))
+        XCTAssertNil(pushDeepLink(from: ["aps": ["alert": "hi"]]))
+        XCTAssertNil(pushDeepLink(from: ["spott": ["deepLink": ""]]))
+    }
+
+    func testPushDeepLinkBufferReturnsAndClears() {
+        _ = PushDeepLinkBuffer.take()
+        let url = URL(string: "spott://g/hikers")!
+        PushDeepLinkBuffer.store(url)
+        XCTAssertEqual(PushDeepLinkBuffer.take(), url)
+        XCTAssertNil(PushDeepLinkBuffer.take())
+    }
 }

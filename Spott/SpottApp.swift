@@ -36,9 +36,24 @@ struct SpottApp: App {
                 .environment(model)
                 .environment(router)
                 .environment(\.locale, (AppLanguage(rawValue: appLanguage) ?? .system).locale)
-                .task { await model.bootstrap() }
+                .task {
+                    await model.bootstrap()
+                    // Drain a deep link from a cold-start notification tap once the
+                    // session is restored, so the tap lands on the right screen.
+                    if let pending = PushDeepLinkBuffer.take() {
+                        model.open(url: pending)
+                    }
+                }
                 .onReceive(NotificationCenter.default.publisher(for: .spottPushTokenUpdated)) { _ in
                     Task { await model.registerPendingPushToken() }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .spottPushDeepLink)) { note in
+                    // A tap while the app is running. Clear the cold-start buffer so it
+                    // is not routed twice, then navigate.
+                    _ = PushDeepLinkBuffer.take()
+                    if let url = note.userInfo?["url"] as? URL {
+                        model.open(url: url)
+                    }
                 }
                 .onOpenURL {
                     if !GoogleSignInManager.shared.handle($0) {

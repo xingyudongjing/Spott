@@ -26,9 +26,30 @@ interface DeliveryRow {
   type: string;
   template_version: number;
   payload_ref: Record<string, unknown>;
+  resource_public_id: string | null;
 }
 
 type NotificationChannel = 'in_app' | 'push' | 'email';
+
+/**
+ * Server-decided deep link for a notification tap. The client only renders the
+ * target; the type -> route mapping lives here so it stays in one place. Types
+ * without a canonical destination (e.g. moderation.decided) return null and the
+ * client simply opens the app without navigating.
+ */
+export function notificationDeepLink(type: string, resourcePublicId: string | null): string | null {
+  if (!resourcePublicId) return null;
+  switch (type) {
+    case 'event.cancelled':
+    case 'waitlist.offered':
+      return `spott://e/${encodeURIComponent(resourcePublicId)}`;
+    case 'group.announcement':
+    case 'group.dissolution_scheduled':
+      return `spott://g/${encodeURIComponent(resourcePublicId)}`;
+    default:
+      return null;
+  }
+}
 
 /**
  * Delivery policy for a semantic notification type (product doc K).
@@ -798,7 +819,7 @@ export class WorkerJobs {
     return this.database.transaction(async (client) => {
       const result = await client.query<DeliveryRow>(
         `SELECT d.id, d.channel, d.notification_id, d.attempts, n.user_id, n.type,
-           n.template_version, n.payload_ref
+           n.template_version, n.payload_ref, n.resource_public_id
          FROM notification.deliveries d JOIN notification.notifications n ON n.id = d.notification_id
          WHERE d.state IN ('queued','failed','sending') AND d.available_at <= clock_timestamp()
            AND d.attempts < 8
@@ -869,10 +890,12 @@ export class WorkerJobs {
           try { return [{ id: row.id, token: this.decryptor.decrypt(row.token_cipher), environment: row.environment }]; }
           catch { return []; }
         });
+        const deepLink = notificationDeepLink(delivery.type, delivery.resource_public_id);
         outcome = await this.adapters.push(delivery.id, targets, copy, {
           notificationId: delivery.notification_id,
           type: delivery.type,
           ...delivery.payload_ref,
+          ...(deepLink ? { deepLink } : {}),
         });
       }
       if (outcome.invalidTargetIds?.length) await this.disableDeviceTargets(outcome.invalidTargetIds, 'provider_rejected');

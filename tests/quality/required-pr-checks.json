@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "checks": [
+    "contracts-generated",
+    "node-quality",
+    "postgres-integration",
+    "web-core-journey",
+    "security-supply-chain",
+    "ios-unit-release",
+    "ios-ui-core-journey"
+  ]
+}

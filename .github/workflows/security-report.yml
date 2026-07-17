@@ -1,0 +1,68 @@
+name: Sanitized security report
+
+"on":
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  NODE_VERSION: "24.18.0"
+  PNPM_VERSION: "11.5.2"
+
+jobs:
+  sanitized_security_report:
+    name: sanitized-security-report
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out complete immutable history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select locked Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Verify immutable toolchain inputs
+        run: >-
+          node scripts/ci/verify-toolchain-lock.mjs
+          --lock ci/toolchain-lock.json
+          --schema ci/toolchain-lock.schema.json
+          --repo-root .
+      - name: Install the frozen workspace
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack install --global "pnpm@${PNPM_VERSION}"
+          corepack pnpm install --frozen-lockfile
+      - name: Produce a sanitized local scan
+        run: |
+          set -euo pipefail
+          mkdir -p output/security-report
+          node scripts/ci/scan-repository-secrets.mjs --repo-root . --allowlist ci/secret-scan-allowlist.json --report output/security-report/repository-secret-scan.json
+          corepack pnpm audit --audit-level high
+      - name: Create bounded report evidence
+        if: ${{ always() }}
+        env:
+          SPOTT_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          node scripts/ci/create-evidence-artifact.mjs --check sanitized-security-report --output-directory evidence/security-report --status "$SPOTT_JOB_STATUS"
+      - name: Upload bounded report evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sanitized-security-report
+          path: |
+            evidence/security-report/report.json
+            evidence/security-report/artifact-manifest.sha256
+          if-no-files-found: error
+          retention-days: 7

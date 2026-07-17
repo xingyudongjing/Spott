@@ -1,0 +1,245 @@
+name: iOS
+
+"on":
+  pull_request: {}
+  merge_group: {}
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "24.18.0"
+  PNPM_VERSION: "11.5.2"
+  SPOTT_IOS_DESTINATION: platform=iOS Simulator,OS=26.5,name=iPhone 17 Pro
+
+jobs:
+  ios_unit_release_shard:
+    name: Signed Release unit shard
+    runs-on: macos-26
+    timeout-minutes: 45
+    outputs:
+      artifact-name: ${{ steps.evidence.outputs.artifact-name }}
+    env:
+      SPOTT_SOURCE_PACKAGES: ${{ runner.temp }}/spott-unit-source-packages
+      SPOTT_DERIVED_DATA: ${{ runner.temp }}/spott-unit-derived-data
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Select locked Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Verify immutable toolchain inputs
+        run: >-
+          node scripts/ci/verify-toolchain-lock.mjs
+          --lock ci/toolchain-lock.json
+          --schema ci/toolchain-lock.schema.json
+          --repo-root .
+      - name: Remove generated state
+        run: node scripts/ci/prepare-required-job.mjs --repo-root .
+      - name: Install the frozen workspace
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack install --global "pnpm@${PNPM_VERSION}"
+          corepack pnpm install --frozen-lockfile
+      - name: Run signed Release unit tests
+        run: |
+          set -euo pipefail
+          test ! -e "$SPOTT_SOURCE_PACKAGES"
+          test ! -e "$SPOTT_DERIVED_DATA"
+          mkdir "$SPOTT_SOURCE_PACKAGES"
+          mkdir "$SPOTT_DERIVED_DATA"
+          xcodebuild \
+            -project Spott.xcodeproj \
+            -scheme Spott \
+            -configuration Release \
+            -destination "$SPOTT_IOS_DESTINATION" \
+            -derivedDataPath "$SPOTT_DERIVED_DATA" \
+            -clonedSourcePackagesDirPath "$SPOTT_SOURCE_PACKAGES" \
+            -disableAutomaticPackageResolution \
+            -skipPackageUpdates \
+            -disablePackageRepositoryCache \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -parallel-testing-enabled NO \
+            -maximum-parallel-testing-workers 1 \
+            test \
+            -only-testing:SpottTests
+          codesign --verify --deep --strict "$SPOTT_DERIVED_DATA/Build/Products/Release-iphonesimulator/Spott.app"
+          node scripts/ci/verify-toolchain-lock.mjs --lock ci/toolchain-lock.json --schema ci/toolchain-lock.schema.json --repo-root .
+      - name: Create bounded shard evidence
+        id: evidence
+        if: ${{ always() }}
+        env:
+          SPOTT_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          node scripts/ci/create-evidence-artifact.mjs --check ios-unit-release-shard --output-directory evidence/ios-unit-shard --status "$SPOTT_JOB_STATUS"
+          printf 'artifact-name=%s\n' 'ios-unit-shard' >> "$GITHUB_OUTPUT"
+      - name: Upload unit evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ios-unit-shard
+          path: |
+            evidence/ios-unit-shard/report.json
+            evidence/ios-unit-shard/artifact-manifest.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  ios_ui_core_journey_shard:
+    name: Real API Release UI shard
+    runs-on: macos-26
+    timeout-minutes: 60
+    outputs:
+      artifact-name: ${{ steps.evidence.outputs.artifact-name }}
+    env:
+      SPOTT_IOS_SIMULATOR_DESTINATION: platform=iOS Simulator,OS=26.5,name=iPhone 17 Pro
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Select locked Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Verify immutable toolchain inputs
+        run: >-
+          node scripts/ci/verify-toolchain-lock.mjs
+          --lock ci/toolchain-lock.json
+          --schema ci/toolchain-lock.schema.json
+          --repo-root .
+      - name: Remove generated state
+        run: node scripts/ci/prepare-required-job.mjs --repo-root .
+      - name: Install the frozen workspace
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack install --global "pnpm@${PNPM_VERSION}"
+          corepack pnpm install --frozen-lockfile
+      - name: Run the signed Release journey against loopback services
+        run: |
+          set -euo pipefail
+          test -x scripts/ci/run-ios-real-api-e2e.sh
+          scripts/ci/run-ios-real-api-e2e.sh
+          node scripts/ci/verify-toolchain-lock.mjs --lock ci/toolchain-lock.json --schema ci/toolchain-lock.schema.json --repo-root .
+      - name: Create bounded shard evidence
+        id: evidence
+        if: ${{ always() }}
+        env:
+          SPOTT_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          node scripts/ci/create-evidence-artifact.mjs --check ios-ui-core-journey-shard --output-directory evidence/ios-ui-shard --status "$SPOTT_JOB_STATUS"
+          printf 'artifact-name=%s\n' 'ios-ui-shard' >> "$GITHUB_OUTPUT"
+      - name: Upload UI evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ios-ui-shard
+          path: |
+            evidence/ios-ui-shard/report.json
+            evidence/ios-ui-shard/artifact-manifest.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  ios_unit_release:
+    name: ios-unit-release
+    runs-on: macos-26
+    timeout-minutes: 10
+    needs:
+      - ios_unit_release_shard
+    if: ${{ always() }}
+    steps:
+      - name: Check out verifier inputs
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Select locked Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Download exact shard evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: ios-unit-shard
+          path: aggregator-input/unit
+          merge-multiple: false
+      - name: Verify every need and SHA manifest
+        env:
+          SPOTT_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          node scripts/ci/verify-aggregator.mjs \
+            --expected-needs ios_unit_release_shard \
+            --artifacts-root aggregator-input/unit \
+            --output-directory evidence/ios-unit-release-status
+      - name: Upload aggregator evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ios-unit-release-status
+          path: |
+            evidence/ios-unit-release-status/aggregator-status.json
+            evidence/ios-unit-release-status/artifact-manifest.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  ios_ui_core_journey:
+    name: ios-ui-core-journey
+    runs-on: macos-26
+    timeout-minutes: 10
+    needs:
+      - ios_ui_core_journey_shard
+    if: ${{ always() }}
+    steps:
+      - name: Check out verifier inputs
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Select locked Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Download exact shard evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: ios-ui-shard
+          path: aggregator-input/ui
+          merge-multiple: false
+      - name: Verify every need and SHA manifest
+        env:
+          SPOTT_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          node scripts/ci/verify-aggregator.mjs \
+            --expected-needs ios_ui_core_journey_shard \
+            --artifacts-root aggregator-input/ui \
+            --output-directory evidence/ios-ui-core-journey-status
+      - name: Upload aggregator evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ios-ui-core-journey-status
+          path: |
+            evidence/ios-ui-core-journey-status/aggregator-status.json
+            evidence/ios-ui-core-journey-status/artifact-manifest.sha256
+          if-no-files-found: error
+          retention-days: 7

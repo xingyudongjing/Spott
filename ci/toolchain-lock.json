@@ -1,0 +1,184 @@
+{
+  "$schema": "./toolchain-lock.schema.json",
+  "schemaVersion": 1,
+  "node": {
+    "version": "24.18.0"
+  },
+  "pnpm": {
+    "version": "11.5.2"
+  },
+  "xcode": {
+    "version": "26.6",
+    "build": "17F113",
+    "path": "/Applications/Xcode.app/Contents/Developer"
+  },
+  "iosSimulatorRuntime": {
+    "version": "26.5",
+    "build": "23F77",
+    "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-26-5"
+  },
+  "java": {
+    "status": "not_applicable",
+    "sentinelExtensions": [".java", ".kt", ".kts"],
+    "sentinelBuildFiles": [
+      "build.gradle",
+      "build.gradle.kts",
+      "settings.gradle",
+      "settings.gradle.kts",
+      "pom.xml",
+      "gradlew"
+    ]
+  },
+  "localFiles": [
+    {
+      "path": "package.json",
+      "sha256": "c7aa1915679de5176ab9cc71bfdce5d0616955f025485005288ee2127a8620f5"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "sha256": "2efcabe5330267b69063a457225309e39bd77290aeb9324d6ae095fd22d61507"
+    },
+    {
+      "path": "Spott.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",
+      "sha256": "eae239dd13431df4df93d751ec78cdc5f17bb1146adb7f36945f604cf0d4e04e"
+    }
+  ],
+  "containers": {
+    "playwright": {
+      "version": "1.61.1",
+      "tag": "v1.61.1-noble",
+      "reference": "mcr.microsoft.com/playwright@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48",
+      "platform": "linux/amd64",
+      "origin": {
+        "url": "https://github.com/microsoft/playwright",
+        "license": "Apache-2.0"
+      },
+      "packageVersion": "1.61.1",
+      "chromium": {
+        "path": "/ms-playwright/chromium-1228/chrome-linux64/chrome",
+        "revision": "1228 / Chromium 149.0.7827.55",
+        "bytes": 278568152,
+        "sha256": "2d18db9d8608b052b6a552ee00ec1e830f93692e928b65ecc67d693bd33fe801"
+      },
+      "ffmpeg": {
+        "path": "/ms-playwright/ffmpeg-1011/ffmpeg-linux",
+        "revision": "1011",
+        "bytes": 5101056,
+        "sha256": "460d44f3416005662f528d4b92e7b94ace924e8a0288106d3803b73c56eaadc8"
+      }
+    },
+    "postgis": {
+      "version": "PostgreSQL 18 / PostGIS 3.6 Alpine",
+      "tag": "18-3.6-alpine",
+      "reference": "postgis/postgis@sha256:05d68c7f0f19b9aa0bf7c4a2049b2e8b38b44a63116392b95726a4c913766cf6",
+      "platform": "linux/amd64",
+      "origin": {
+        "url": "https://github.com/postgis/docker-postgis",
+        "license": "MIT"
+      }
+    },
+    "minio": {
+      "version": "RELEASE.2025-04-22T22-12-26Z",
+      "tag": "RELEASE.2025-04-22T22-12-26Z",
+      "reference": "minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e",
+      "platform": "linux/amd64",
+      "origin": {
+        "url": "https://github.com/minio/minio",
+        "license": "AGPL-3.0-only"
+      }
+    },
+    "minioClient": {
+      "version": "RELEASE.2025-04-16T18-13-26Z",
+      "tag": "RELEASE.2025-04-16T18-13-26Z",
+      "reference": "minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3",
+      "platform": "linux/amd64",
+      "origin": {
+        "url": "https://github.com/minio/mc",
+        "license": "AGPL-3.0-only"
+      }
+    },
+    "redis": {
+      "version": "8-alpine",
+      "tag": "8-alpine",
+      "reference": "redis@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005",
+      "platform": "linux/amd64",
+      "origin": {
+        "url": "https://github.com/redis/docker-library-redis",
+        "license": "MIT"
+      }
+    },
+    "mailpit": {
+      "version": "1.27.7",
+      "tag": "v1.27.7",
+      "reference": "axllent/mailpit@sha256:cae83a33cd9b9598e4acb210be673dda7e741d5271ed4045310ab456950a136a",
+      "platform": "linux/amd64",
+      "origin": {
+        "url": "https://github.com/axllent/mailpit",
+        "license": "MIT"
+      }
+    },
+    "clamav": {
+      "version": "1.4.3",
+      "tag": "1.4.3",
+      "reference": "clamav/clamav@sha256:75fb5fd95fcbe1d7e6d240c369c1572b686ee2c95949d1042b5148de8eddebb4",
+      "platform": "linux/amd64",
+      "origin": {
+        "url": "https://github.com/Cisco-Talos/clamav-docker",
+        "license": "GPL-2.0-only"
+      }
+    }
+  },
+  "downloads": {
+    "k6": {
+      "version": "2.0.0 linux-amd64",
+      "url": "https://github.com/grafana/k6/releases/download/v2.0.0/k6-v2.0.0-linux-amd64.tar.gz",
+      "bytes": 29494294,
+      "sha256": "2ae87d976f6cdba17185bdd980d8819a3a98e9092c6f0638cd58272ecefc8b90",
+      "archiveFormat": "tar.gz",
+      "origin": {
+        "url": "https://github.com/grafana/k6",
+        "license": "AGPL-3.0-only"
+      }
+    },
+    "postgresql18Client": {
+      "version": "18.4 source",
+      "url": "https://ftp.postgresql.org/pub/source/v18.4/postgresql-18.4.tar.bz2",
+      "bytes": 22567173,
+      "sha256": "81a81ec695fb0c7901407defaa1d2f7973617154cf27ba74e3a7ab8e64436094",
+      "archiveFormat": "tar.bz2",
+      "origin": {
+        "url": "https://www.postgresql.org/ftp/source/v18.4/",
+        "license": "PostgreSQL"
+      }
+    },
+    "macosArm64PostgresPostgis": {
+      "version": "Postgres.app 2.9.5 / PostgreSQL 18.4 / PostGIS 3.6.3",
+      "url": "https://github.com/PostgresApp/PostgresApp/releases/download/v2.9.5/Postgres-2.9.5-18.dmg",
+      "bytes": 122437182,
+      "sha256": "48c1bc37ae35330cd4c73234d7ba6069f34124a6a5f9f2b093cc247a9f6b07e8",
+      "archiveFormat": "dmg",
+      "origin": {
+        "url": "https://github.com/PostgresApp/PostgresApp",
+        "license": "PostgreSQL"
+      },
+      "signature": {
+        "policy": "required",
+        "path": "Postgres.app",
+        "authority": "Developer ID Application: Jakob Egger (ZF84SJ5A3G)",
+        "teamIdentifier": "ZF84SJ5A3G"
+      },
+      "expectedPostgresVersion": "postgres (PostgreSQL) 18.4 (Postgres.app)",
+      "expectedPostgisFullVersion": {
+        "postgisRevision": "3.6.3 3d12666",
+        "pgsql": "180",
+        "geos": "3.14.1-CAPI-1.20.5",
+        "proj": "9.7.1",
+        "networkEnabled": "OFF",
+        "libxml": "2.15.3",
+        "libjson": "0.18",
+        "libprotobuf": "1.5.2",
+        "wagyu": "0.5.0 (Internal)"
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "checks": [
+    "nightly-load-concurrency",
+    "nightly-accessibility-performance",
+    "nightly-backup-restore"
+  ]
+}

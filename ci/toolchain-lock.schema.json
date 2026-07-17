@@ -1,0 +1,270 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spott.invalid/schemas/toolchain-lock.schema.json",
+  "title": "Spott immutable CI toolchain lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "node",
+    "pnpm",
+    "xcode",
+    "iosSimulatorRuntime",
+    "java",
+    "localFiles",
+    "containers",
+    "downloads"
+  ],
+  "properties": {
+    "$schema": { "const": "./toolchain-lock.schema.json" },
+    "schemaVersion": { "const": 1 },
+    "node": { "$ref": "#/$defs/exactVersion" },
+    "pnpm": { "$ref": "#/$defs/exactVersion" },
+    "xcode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "build", "path"],
+      "properties": {
+        "version": { "$ref": "#/$defs/versionString" },
+        "build": { "type": "string", "pattern": "^[A-Za-z0-9.]+$" },
+        "path": { "const": "/Applications/Xcode.app/Contents/Developer" }
+      }
+    },
+    "iosSimulatorRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "build", "identifier"],
+      "properties": {
+        "version": { "$ref": "#/$defs/versionString" },
+        "build": { "type": "string", "pattern": "^[A-Za-z0-9.]+$" },
+        "identifier": {
+          "type": "string",
+          "pattern": "^com\\.apple\\.CoreSimulator\\.SimRuntime\\.iOS-[0-9-]+$"
+        }
+      }
+    },
+    "java": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "sentinelExtensions", "sentinelBuildFiles"],
+      "properties": {
+        "status": { "const": "not_applicable" },
+        "sentinelExtensions": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": { "enum": [".java", ".kt", ".kts"] }
+        },
+        "sentinelBuildFiles": {
+          "type": "array",
+          "minItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "build.gradle",
+              "build.gradle.kts",
+              "settings.gradle",
+              "settings.gradle.kts",
+              "pom.xml",
+              "gradlew"
+            ]
+          }
+        }
+      }
+    },
+    "localFiles": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/localFile" }
+    },
+    "containers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["playwright", "postgis", "minio", "minioClient", "redis", "mailpit", "clamav"],
+      "properties": {
+        "playwright": { "$ref": "#/$defs/playwrightContainer" },
+        "postgis": { "$ref": "#/$defs/container" },
+        "minio": { "$ref": "#/$defs/container" },
+        "minioClient": { "$ref": "#/$defs/container" },
+        "redis": { "$ref": "#/$defs/container" },
+        "mailpit": { "$ref": "#/$defs/container" },
+        "clamav": { "$ref": "#/$defs/container" }
+      }
+    },
+    "downloads": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["k6", "postgresql18Client", "macosArm64PostgresPostgis"],
+      "properties": {
+        "k6": { "$ref": "#/$defs/download" },
+        "postgresql18Client": { "$ref": "#/$defs/download" },
+        "macosArm64PostgresPostgis": { "$ref": "#/$defs/signedDownload" }
+      }
+    }
+  },
+  "$defs": {
+    "versionString": {
+      "type": "string",
+      "pattern": "^[0-9]+(?:\\.[0-9]+){1,3}(?:[-+][0-9A-Za-z.-]+)?$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "httpsUrl": { "type": "string", "pattern": "^https://[^\\s]+$" },
+    "exactVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version"],
+      "properties": { "version": { "$ref": "#/$defs/versionString" } }
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "license"],
+      "properties": {
+        "url": { "$ref": "#/$defs/httpsUrl" },
+        "license": { "type": "string", "minLength": 2, "maxLength": 80 }
+      }
+    },
+    "localFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000]+$"
+        },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "tag", "reference", "platform", "origin"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "tag": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "reference": {
+          "type": "string",
+          "pattern": "^[^\\s@]+@sha256:[a-f0-9]{64}$"
+        },
+        "platform": { "enum": ["linux/amd64", "linux/arm64"] },
+        "origin": { "$ref": "#/$defs/origin" }
+      }
+    },
+    "binaryEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "revision", "bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^/[^\\u0000]+$" },
+        "revision": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "playwrightContainer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "tag",
+        "reference",
+        "platform",
+        "origin",
+        "packageVersion",
+        "chromium",
+        "ffmpeg"
+      ],
+      "properties": {
+        "version": { "const": "1.61.1" },
+        "tag": { "const": "v1.61.1-noble" },
+        "reference": {
+          "type": "string",
+          "pattern": "^mcr\\.microsoft\\.com/playwright@sha256:[a-f0-9]{64}$"
+        },
+        "platform": { "const": "linux/amd64" },
+        "origin": { "$ref": "#/$defs/origin" },
+        "packageVersion": { "const": "1.61.1" },
+        "chromium": { "$ref": "#/$defs/binaryEvidence" },
+        "ffmpeg": { "$ref": "#/$defs/binaryEvidence" }
+      }
+    },
+    "download": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "url", "bytes", "sha256", "archiveFormat", "origin"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "url": { "$ref": "#/$defs/httpsUrl" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "archiveFormat": { "enum": ["tar.gz", "tar.bz2", "tar.xz", "zip", "pkg", "dmg"] },
+        "origin": { "$ref": "#/$defs/origin" }
+      }
+    },
+    "signedDownload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "url",
+        "bytes",
+        "sha256",
+        "archiveFormat",
+        "origin",
+        "signature",
+        "expectedPostgresVersion",
+        "expectedPostgisFullVersion"
+      ],
+      "properties": {
+        "version": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "url": { "$ref": "#/$defs/httpsUrl" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "archiveFormat": { "enum": ["dmg"] },
+        "origin": { "$ref": "#/$defs/origin" },
+        "signature": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["policy", "path", "authority", "teamIdentifier"],
+          "properties": {
+            "policy": { "const": "required" },
+            "path": { "type": "string", "minLength": 1, "maxLength": 240 },
+            "authority": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "teamIdentifier": { "type": "string", "minLength": 1, "maxLength": 40 }
+          }
+        },
+        "expectedPostgresVersion": { "type": "string", "minLength": 1 },
+        "expectedPostgisFullVersion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "postgisRevision",
+            "pgsql",
+            "geos",
+            "proj",
+            "networkEnabled",
+            "libxml",
+            "libjson",
+            "libprotobuf",
+            "wagyu"
+          ],
+          "properties": {
+            "postgisRevision": { "type": "string", "minLength": 1 },
+            "pgsql": { "type": "string", "minLength": 1 },
+            "geos": { "type": "string", "minLength": 1 },
+            "proj": { "type": "string", "minLength": 1 },
+            "networkEnabled": { "enum": ["ON", "OFF"] },
+            "libxml": { "type": "string", "minLength": 1 },
+            "libjson": { "type": "string", "minLength": 1 },
+            "libprotobuf": { "type": "string", "minLength": 1 },
+            "wagyu": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

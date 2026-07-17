@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "path": "apps/web/tests/discovery-rendered.spec.ts",
+      "gate": "web-core-journey",
+      "kind": "browser-e2e"
+    },
+    {
+      "path": "scripts/ci/run-postgres-integration.ts",
+      "gate": "postgres-integration",
+      "kind": "database-runner"
+    },
+    {
+      "path": "scripts/ci/run-verified-playwright.mjs",
+      "gate": "web-core-journey",
+      "kind": "browser-runner"
+    },
+    {
+      "path": "scripts/e2e/database-harness.postgres.integration.test.ts",
+      "gate": "postgres-integration",
+      "kind": "database-ownership-integration"
+    },
+    {
+      "path": "scripts/run-core-journey-e2e.ts",
+      "gate": "web-core-journey",
+      "kind": "e2e-runner"
+    },
+    {
+      "path": "scripts/test-postgis.ts",
+      "gate": "postgres-integration",
+      "kind": "database-replay"
+    },
+    {
+      "path": "services/api/src/modules/auth/auth.session-migration.integration.spec.ts",
+      "gate": "postgres-integration",
+      "kind": "service-integration"
+    },
+    {
+      "path": "services/api/src/modules/auth/auth.session.integration.spec.ts",
+      "gate": "postgres-integration",
+      "kind": "service-integration"
+    },
+    {
+      "path": "services/api/src/modules/auth/web-bff-boundary.integration.spec.ts",
+      "gate": "postgres-integration",
+      "kind": "service-integration"
+    },
+    {
+      "path": "services/api/src/modules/events/events.discovery.integration.spec.ts",
+      "gate": "postgres-integration",
+      "kind": "service-integration"
+    },
+    {
+      "path": "services/api/src/modules/registrations/registrations.concurrency.integration.spec.ts",
+      "gate": "postgres-integration",
+      "kind": "service-integration"
+    },
+    {
+      "path": "tests/e2e/api-permission-matrix.spec.ts",
+      "gate": "web-core-journey",
+      "kind": "browser-e2e"
+    },
+    {
+      "path": "tests/e2e/core-journey.spec.ts",
+      "gate": "web-core-journey",
+      "kind": "browser-e2e"
+    },
+    {
+      "path": "tests/integration/media-upload-idempotency.test.ts",
+      "gate": "postgres-integration",
+      "kind": "service-integration"
+    }
+  ]
+}

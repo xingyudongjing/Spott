@@ -1,0 +1,566 @@
+name: CI
+
+"on":
+  pull_request: {}
+  merge_group: {}
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "24.18.0"
+  PNPM_VERSION: "11.5.2"
+  PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+
+jobs:
+  contracts_shard:
+    name: contracts and generated artifacts shard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      artifact-name: ${{ steps.evidence.outputs.artifact-name }}
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select locked Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Verify immutable toolchain inputs
+        run: >-
+          node scripts/ci/verify-toolchain-lock.mjs
+          --lock ci/toolchain-lock.json
+          --schema ci/toolchain-lock.schema.json
+          --repo-root .
+      - name: Remove generated state
+        run: node scripts/ci/prepare-required-job.mjs --repo-root .
+      - name: Install the frozen workspace
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack install --global "pnpm@${PNPM_VERSION}"
+          corepack pnpm install --frozen-lockfile
+      - name: Verify repository contracts and generated output
+        run: |
+          set -euo pipefail
+          corepack pnpm test:quality:ci
+          corepack pnpm check:generated
+      - name: Verify migration history against the event base
+        run: >-
+          node scripts/ci/verify-migrations-for-event.mjs
+          --event-name "$GITHUB_EVENT_NAME"
+          --event-path "$GITHUB_EVENT_PATH"
+          --head-sha "$GITHUB_SHA"
+          --repo-root .
+      - name: Create bounded shard evidence
+        id: evidence
+        if: ${{ always() }}
+        env:
+          SPOTT_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          node scripts/ci/create-evidence-artifact.mjs --check contracts-generated-shard --output-directory evidence/ci-contracts-shard --status "$SPOTT_JOB_STATUS"
+          printf 'artifact-name=%s\n' 'ci-contracts-shard' >> "$GITHUB_OUTPUT"
+      - name: Upload contracts evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-contracts-shard
+          path: |
+            evidence/ci-contracts-shard/report.json
+            evidence/ci-contracts-shard/artifact-manifest.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  node_quality_shard:
+    name: Node quality shard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      artifact-name: ${{ steps.evidence.outputs.artifact-name }}
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Select locked Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Verify immutable toolchain inputs
+        run: >-
+          node scripts/ci/verify-toolchain-lock.mjs
+          --lock ci/toolchain-lock.json
+          --schema ci/toolchain-lock.schema.json
+          --repo-root .
+      - name: Remove generated state
+        run: node scripts/ci/prepare-required-job.mjs --repo-root .
+      - name: Install the frozen workspace
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack install --global "pnpm@${PNPM_VERSION}"
+          corepack pnpm install --frozen-lockfile
+      - name: Run uncached Node gates
+        run: corepack pnpm exec turbo run lint typecheck test build --force
+      - name: Create bounded shard evidence
+        id: evidence
+        if: ${{ always() }}
+        env:
+          SPOTT_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          node scripts/ci/create-evidence-artifact.mjs --check node-quality-shard --output-directory evidence/ci-node-shard --status "$SPOTT_JOB_STATUS"
+          printf 'artifact-name=%s\n' 'ci-node-shard' >> "$GITHUB_OUTPUT"
+      - name: Upload Node evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-node-shard
+          path: |
+            evidence/ci-node-shard/report.json
+            evidence/ci-node-shard/artifact-manifest.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  postgres_integration_shard:
+    name: PostgreSQL integration shard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    outputs:
+      artifact-name: ${{ steps.evidence.outputs.artifact-name }}
+    services:
+      postgres:
+        image: postgis/postgis@sha256:05d68c7f0f19b9aa0bf7c4a2049b2e8b38b44a63116392b95726a4c913766cf6
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - "127.0.0.1:5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SPOTT_CI_ADMIN_DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Select locked Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Verify immutable toolchain inputs
+        run: >-
+          node scripts/ci/verify-toolchain-lock.mjs
+          --lock ci/toolchain-lock.json
+          --schema ci/toolchain-lock.schema.json
+          --repo-root .
+      - name: Remove generated state
+        run: node scripts/ci/prepare-required-job.mjs --repo-root .
+      - name: Install the frozen workspace
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack install --global "pnpm@${PNPM_VERSION}"
+          corepack pnpm install --frozen-lockfile
+      - name: Replay migrations and run real PostgreSQL integration tests
+        run: corepack pnpm test:integration:postgres
+      - name: Create bounded shard evidence
+        id: evidence
+        if: ${{ always() }}
+        env:
+          SPOTT_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          node scripts/ci/create-evidence-artifact.mjs --check postgres-integration-shard --output-directory evidence/ci-postgres-shard --status "$SPOTT_JOB_STATUS"
+          printf 'artifact-name=%s\n' 'ci-postgres-shard' >> "$GITHUB_OUTPUT"
+      - name: Upload PostgreSQL evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-postgres-shard
+          path: |
+            evidence/ci-postgres-shard/report.json
+            evidence/ci-postgres-shard/artifact-manifest.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  web_core_journey_shard:
+    name: Web core journey shard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    outputs:
+      artifact-name: ${{ steps.evidence.outputs.artifact-name }}
+    services:
+      postgres:
+        image: postgis/postgis@sha256:05d68c7f0f19b9aa0bf7c4a2049b2e8b38b44a63116392b95726a4c913766cf6
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - "127.0.0.1:5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Select locked Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Verify immutable toolchain inputs
+        run: >-
+          node scripts/ci/verify-toolchain-lock.mjs
+          --lock ci/toolchain-lock.json
+          --schema ci/toolchain-lock.schema.json
+          --repo-root .
+      - name: Remove generated state
+        run: node scripts/ci/prepare-required-job.mjs --repo-root .
+      - name: Install the frozen workspace
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack install --global "pnpm@${PNPM_VERSION}"
+          corepack pnpm install --frozen-lockfile
+      - name: Run the production journey in locked Chromium
+        run: |
+          set -euo pipefail
+          docker run --rm --network host \
+            --volume "$GITHUB_WORKSPACE:/work" \
+            --workdir /work \
+            --env CI=true \
+            --env PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+            --env SPOTT_E2E_DATABASE_MODE=linux-service \
+            --env SPOTT_E2E_ADMIN_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres \
+            mcr.microsoft.com/playwright@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48 \
+            bash -euo pipefail -c '
+              test "$(node --version)" = "v24.18.0"
+              corepack enable
+              test "$(corepack pnpm --version)" = "11.5.2"
+              corepack pnpm test:e2e:core:web
+            '
+      - name: Create bounded shard evidence
+        id: evidence
+        if: ${{ always() }}
+        env:
+          SPOTT_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          node scripts/ci/create-evidence-artifact.mjs --check web-core-journey-shard --output-directory evidence/ci-web-shard --status "$SPOTT_JOB_STATUS"
+          printf 'artifact-name=%s\n' 'ci-web-shard' >> "$GITHUB_OUTPUT"
+      - name: Upload Web evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-web-shard
+          path: |
+            evidence/ci-web-shard/report.json
+            evidence/ci-web-shard/artifact-manifest.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  security_supply_chain_shard:
+    name: Security and supply-chain shard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      artifact-name: ${{ steps.evidence.outputs.artifact-name }}
+    steps:
+      - name: Check out complete immutable history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select locked Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Verify immutable toolchain inputs
+        run: >-
+          node scripts/ci/verify-toolchain-lock.mjs
+          --lock ci/toolchain-lock.json
+          --schema ci/toolchain-lock.schema.json
+          --repo-root .
+      - name: Remove generated state
+        run: node scripts/ci/prepare-required-job.mjs --repo-root .
+      - name: Install the frozen workspace
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack install --global "pnpm@${PNPM_VERSION}"
+          corepack pnpm install --frozen-lockfile
+      - name: Scan complete history and dependencies
+        run: |
+          set -euo pipefail
+          mkdir -p output/security
+          node scripts/ci/scan-repository-secrets.mjs --repo-root . --allowlist ci/secret-scan-allowlist.json --report output/security/repository-secret-scan.json
+          corepack pnpm audit --audit-level high
+      - name: Build and inspect distributable artifacts
+        run: |
+          set -euo pipefail
+          corepack pnpm exec turbo run build --force
+          node scripts/ci/scan-built-artifacts.mjs --allowlist ci/artifact-scan-allowlist.json --report output/security/built-artifact-scan.json --artifact api=services/api/dist --artifact ops=apps/ops/.vinext --artifact web=apps/web/.vinext --artifact worker=services/worker/dist
+      - name: Create bounded shard evidence
+        id: evidence
+        if: ${{ always() }}
+        env:
+          SPOTT_JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          node scripts/ci/create-evidence-artifact.mjs --check security-supply-chain-shard --output-directory evidence/ci-security-shard --status "$SPOTT_JOB_STATUS"
+          printf 'artifact-name=%s\n' 'ci-security-shard' >> "$GITHUB_OUTPUT"
+      - name: Upload security evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-security-shard
+          path: |
+            evidence/ci-security-shard/report.json
+            evidence/ci-security-shard/artifact-manifest.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  contracts_generated:
+    name: contracts-generated
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs:
+      - contracts_shard
+    if: ${{ always() }}
+    steps:
+      - name: Check out verifier inputs
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Select locked Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Download exact shard evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: ci-contracts-shard
+          path: aggregator-input/contracts
+          merge-multiple: false
+      - name: Verify every need and SHA manifest
+        env:
+          SPOTT_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          node scripts/ci/verify-aggregator.mjs \
+            --expected-needs contracts_shard \
+            --artifacts-root aggregator-input/contracts \
+            --output-directory evidence/contracts-generated-status
+      - name: Upload aggregator evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-contracts-generated-status
+          path: |
+            evidence/contracts-generated-status/aggregator-status.json
+            evidence/contracts-generated-status/artifact-manifest.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  node_quality:
+    name: node-quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs:
+      - node_quality_shard
+    if: ${{ always() }}
+    steps:
+      - name: Check out verifier inputs
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Select locked Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Download exact shard evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: ci-node-shard
+          path: aggregator-input/node
+          merge-multiple: false
+      - name: Verify every need and SHA manifest
+        env:
+          SPOTT_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          node scripts/ci/verify-aggregator.mjs \
+            --expected-needs node_quality_shard \
+            --artifacts-root aggregator-input/node \
+            --output-directory evidence/node-quality-status
+      - name: Upload aggregator evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-node-quality-status
+          path: |
+            evidence/node-quality-status/aggregator-status.json
+            evidence/node-quality-status/artifact-manifest.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  postgres_integration:
+    name: postgres-integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs:
+      - postgres_integration_shard
+    if: ${{ always() }}
+    steps:
+      - name: Check out verifier inputs
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Select locked Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Download exact shard evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: ci-postgres-shard
+          path: aggregator-input/postgres
+          merge-multiple: false
+      - name: Verify every need and SHA manifest
+        env:
+          SPOTT_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          node scripts/ci/verify-aggregator.mjs \
+            --expected-needs postgres_integration_shard \
+            --artifacts-root aggregator-input/postgres \
+            --output-directory evidence/postgres-integration-status
+      - name: Upload aggregator evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-postgres-integration-status
+          path: |
+            evidence/postgres-integration-status/aggregator-status.json
+            evidence/postgres-integration-status/artifact-manifest.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  web_core_journey:
+    name: web-core-journey
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs:
+      - web_core_journey_shard
+    if: ${{ always() }}
+    steps:
+      - name: Check out verifier inputs
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Select locked Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Download exact shard evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: ci-web-shard
+          path: aggregator-input/web
+          merge-multiple: false
+      - name: Verify every need and SHA manifest
+        env:
+          SPOTT_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          node scripts/ci/verify-aggregator.mjs \
+            --expected-needs web_core_journey_shard \
+            --artifacts-root aggregator-input/web \
+            --output-directory evidence/web-core-journey-status
+      - name: Upload aggregator evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-web-core-journey-status
+          path: |
+            evidence/web-core-journey-status/aggregator-status.json
+            evidence/web-core-journey-status/artifact-manifest.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  security_supply_chain:
+    name: security-supply-chain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs:
+      - security_supply_chain_shard
+    if: ${{ always() }}
+    steps:
+      - name: Check out verifier inputs
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Select locked Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: false
+      - name: Download exact shard evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: ci-security-shard
+          path: aggregator-input/security
+          merge-multiple: false
+      - name: Verify every need and SHA manifest
+        env:
+          SPOTT_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          node scripts/ci/verify-aggregator.mjs \
+            --expected-needs security_supply_chain_shard \
+            --artifacts-root aggregator-input/security \
+            --output-directory evidence/security-supply-chain-status
+      - name: Upload aggregator evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-security-supply-chain-status
+          path: |
+            evidence/security-supply-chain-status/aggregator-status.json
+            evidence/security-supply-chain-status/artifact-manifest.sha256
+          if-no-files-found: error
+          retention-days: 7

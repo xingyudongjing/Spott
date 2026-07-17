@@ -6,6 +6,7 @@ import { configuration } from '../../config.js';
 import { Database } from '../../platform/database.js';
 import { IdempotencyService } from '../../platform/idempotency.js';
 import type { AuthenticatedUser } from '../../platform/request-context.js';
+import { ReferralService } from '../growth/referral.service.js';
 import { PointsService } from '../points/points.service.js';
 
 const MAX_CHECKIN_WINDOW_MINUTES = 525_600;
@@ -111,6 +112,10 @@ export class RegistrationsService {
     private readonly database: Database,
     private readonly idempotency: IdempotencyService,
     private readonly points: PointsService,
+    // Injected by Nest in production; optional so the existing unit tests that construct the
+    // service with a narrow dependency set stay valid. The invite reward is a best-effort side
+    // effect of a real check-in and never blocks attendance crediting.
+    private readonly referral?: ReferralService,
   ) {}
 
   async register(
@@ -934,6 +939,7 @@ export class RegistrationsService {
         registration.id,
       ]);
       const reward = await this.awardAttendance(client, user.id, registration);
+      await this.referral?.grantReferralReward(client, user.id);
       const row = await this.load(client, registration.id, false);
       await this.recordChange(client, user.id, row.id, row.event_id, Number(row.version), row.status);
       const body = { ...this.toView(row), rewardPoints: reward };
@@ -997,6 +1003,7 @@ export class RegistrationsService {
       }
       await client.query("UPDATE events.registrations SET status = 'checked_in' WHERE id = $1", [registration.id]);
       const reward = await this.awardAttendance(client, registration.user_id, registration);
+      await this.referral?.grantReferralReward(client, registration.user_id);
       const row = await this.load(client, registration.id, false);
       await this.recordChange(client, registration.user_id, row.id, row.event_id, Number(row.version), row.status);
       const body = { ...this.toView(row), rewardPoints: reward, checkinMethod: method };
@@ -1078,6 +1085,7 @@ export class RegistrationsService {
         ]);
         const registration = await this.load(client, correction.registration_id, false);
         reward = await this.awardAttendance(client, correction.user_id, registration);
+        await this.referral?.grantReferralReward(client, correction.user_id);
       } else {
         await client.query("UPDATE events.registrations SET status = 'no_show' WHERE id = $1", [
           correction.registration_id,

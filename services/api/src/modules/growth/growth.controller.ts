@@ -2,10 +2,14 @@ import { Body, Controller, Get, Param, Post, Req } from '@nestjs/common';
 import { z } from 'zod';
 import { CurrentUser, Public, type AuthenticatedUser, type SpottRequest } from '../../platform/request-context.js';
 import { GrowthService } from './growth.service.js';
+import { ReferralService } from './referral.service.js';
 
 @Controller()
 export class GrowthController {
-  constructor(private readonly growth: GrowthService) {}
+  constructor(
+    private readonly growth: GrowthService,
+    private readonly referral: ReferralService,
+  ) {}
 
   @Post('shares')
   createShare(@CurrentUser() user: AuthenticatedUser, @Body() body: unknown) {
@@ -13,8 +17,15 @@ export class GrowthController {
       resourceType: z.enum(['event', 'group', 'profile']),
       resourceId: z.string().uuid(),
       campaign: z.string().max(80).optional(),
+      channel: z.enum(['copy_link', 'line', 'x', 'instagram', 'qr', 'other']).optional(),
+      purpose: z.enum(['share', 'invite']).default('share'),
     }).parse(body);
     return this.growth.createShare(user.id, input);
+  }
+
+  @Post('shares/:code/accept')
+  acceptInvite(@CurrentUser() user: AuthenticatedUser, @Param('code') code: string) {
+    return this.referral.acceptInvite(user.id, code);
   }
 
   @Public()

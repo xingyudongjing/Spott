@@ -47,6 +47,32 @@ describe('ReferralService.grantReferralReward', () => {
     expect(selectSql).toMatch(/days'\)::interval/);
   });
 
+  it('skips cleanly without calling credit when the configured reward is zero', async () => {
+    // This runs inside the check-in transaction; credit() rejects amount <= 0, so a
+    // reward disabled via config (points.reward.referral = 0) must not throw and roll
+    // back the check-in.
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ id: 'attr-1', inviter_id: INVITER, share_link_id: SHARE }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ count: '0' }], rowCount: 1 });
+    const credit = vi.fn(async () => {
+      throw new Error('credit must not be called when reward is zero');
+    });
+    const points = pointsStub(credit);
+    points.configBigInt = vi.fn(async (_client: unknown, key: string, fallback: bigint) => {
+      if (key === 'points.reward.referral') return 0n;
+      if (key === 'points.limit.referral.monthly') return 5n;
+      if (key === 'referral.attribution.window_days') return 30n;
+      return fallback;
+    });
+    const service = new ReferralService({ query } as never, points as never);
+
+    const result = await service.grantReferralReward({ query } as never, INVITEE);
+
+    expect(result).toEqual({ rewarded: false });
+    expect(credit).not.toHaveBeenCalled();
+  });
+
   it('does nothing when there is no valid invite attribution', async () => {
     const query = vi.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 });
     const points = pointsStub();

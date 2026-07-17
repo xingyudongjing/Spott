@@ -129,6 +129,11 @@ export class ReferralService {
     if (BigInt(awarded.rows[0]?.count ?? '0') >= cap) return { rewarded: false, capped: true };
 
     const amount = await this.points.configBigInt(client, 'points.reward.referral', 100n);
+    // The reward runs inside the check-in transaction, so it must never throw:
+    // credit() rejects amount <= 0, and setting points.reward.referral to 0 is the
+    // natural way an operator disables invite rewards. Skip cleanly in that case so
+    // disabling the reward can never roll back a check-in.
+    if (amount <= 0n) return { rewarded: false };
     await this.points.credit(
       client,
       winner.inviter_id,

@@ -15,6 +15,7 @@ import {
   type RegistrationItineraryPage,
 } from "../../lib/event-contract";
 import { groupItinerary, type ItineraryGroup } from "../../lib/itinerary";
+import { getSyncEngine } from "../../lib/sync-engine";
 import { DashboardNav } from "../DashboardNav";
 import { ItineraryCard, type ItineraryLoadResult } from "./ItineraryCard";
 import { itineraryCopy } from "./itinerary-copy";
@@ -149,6 +150,19 @@ export function MyEventsClient() {
     setLoading(Boolean(nextOwnerUserId));
     if (nextOwnerUserId) void load();
   }), [load]);
+
+  useEffect(() => {
+    // Converge cross-device changes without a manual pull: when the sync engine
+    // reports authoritative registration/waitlist changes, reload the itinerary
+    // (dev doc §6.4/§6.8). We reload from the API rather than trusting the change
+    // payload so the server state machine stays the source of truth.
+    return getSyncEngine().subscribe((changes) => {
+      const relevant = changes.some(
+        (change) => change.entityType === "registration" || change.entityType === "waitlist",
+      );
+      if (relevant) void load(true);
+    });
+  }, [load]);
 
   useEffect(() => {
     const readRequestedRegistration = () => {

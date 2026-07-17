@@ -18,7 +18,9 @@ interface EmittedEvent {
 // Drives the server-authoritative analytics derivation job with a mocked
 // database so we can assert the North Star population, the P1 funnel snapshot
 // and the P2 business-invariant counters land in analytics.product_events.
-function buildHarness(overrides: { windowConfig?: number | null; outboxDelayConfig?: number | null } = {}) {
+function buildHarness(
+  overrides: { windowConfig?: number | null; outboxDelayConfig?: number | null; snapshotDue?: boolean } = {},
+) {
   const emitted: EmittedEvent[] = [];
   const paramsByMarker = new Map<string, readonly unknown[]>();
 
@@ -34,6 +36,10 @@ function buildHarness(overrides: { windowConfig?: number | null; outboxDelayConf
           return overrides.outboxDelayConfig == null ? result([]) : result([{ value_json: overrides.outboxDelayConfig }]);
         }
         return result([]);
+      }
+      if (text.includes('AS due')) {
+        // Snapshot schedule gate: default to due so the emission-focused tests run.
+        return result([{ due: overrides.snapshotDue ?? true }]);
       }
       if (text.includes('/* metric:northstar */')) {
         paramsByMarker.set('northstar', values);
@@ -76,6 +82,17 @@ function buildHarness(overrides: { windowConfig?: number | null; outboxDelayConf
 describe('deriveAnalyticsMetrics', () => {
   it('is a registered durable worker responsibility', () => {
     expect(jobNames).toContain('deriveAnalyticsMetrics');
+  });
+
+  it('reports no work and emits nothing when the snapshot interval has not elapsed', async () => {
+    // Otherwise processed is always non-zero, the worker loop never idles, and a
+    // duplicate snapshot is written to analytics.product_events every cycle.
+    const { jobs, emitted } = buildHarness({ snapshotDue: false });
+
+    const outcome = await jobs.deriveAnalyticsMetrics();
+
+    expect(outcome.processed).toBe(0);
+    expect(emitted).toHaveLength(0);
   });
 
   it('records the North Star with a configuration-driven retention window', async () => {

@@ -1088,6 +1088,23 @@ export class WorkerJobs {
       const sessionId = randomUUID();
       const windowDays = await this.activeConfigInt(client, 'analytics.northstar.window_days', 60);
       const outboxDelaySeconds = await this.activeConfigInt(client, 'analytics.invariant.outbox_delay_seconds', 60);
+
+      // This is a periodic snapshot, not an event-driven job. Emitting every worker
+      // cycle would make processed always non-zero (the loop never idles) and pile up
+      // duplicate snapshot rows. Only run when the configured interval has elapsed
+      // since the last snapshot; otherwise report no work so the worker can sleep.
+      const snapshotIntervalSeconds = await this.activeConfigInt(
+        client,
+        'analytics.snapshot_interval_seconds',
+        3600,
+      );
+      const due = await client.query<{ due: boolean }>(
+        `SELECT COALESCE(max(occurred_at), 'epoch'::timestamptz)
+                  < clock_timestamp() - make_interval(secs => $1) AS due
+         FROM analytics.product_events WHERE event_name = 'metrics_northstar_recorded'`,
+        [snapshotIntervalSeconds],
+      );
+      if (!due.rows[0]?.due) return { processed: 0 };
       let emitted = 0;
 
       // North Star: real users who, after completing an offline activity (a check-in

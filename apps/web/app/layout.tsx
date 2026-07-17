@@ -6,6 +6,7 @@ import { SiteHeader } from "./components/SiteHeader";
 import { AppDialogProvider } from "./components/AppDialog";
 import { I18nProvider } from "./components/I18nProvider";
 import { ServiceWorkerRegistrar } from "./components/ServiceWorkerRegistrar";
+import { SyncEngineRegistrar } from "./components/SyncEngineRegistrar";
 import { PreviewModeProvider } from "./components/PreviewModeProvider";
 import { formatMessage, type Locale } from "./i18n/messages";
 import { serverLocale } from "./i18n/server";
@@ -72,6 +73,7 @@ export default async function RootLayout({
               <SiteHeader />
               <div id="spott-main-content" tabIndex={-1}>{children}</div>
               <ServiceWorkerRegistrar />
+              <SyncEngineRegistrar />
             </AppDialogProvider>
           </PreviewModeProvider>
         </I18nProvider>

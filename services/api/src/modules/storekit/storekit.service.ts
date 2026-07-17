@@ -247,8 +247,33 @@ export class StoreKitService {
         if (amount > 0n) reversals.push({ bucket: credit.bucket, amount });
       }
     }
-    const reversed = reversals.reduce((sum, entry) => sum + entry.amount, 0n);
+    let paidRequested = 0n;
+    let freeRequested = 0n;
+    for (const entry of reversals) {
+      if (entry.bucket === 'paid') paidRequested += entry.amount;
+      else freeRequested += entry.amount;
+    }
+    const reversed = paidRequested + freeRequested;
     if (reversed <= 0n) return;
+
+    // `commerce.wallets` enforces CHECK (free_balance >= 0) and deliberately allows a
+    // negative paid_balance. Because PointsService.spend allocates free lots first, the
+    // promotional free points granted with a pack are the first thing a user spends, so
+    // by refund time free_balance is usually already 0. Subtracting the granted bonus
+    // unconditionally therefore trips the check and rolls the whole webhook back --
+    // Apple keeps the user's cash refunded while Spott claws nothing back. Instead take
+    // whatever free points still exist and carry the remainder as negative paid points,
+    // which the restriction sweep below turns into a `pointsBlocked` flag.
+    const walletResult = await client.query<{ free_balance: string }>(
+      'SELECT free_balance FROM commerce.wallets WHERE user_id = $1 FOR UPDATE',
+      [order.user_id],
+    );
+    const walletRow = walletResult.rows[0];
+    if (!walletRow) throw new DomainError('WALLET_NOT_FOUND', '积分钱包不存在。', 404);
+    const freeAvailable = BigInt(walletRow.free_balance);
+    const freeReversed = freeRequested < freeAvailable ? freeRequested : freeAvailable;
+    const freeShortfall = freeRequested - freeReversed;
+    const paidReversed = paidRequested + freeShortfall;
 
     const reversal = await client.query<{ id: string }>(
       `INSERT INTO commerce.point_transactions(
@@ -259,14 +284,22 @@ export class StoreKitService {
         order.user_id,
         `storekit_refund:${notificationUUID}`,
         order.points_transaction_id,
-        { orderId: order.id, revocationReason: transaction.revocationReason ?? null },
+        {
+          orderId: order.id,
+          revocationReason: transaction.revocationReason ?? null,
+          paidReversed: paidReversed.toString(),
+          freeReversed: freeReversed.toString(),
+          freeShortfallAsPaidDebt: freeShortfall.toString(),
+        },
       ],
     );
     if (reversal.rowCount === 1) {
       const reversalId = reversal.rows[0]!.id;
-      let paidReversed = 0n;
-      let freeReversed = 0n;
-      for (const entry of reversals) {
+      const postings: Array<{ bucket: 'paid' | 'free'; amount: bigint }> = [
+        ...(paidReversed > 0n ? [{ bucket: 'paid' as const, amount: paidReversed }] : []),
+        ...(freeReversed > 0n ? [{ bucket: 'free' as const, amount: freeReversed }] : []),
+      ];
+      for (const entry of postings) {
         await client.query(
           `INSERT INTO commerce.point_entries(transaction_id, account_code, bucket, amount)
            VALUES ($1, $2, $3, $4), ($1, 'platform:storekit_refunds', $3, $5)`,
@@ -278,8 +311,6 @@ export class StoreKitService {
             entry.amount.toString(),
           ],
         );
-        if (entry.bucket === 'paid') paidReversed += entry.amount;
-        else freeReversed += entry.amount;
       }
       await client.query(
         `UPDATE commerce.wallets

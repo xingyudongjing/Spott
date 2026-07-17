@@ -382,6 +382,65 @@ describe('EventsService event contract', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
+  it('assembles a config-ordered, banner-flagged recommendation feed distinct from search', async () => {
+    const bannerEventId = '019b0000-0000-7000-8100-00000000beef';
+    const interestEventId = '019b0000-0000-7000-8100-00000000cafe';
+    const configRows = [
+      {
+        key: 'discovery.feed',
+        value_json: { moduleOrder: ['interest', 'today'], weights: { interest: 5 } },
+      },
+      {
+        key: 'discovery.operational_banner',
+        value_json: { eventId: bannerEventId, label: '推广/运营推荐', kind: 'operational' },
+      },
+    ];
+    const now = new Date();
+    const soon = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+    const candidateRows = [
+      eventRow({
+        id: bannerEventId,
+        public_slug: 'banner-event',
+        starts_at: soon,
+        interest_overlap: 4,
+        group_followed: false,
+        distance_km: 2,
+      }),
+      eventRow({
+        id: interestEventId,
+        public_slug: 'interest-event',
+        starts_at: soon,
+        interest_overlap: 2,
+        group_followed: false,
+        distance_km: 8,
+      }),
+    ];
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('admin.config_revisions')) return { rows: configRows };
+      return { rows: candidateRows };
+    });
+    const service = new EventsService({ query } as never, {} as never, {} as never, {} as never);
+
+    const feed = (await service.recommendationFeed(undefined, { limit: 20 })) as {
+      banner: { promotional: boolean; label: string; event: { id: string } } | null;
+      modules: Array<{ key: string; title: string; items: Array<{ id: string; recommendation: { components: Record<string, number> } }> }>;
+      moduleOrder: string[];
+      scoringVersion: string;
+    };
+
+    // Module order is taken from the server config, not the client.
+    expect(feed.moduleOrder).toEqual(['interest', 'today']);
+    expect(feed.modules.map((module) => module.key)).toEqual(['interest', 'today']);
+    // Banner is present and always flagged promotional.
+    expect(feed.banner?.promotional).toBe(true);
+    expect(feed.banner?.label).toBe('推广/运营推荐');
+    expect(feed.banner?.event.id).toBe(bannerEventId);
+    // Every ranked item exposes its explainable score components.
+    const interestModule = feed.modules.find((module) => module.key === 'interest');
+    expect(interestModule?.items.length).toBeGreaterThan(0);
+    expect(Object.keys(interestModule?.items[0]?.recommendation.components ?? {})).toContain('interest');
+  });
+
   it('preserves an answered registration question id when the host edits its prompt', async () => {
     const questionId = '019b0000-0000-7000-8200-000000000001';
     const queries: string[] = [];

@@ -18,6 +18,16 @@ import type { AuthenticatedUser } from '../../platform/request-context.js';
 import { PointsService } from '../points/points.service.js';
 import type { DiscoveryQuery, EventFormat, EventLocale } from './events.discovery-query.js';
 import { buildDiscoveryStatement } from './events.discovery-sql.js';
+import {
+  buildRecommendationCandidateStatement,
+  type ViewerCoordinate,
+} from './events.recommendation-sql.js';
+import { parseFeedConfig } from './events.recommendation-config.js';
+import {
+  assembleFeed,
+  type CandidateFeatures,
+  type RecommendationModuleKey,
+} from './events.recommendation.js';
 
 const discoveryCursorSchema = z.object({
   date: z.iso.datetime({ offset: true }),
@@ -145,7 +155,31 @@ interface EventRow {
     url: string | null;
   }>;
   organizer_followed: boolean;
+  group_followed?: boolean;
+  interest_overlap?: number;
+  distance_km?: number | null;
 }
+
+const RECOMMENDATION_MODULE_TITLES: Record<RecommendationModuleKey, string> = {
+  today: '今日可参加',
+  weekend: '本周末',
+  nearby_hot: '附近热门',
+  interest: '兴趣推荐',
+  new_events: '新活动',
+  verified_hosts: '认证局头',
+  followed_updates: '关注群组更新',
+};
+
+// Soft safety demotion inputs. Hard take-downs and account limits are removed in the
+// candidate SQL; these flags only push a still-eligible event down the ranking.
+const SAFETY_DEMOTION_FLAGS = new Set([
+  'alcohol',
+  'late_night',
+  'investment',
+  'gender_limited',
+  'water',
+  'mountain',
+]);
 
 export function serializeRegistrationQuestionOptions(options: string[]): string {
   return JSON.stringify(options);
@@ -178,6 +212,131 @@ export class EventsService {
       serverTime: new Date().toISOString(),
       queryExplanationId: `q_${randomBytes(8).toString('hex')}`,
     };
+  }
+
+  // D1 home feed. Unlike `discovery` (linear search), this returns a personalised,
+  // explainably-scored feed grouped into server-configured modules with at most one
+  // flagged operational banner. Business rules live here; the client only renders.
+  async recommendationFeed(
+    viewer: AuthenticatedUser | undefined,
+    options: DiscoveryQuery,
+  ): Promise<unknown> {
+    const config = await this.loadFeedConfig();
+    const poolSize = Math.max(config.moduleSize * config.moduleOrder.length * 3, 60);
+    const coordinate = this.viewerCoordinate(options);
+    const statement = buildRecommendationCandidateStatement(
+      viewer?.id ?? null,
+      options,
+      poolSize,
+      coordinate,
+    );
+    const result = await this.database.query<EventRow>(statement.text, statement.values);
+
+    const now = new Date();
+    const rowsById = new Map<string, EventRow>();
+    const candidates: CandidateFeatures[] = result.rows.map((row) => {
+      rowsById.set(row.id, row);
+      return this.toCandidateFeatures(row);
+    });
+
+    const feed = assembleFeed(candidates, config, now);
+    const modules = feed.modules.map((module) => ({
+      key: module.key,
+      title: RECOMMENDATION_MODULE_TITLES[module.key],
+      items: module.items.flatMap((item) => {
+        const row = rowsById.get(item.id);
+        if (!row) return [];
+        return [{
+          ...this.toView(row, viewer, false),
+          recommendation: {
+            score: Number(item.score.toFixed(6)),
+            boosted: item.boosted,
+            components: Object.fromEntries(
+              (Object.entries(item.components) as [string, number][]).map(
+                ([key, value]) => [key, Number(value.toFixed(6))],
+              ),
+            ),
+          },
+        }];
+      }),
+    }));
+
+    let banner: Record<string, unknown> | null = null;
+    if (feed.banner) {
+      const row = rowsById.get(feed.banner.eventId);
+      if (row) {
+        banner = {
+          label: feed.banner.label,
+          kind: feed.banner.kind,
+          promotional: feed.banner.promotional,
+          headline: feed.banner.headline ?? null,
+          imageURL: feed.banner.imageURL ?? null,
+          event: this.toView(row, viewer, false),
+        };
+      }
+    }
+
+    return {
+      banner,
+      modules,
+      moduleOrder: config.moduleOrder,
+      weights: feed.weights,
+      scoringVersion: feed.scoringVersion,
+      naturalResultsMinRatio: config.naturalResultsMinRatio,
+      serverTime: now.toISOString(),
+      generatedAt: feed.generatedAt,
+      queryExplanationId: `feed_${randomBytes(8).toString('hex')}`,
+    };
+  }
+
+  private viewerCoordinate(options: DiscoveryQuery): ViewerCoordinate | null {
+    if (!options.bounds) return null;
+    return {
+      latitude: (options.bounds.south + options.bounds.north) / 2,
+      longitude: (options.bounds.west + options.bounds.east) / 2,
+    };
+  }
+
+  private toCandidateFeatures(row: EventRow): CandidateFeatures {
+    const capacity = row.capacity ?? 0;
+    const occupied = row.confirmed_count + (row.pending_count ?? 0) + (row.offered_count ?? 0);
+    const riskFlags = Array.isArray(row.risk_flags) ? row.risk_flags : [];
+    const flagged = riskFlags.filter((flag) => SAFETY_DEMOTION_FLAGS.has(flag)).length;
+    return {
+      id: row.id,
+      startsAt: row.starts_at,
+      createdAt: row.created_at,
+      categoryId: row.category_id,
+      tags: Array.isArray(row.tags) ? row.tags : [],
+      distanceKm: row.distance_km ?? null,
+      interestOverlap: Number(row.interest_overlap ?? 0),
+      organizerFollowed: Boolean(row.organizer_followed),
+      groupFollowed: Boolean(row.group_followed),
+      phoneVerifiedHost: Boolean(row.phone_verified),
+      completedEventCount: row.completed_event_count ?? 0,
+      attendanceRateBand: row.attendance_rate_band ?? 'unavailable',
+      availableCapacity: row.available_capacity ?? Math.max(0, capacity - occupied),
+      capacity,
+      boosted: false,
+      safetyPenalty: Math.min(flagged * 0.15, 0.6),
+    };
+  }
+
+  private async loadFeedConfig(): Promise<ReturnType<typeof parseFeedConfig>> {
+    const result = await this.database.query<{ key: string; value_json: unknown }>(
+      `SELECT DISTINCT ON (key) key, value_json
+         FROM admin.config_revisions
+        WHERE key IN ('discovery.feed', 'discovery.operational_banner')
+          AND state = 'active'
+          AND (effective_from IS NULL OR effective_from <= clock_timestamp())
+          AND (effective_to IS NULL OR effective_to > clock_timestamp())
+        ORDER BY key, version DESC`,
+    );
+    const byKey = new Map(result.rows.map((row) => [row.key, row.value_json]));
+    return parseFeedConfig(
+      byKey.get('discovery.feed') ?? null,
+      byKey.get('discovery.operational_banner') ?? null,
+    );
   }
 
   async get(identifier: string, viewer?: AuthenticatedUser): Promise<unknown> {

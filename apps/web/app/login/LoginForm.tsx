@@ -10,6 +10,7 @@ import {
   saveSession,
   type WebSession,
 } from '../lib/client-api';
+import { safeReturnTo } from '../lib/safe-return-to';
 import { useI18n } from '../components/I18nProvider';
 
 interface Challenge {
@@ -92,9 +93,7 @@ export function LoginForm({ returnTo = '/discover' }: { returnTo?: string }) {
           body: JSON.stringify({ challengeId: challenge.challengeId, code, deviceId: deviceId() }),
         });
         saveSession(session);
-        const destination =
-          returnTo.startsWith('/') && !returnTo.startsWith('//') ? returnTo : '/discover';
-        window.location.assign(destination);
+        window.location.assign(safeReturnTo(returnTo));
       }
     } catch (error) {
       setMessage(errorMessage(error));

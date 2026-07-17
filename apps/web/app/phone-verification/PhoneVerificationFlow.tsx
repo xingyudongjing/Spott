@@ -9,6 +9,7 @@ import {
   readSession,
   refreshCurrentSession,
 } from '../lib/client-api';
+import { safeReturnTo } from '../lib/safe-return-to';
 import { useI18n } from '../components/I18nProvider';
 
 interface PhoneChallenge {
@@ -37,7 +38,7 @@ export function PhoneVerificationFlow({ returnTo = '/discover' }: { returnTo?: s
       window.location.replace(
         `/login?returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}`,
       );
-    else if (session.user.phoneVerified) window.location.replace(safeReturn(returnTo));
+    else if (session.user.phoneVerified) window.location.replace(safeReturnTo(returnTo));
   }, [returnTo]);
 
   async function submit(event: FormEvent) {
@@ -65,7 +66,7 @@ export function PhoneVerificationFlow({ returnTo = '/discover' }: { returnTo?: s
           body: JSON.stringify({ code }),
         });
         await refreshCurrentSession();
-        window.location.assign(safeReturn(returnTo));
+        window.location.assign(safeReturnTo(returnTo));
       }
     } catch (error) {
       setMessage(errorMessage(error));
@@ -141,8 +142,4 @@ export function PhoneVerificationFlow({ returnTo = '/discover' }: { returnTo?: s
       </div>
     </main>
   );
-}
-
-function safeReturn(value: string): string {
-  return value.startsWith('/') && !value.startsWith('//') ? value : '/discover';
 }

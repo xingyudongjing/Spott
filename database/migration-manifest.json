@@ -111,6 +111,11 @@
       "sequence": 22,
       "filename": "0022_media_upload_attempts.sql",
       "sha256": "2eb6ed68ba34835f8eeab212b42fbb7f03049ca775b62b9fd0ac92aef3179088"
+    },
+    {
+      "sequence": 23,
+      "filename": "0023_phone_reward_once_per_phone.sql",
+      "sha256": "9a91ee7a0d0c0a9e6223aabc379b529b2882279c3f93c00e64c797a8763502c3"
     }
   ]
 }

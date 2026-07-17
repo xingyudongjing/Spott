@@ -701,7 +701,7 @@ export class AuthService {
         [userId],
       );
       const wallet = isNewBinding
-        ? await this.creditPhoneVerification(client, userId, binding.id)
+        ? await this.creditPhoneVerification(client, userId, challenge.phone_hash)
         : await this.walletBalance(client, userId);
       if (isNewBinding) {
         await this.recordUserChange(client, userId, 'phone_verified', { phoneVerified: true });
@@ -1667,30 +1667,57 @@ export class AuthService {
   private async creditPhoneVerification(
     client: PoolClient,
     userId: string,
-    bindingId: string,
+    phoneHash: Buffer,
   ): Promise<unknown> {
+    // Once per phone number, for life. The grant ledger is keyed by the same HMAC lookup hash that
+    // identity.phone_bindings uses, so re-binding a number -- on this account or any other -- can
+    // never pay a second time. Keying on the binding id instead made every re-bind a fresh key.
+    const grant = await client.query<{ phone_hash: Buffer }>(
+      `INSERT INTO commerce.phone_verification_reward_grants(phone_hash, user_id)
+       VALUES ($1, $2)
+       ON CONFLICT (phone_hash) DO NOTHING RETURNING phone_hash`,
+      [phoneHash, userId],
+    );
+    if (grant.rowCount !== 1) return this.walletBalance(client, userId);
+
+    // Once per account. The stable business key means a second number bound by the same account
+    // collides with the account's first reward instead of minting a new idempotency key.
     const transaction = await client.query<{ id: string }>(
       `INSERT INTO commerce.point_transactions(user_id, type, business_key, status, posted_at)
-       VALUES ($1, 'phone_verified_reward', $2, 'posted', clock_timestamp())
+       VALUES ($1, 'phone_verified_reward', 'phone_verified:account', 'posted', clock_timestamp())
        ON CONFLICT (user_id, business_key) DO NOTHING RETURNING id`,
-      [userId, `phone_verified:${bindingId}`],
+      [userId],
     );
-    if (transaction.rowCount === 1) {
-      const transactionId = transaction.rows[0]?.id;
-      const reward = await this.activeConfigBigInt(client, 'points.reward.phone_verified', 500n);
-      const expiryDays = await this.activeConfigBigInt(client, 'points.expiry.free_days', 180n);
+    const transactionId = transaction.rows[0]?.id;
+    if (!transactionId) {
+      // The account already claimed its reward through another number, so release the grant we
+      // just took rather than burning this number's one lifetime eligibility for nothing.
       await client.query(
-        `INSERT INTO commerce.point_entries(transaction_id, account_code, bucket, amount, expires_at)
-         VALUES
-           ($1, $2, 'free', $3, clock_timestamp() + ($4::text || ' days')::interval),
-           ($1, 'platform:rewards', 'free', -$3, NULL)`,
-        [transactionId, `user:${userId}`, reward.toString(), expiryDays.toString()],
+        `DELETE FROM commerce.phone_verification_reward_grants
+         WHERE phone_hash = $1 AND transaction_id IS NULL`,
+        [phoneHash],
       );
-      await client.query(
-        'UPDATE commerce.wallets SET free_balance = free_balance + $2 WHERE user_id = $1',
-        [userId, reward.toString()],
-      );
+      return this.walletBalance(client, userId);
     }
+
+    const reward = await this.activeConfigBigInt(client, 'points.reward.phone_verified', 500n);
+    const expiryDays = await this.activeConfigBigInt(client, 'points.expiry.free_days', 180n);
+    await client.query(
+      `INSERT INTO commerce.point_entries(transaction_id, account_code, bucket, amount, expires_at)
+       VALUES
+         ($1, $2, 'free', $3, clock_timestamp() + ($4::text || ' days')::interval),
+         ($1, 'platform:rewards', 'free', -$3, NULL)`,
+      [transactionId, `user:${userId}`, reward.toString(), expiryDays.toString()],
+    );
+    await client.query(
+      'UPDATE commerce.wallets SET free_balance = free_balance + $2 WHERE user_id = $1',
+      [userId, reward.toString()],
+    );
+    await client.query(
+      `UPDATE commerce.phone_verification_reward_grants
+       SET transaction_id = $2 WHERE phone_hash = $1`,
+      [phoneHash, transactionId],
+    );
     return this.walletBalance(client, userId);
   }
 

@@ -131,6 +131,11 @@
       "sequence": 26,
       "filename": "0026_event_promotion.sql",
       "sha256": "a2196808c41b380cc243fa19497f84fcc82b7ab18951cbe2e032e284787e7d58"
+    },
+    {
+      "sequence": 27,
+      "filename": "0027_ticketing_shell.sql",
+      "sha256": "a1424a0ccf9479023c6d9a4e8975ff0e94c0f456af9f4fd7e75e00c5a7d1fdc0"
     }
   ]
 }

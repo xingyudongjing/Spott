@@ -65,6 +65,7 @@ interface RegistrationRow {
   status: RegistrationStatus;
   party_size: number;
   attendee_note: string | null;
+  ticket_type_id: string | null;
   version: string;
   waitlist_joined_at: Date | null;
   updated_at: Date;
@@ -124,6 +125,7 @@ export class RegistrationsService {
       joinWaitlistIfFull: boolean;
       answers: Record<string, unknown>;
       attendeeNote?: string | undefined;
+      ticketTypeId?: string | undefined;
     },
   ): Promise<unknown> {
     this.requireRegistrant(user);
@@ -144,10 +146,13 @@ export class RegistrationsService {
         offered_count: number;
         version: string;
         server_time: Date;
+        active_ticket_type_count: string | null;
       }>(
         `SELECT e.id, e.status, e.capacity, e.deadline_at, e.ends_at, e.registration_mode,
            e.waitlist_enabled, c.confirmed_count, c.pending_count, c.offered_count,
-           e.version::text AS version, clock_timestamp() AS server_time
+           e.version::text AS version, clock_timestamp() AS server_time,
+           (SELECT count(*) FROM events.ticket_types t
+              WHERE t.event_id = e.id AND t.active)::text AS active_ticket_type_count
          FROM events.events e JOIN events.event_capacity c ON c.event_id = e.id
          WHERE e.id = $1 FOR UPDATE OF e, c`,
         [eventId],
@@ -188,6 +193,31 @@ export class RegistrationsService {
 
       await this.validateAnswers(client, eventId, input.answers);
 
+      // Ticketing shell (owner ruling 2026-07-17): when the event defines active tiers the
+      // registrant must pick one, and the tier's own quota gates the seat independently of the
+      // event capacity. Spott only records the selection and headcount here — the money is settled
+      // off-platform, never through the platform.
+      const activeTicketTypeCount = Number(event.active_ticket_type_count ?? 0);
+      let ticketType: { id: string; quota: number | null; sold_count: number } | null = null;
+      if (input.ticketTypeId) {
+        const ticketResult = await client.query<{ id: string; quota: number | null; sold_count: number }>(
+          `SELECT id, quota, sold_count FROM events.ticket_types
+           WHERE id = $1 AND event_id = $2 AND active FOR UPDATE`,
+          [input.ticketTypeId, eventId],
+        );
+        ticketType = ticketResult.rows[0] ?? null;
+        if (!ticketType) {
+          throw new DomainError('TICKET_TYPE_UNAVAILABLE', '所选票种不可用。', 409);
+        }
+        if (ticketType.quota !== null && ticketType.sold_count + input.partySize > ticketType.quota) {
+          throw new DomainError('TICKET_SOLD_OUT', '所选票种名额已满。', 409, {
+            meta: { remaining: Math.max(0, ticketType.quota - ticketType.sold_count) },
+          });
+        }
+      } else if (activeTicketTypeCount > 0) {
+        throw new DomainError('TICKET_SELECTION_REQUIRED', '请先选择票种。', 422);
+      }
+
       const occupied = event.confirmed_count + event.pending_count + event.offered_count;
       const hasCapacity = occupied + input.partySize <= event.capacity;
       if (!hasCapacity && (!event.waitlist_enabled || !input.joinWaitlistIfFull)) {
@@ -204,12 +234,23 @@ export class RegistrationsService {
       else status = event.registration_mode === 'automatic' ? 'confirmed' : 'pending';
       await client.query(
         `INSERT INTO events.registrations(
-         id, event_id, user_id, status, party_size, attendee_note, waitlist_joined_at, confirmed_at
-         ) VALUES ($1,$2,$3,$4::events.registration_status,$5,$6,
+         id, event_id, user_id, status, party_size, attendee_note, ticket_type_id,
+         waitlist_joined_at, confirmed_at
+         ) VALUES ($1,$2,$3,$4::events.registration_status,$5,$6,$7,
            CASE WHEN $4::text = 'waitlisted' THEN clock_timestamp() ELSE NULL END,
            CASE WHEN $4::text = 'confirmed' THEN clock_timestamp() ELSE NULL END)`,
-        [registrationId, eventId, user.id, status, input.partySize, input.attendeeNote ?? null],
+        [registrationId, eventId, user.id, status, input.partySize, input.attendeeNote ?? null,
+          ticketType?.id ?? null],
       );
+      // A tier holder occupies its quota as soon as a seat is taken or held (confirmed / pending).
+      // Waitlisted registrations do not, mirroring the event-level capacity accounting above.
+      if (ticketType && (status === 'confirmed' || status === 'pending')) {
+        await client.query(
+          `UPDATE events.ticket_types SET sold_count = sold_count + $2, updated_at = clock_timestamp()
+           WHERE id = $1`,
+          [ticketType.id, input.partySize],
+        );
+      }
 
       if (status === 'confirmed') {
         const amount = await this.points.consumeQuote(client, user.id, input.quoteId, 'registration', eventId);
@@ -469,6 +510,14 @@ export class RegistrationsService {
              updated_at = clock_timestamp() WHERE event_id = $1`,
           [registration.event_id, registration.party_size],
         );
+        // A rejected applicant no longer holds the tier headcount it reserved while pending.
+        if (registration.ticket_type_id) {
+          await client.query(
+            `UPDATE events.ticket_types SET sold_count = GREATEST(0, sold_count - $2),
+               updated_at = clock_timestamp() WHERE id = $1`,
+            [registration.ticket_type_id, registration.party_size],
+          );
+        }
         await client.query(
           `INSERT INTO sync.outbox_events(aggregate, aggregate_id, type, payload)
            VALUES ('event', $1, 'waitlist.promotion_requested', $2)`,
@@ -591,6 +640,27 @@ export class RegistrationsService {
          WHERE event_id = $1`,
         [registration.event_id, registration.party_size],
       );
+      // A waitlisted holder was not counted against its tier; count it now that it is
+      // confirmed. The tier may have filled while the user waited, so re-check the quota
+      // under a row lock — otherwise sold_count + party_size can exceed quota and hit the
+      // CHECK(sold_count <= quota) constraint as a 500 instead of a clean sold-out error.
+      if (registration.ticket_type_id) {
+        const tierResult = await client.query<{ quota: number | null; sold_count: number }>(
+          `SELECT quota, sold_count FROM events.ticket_types WHERE id = $1 FOR UPDATE`,
+          [registration.ticket_type_id],
+        );
+        const tier = tierResult.rows[0];
+        if (tier && tier.quota !== null && tier.sold_count + registration.party_size > tier.quota) {
+          throw new DomainError('TICKET_SOLD_OUT', '所选票种名额已满，无法完成候补递补。', 409, {
+            meta: { remaining: Math.max(0, tier.quota - tier.sold_count) },
+          });
+        }
+        await client.query(
+          `UPDATE events.ticket_types SET sold_count = sold_count + $2, updated_at = clock_timestamp()
+           WHERE id = $1`,
+          [registration.ticket_type_id, registration.party_size],
+        );
+      }
       const row = await this.load(client, registration.id, false);
       await this.recordChange(client, user.id, row.id, row.event_id, Number(row.version), row.status);
       const body = this.toView(row);
@@ -651,6 +721,14 @@ export class RegistrationsService {
          WHERE event_id = $1`,
         [registration.event_id, registration.status, registration.party_size],
       );
+      // Release the tier headcount this registration was holding (pending / confirmed only).
+      if (registration.ticket_type_id && ['pending', 'confirmed'].includes(registration.status)) {
+        await client.query(
+          `UPDATE events.ticket_types SET sold_count = GREATEST(0, sold_count - $2),
+             updated_at = clock_timestamp() WHERE id = $1`,
+          [registration.ticket_type_id, registration.party_size],
+        );
+      }
       let refundedPoints = 0;
       let wallet = await this.points.wallet(user.id);
       const refundHours = await this.points.configBigInt(client, 'registration.cancel_refund_hours', 24n);
@@ -1262,6 +1340,7 @@ export class RegistrationsService {
       status: row.status,
       partySize: row.party_size,
       attendeeNote: row.attendee_note,
+      ticketTypeId: row.ticket_type_id ?? null,
       offerExpiresAt: row.offer_expires_at?.toISOString() ?? null,
       availableActions: actions,
       version: Number(row.version),

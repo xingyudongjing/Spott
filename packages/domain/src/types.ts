@@ -52,6 +52,7 @@ export type AvailableAction =
   | 'joinWaitlist'
   | 'cancelRegistration'
   | 'viewTicket'
+  | 'selectTicket'
   | 'checkIn'
   | 'edit'
   | 'submit'

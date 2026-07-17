@@ -23,6 +23,7 @@ export class RegistrationsController {
         joinWaitlistIfFull: z.boolean().default(false),
         answers: z.record(z.string().uuid(), z.unknown()).default({}),
         attendeeNote: z.string().trim().max(1000).optional(),
+        ticketTypeId: z.string().uuid().optional(),
       })
       .parse(body);
     return this.registrations.register(user, eventId, this.key(key), input);

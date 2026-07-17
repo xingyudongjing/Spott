@@ -2986,7 +2986,7 @@ components:
       enum: [draft, pending_review, needs_changes, published, registration_closed, in_progress, ended, cancelled, removed, appeal_pending, archived, deleted, rejected]
     AvailableAction:
       type: string
-      enum: [register, joinWaitlist, cancelRegistration, viewTicket, checkIn, edit, submit, cancelEvent, appeal, joinGroup]
+      enum: [register, joinWaitlist, cancelRegistration, viewTicket, selectTicket, checkIn, edit, submit, cancelEvent, appeal, joinGroup]
     Registration:
       type: object
       required: [id, eventId, userId, status, partySize, availableActions, version, updatedAt]

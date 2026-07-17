@@ -130,6 +130,7 @@ struct SpottTests {
         let payload = RegistrationRequestPayload(
             partySize: 2,
             quoteID: UUID(uuidString: "00000000-0000-0000-0000-000000000302")!,
+            expectedEventVersion: 7,
             joinWaitlistIfFull: true,
             answers: [
                 questionID: .text("第一次参加"),
@@ -144,8 +145,24 @@ struct SpottTests {
         let answers = try #require(object["answers"] as? [String: Any])
         #expect(object["partySize"] as? Int == 2)
         #expect(object["quoteId"] as? String == "00000000-0000-0000-0000-000000000302")
+        #expect(object["expectedEventVersion"] as? Int == 7)
         #expect(answers[questionID.uuidString.lowercased()] as? String == "第一次参加")
         #expect(answers["00000000-0000-0000-0000-000000000303"] as? Bool == true)
+    }
+
+    @Test func waitlistAcceptancePayloadCarriesQuoteAndBothConcurrencyVersions() throws {
+        let payload = WaitlistAcceptancePayload(
+            quoteID: UUID(uuidString: "00000000-0000-0000-0000-000000000304")!,
+            expectedRegistrationVersion: 4,
+            expectedEventVersion: 9
+        )
+
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as? [String: Any]
+        )
+        #expect(object["quoteId"] as? String == "00000000-0000-0000-0000-000000000304")
+        #expect(object["expectedRegistrationVersion"] as? Int == 4)
+        #expect(object["expectedEventVersion"] as? Int == 9)
     }
 
     @Test func registrationQuestionDecodesStableServerID() throws {
@@ -382,10 +399,16 @@ struct SpottTests {
 
     @Test func APIErrorsKeepStableUserFacingCodes() async {
         let mapped = await MainActor.run {
-            AppModel.map(APIError(status: 409, code: "VERSION_CONFLICT", message: "云端草稿已更新。", retryable: false))
+            AppModel.map(APIError(
+                status: 409,
+                code: "VERSION_CONFLICT",
+                message: "raw server-only diagnostic must never reach the user",
+                retryable: false
+            ))
         }
         #expect(mapped.id == "VERSION_CONFLICT")
         #expect(mapped.retryable == false)
+        #expect(mapped.message != "raw server-only diagnostic must never reach the user")
     }
 
     @Test func publicProfileHostedEventsDecodeThePrivacySafeCardContract() throws {

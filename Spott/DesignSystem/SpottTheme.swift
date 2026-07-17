@@ -1,21 +1,51 @@
 import SwiftUI
+import UIKit
 
 enum SpottColor {
-    static let canvas = Color(red: 0.985, green: 0.982, blue: 0.974)
-    static let surface = Color.white
-    static let elevated = Color.white
-    static let ink = Color(red: 0.075, green: 0.071, blue: 0.092)
-    static let muted = Color(red: 0.39, green: 0.39, blue: 0.43)
-    static let twilight = Color(red: 0.38, green: 0.30, blue: 0.87)
-    static let twilightDeep = Color(red: 0.24, green: 0.18, blue: 0.64)
-    static let twilightPale = Color(red: 0.92, green: 0.90, blue: 1.0)
-    static let coral = Color(red: 0.98, green: 0.38, blue: 0.31)
-    static let coralPale = Color(red: 1.0, green: 0.90, blue: 0.87)
-    static let mint = Color(red: 0.10, green: 0.64, blue: 0.48)
-    static let amber = Color(red: 0.78, green: 0.52, blue: 0.10)
-    static let danger = Color(red: 0.85, green: 0.29, blue: 0.36)
-    static let divider = Color(red: 0.13, green: 0.12, blue: 0.16).opacity(0.09)
-    static let hairline = Color.white.opacity(0.72)
+    // Keep these values in lockstep with packages/design-tokens/src/tokens.json.
+    static let canvas = adaptive(light: 0xF7F5F0, dark: 0x0E1014)
+    static let surface = adaptive(light: 0xFFFFFF, dark: 0x171A20)
+    static let elevated = adaptive(light: 0xFFFFFF, dark: 0x20242C)
+    static let ink = adaptive(light: 0x17181C, dark: 0xF7F6F2)
+    static let muted = adaptive(light: 0x6F737C, dark: 0xA7ACB7)
+    static let twilight = adaptive(light: 0x6E5BE7, dark: 0x9B8CFF)
+    static let twilightDeep = adaptive(light: 0x4F3FBD, dark: 0x7564E8)
+    static let twilightPale = adaptive(light: 0xEBE7FF, dark: 0x2A2646)
+    static let coral = adaptive(light: 0xFF745F, dark: 0xFF866F)
+    static let coralPale = adaptive(light: 0xFFE6DF, dark: 0x422823)
+    static let mint = adaptive(light: 0x3DBD91, dark: 0x51D4A5)
+    static let amber = adaptive(light: 0xD99A2B, dark: 0xF0B84F)
+    static let danger = adaptive(light: 0xD84B5B, dark: 0xFF6B79)
+    static let divider = adaptive(light: 0xE6E2DA, dark: 0x2B3038)
+    static let hairline = adaptive(
+        light: 0xFFFFFF,
+        dark: 0xFFFFFF,
+        lightAlpha: 0.72,
+        darkAlpha: 0.12
+    )
+
+    private static func adaptive(
+        light: UInt32,
+        dark: UInt32,
+        lightAlpha: CGFloat = 1,
+        darkAlpha: CGFloat = 1
+    ) -> Color {
+        Color(uiColor: UIColor { traits in
+            if traits.userInterfaceStyle == .dark {
+                return uiColor(rgb: dark, alpha: darkAlpha)
+            }
+            return uiColor(rgb: light, alpha: lightAlpha)
+        })
+    }
+
+    private static func uiColor(rgb: UInt32, alpha: CGFloat) -> UIColor {
+        UIColor(
+            red: CGFloat((rgb >> 16) & 0xFF) / 255,
+            green: CGFloat((rgb >> 8) & 0xFF) / 255,
+            blue: CGFloat(rgb & 0xFF) / 255,
+            alpha: alpha
+        )
+    }
 }
 
 enum SpottMetric {
@@ -32,9 +62,11 @@ enum SpottGlassMetrics {
 
 struct PrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 16, weight: .semibold, design: .rounded))
+            .font(.headline)
             .frame(maxWidth: .infinity, minHeight: 56)
             .foregroundStyle(.white)
             .background {
@@ -50,8 +82,8 @@ struct PrimaryButtonStyle: ButtonStyle {
             }
             .clipShape(RoundedRectangle(cornerRadius: SpottMetric.controlRadius, style: .continuous))
             .shadow(color: isEnabled ? SpottColor.twilight.opacity(0.22) : .clear, radius: 14, y: 7)
-            .scaleEffect(configuration.isPressed ? 0.975 : 1)
-            .animation(.snappy(duration: 0.16), value: configuration.isPressed)
+            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.975 : 1)
+            .animation(reduceMotion ? nil : .snappy(duration: 0.16), value: configuration.isPressed)
     }
 }
 
@@ -83,6 +115,18 @@ extension View {
                 .background(.regularMaterial, in: shape)
         }
     }
+
+    @ViewBuilder
+    func spottProminentActionStyle() -> some View {
+        if #available(iOS 26.0, *) {
+            self
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.roundedRectangle(radius: SpottMetric.controlRadius))
+                .tint(SpottColor.twilight)
+        } else {
+            self.buttonStyle(PrimaryButtonStyle())
+        }
+    }
 }
 
 struct SpottStateCard: View {
@@ -98,13 +142,13 @@ struct SpottStateCard: View {
                 .font(.system(size: 26, weight: .medium))
                 .foregroundStyle(SpottColor.muted)
                 .frame(width: 54, height: 54)
-                .background(Color.black.opacity(0.045), in: Circle())
+                .background(SpottColor.ink.opacity(0.045), in: Circle())
             VStack(spacing: 6) {
                 Text(LocalizedStringKey(title))
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .font(.title3.bold())
                     .multilineTextAlignment(.center)
                 Text(LocalizedStringKey(message))
-                    .font(.system(size: 13.5, design: .rounded))
+                    .font(.subheadline)
                     .foregroundStyle(SpottColor.muted)
                     .multilineTextAlignment(.center)
                     .lineSpacing(3)
@@ -113,7 +157,7 @@ struct SpottStateCard: View {
                 Button(action: action) {
                     Text(LocalizedStringKey(actionTitle))
                 }
-                    .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                    .font(.subheadline.weight(.semibold))
                     .buttonStyle(.bordered)
                     .buttonBorderShape(.capsule)
             }

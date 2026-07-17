@@ -142,6 +142,58 @@ final class EventCTAStateTests: XCTestCase {
         }
     }
 
+    func testOfferAtOrPastExpiryNeverRemainsAcceptableAndFallsBackToServerActions() throws {
+        let boundaryOffer = viewerRegistration(
+            status: "offered",
+            expiry: "2026-07-16T00:00:00Z"
+        )
+        let boundary = EventCTAState.resolve(
+            event: try makeEvent([
+                "viewerRegistration": boundaryOffer,
+                "availableActions": ["register"],
+            ]),
+            session: .verified,
+            now: now
+        )
+
+        XCTAssertEqual(boundary, .init(kind: .register, intent: .register, disabled: false))
+
+        let missingExpiry = EventCTAState.resolve(
+            event: try makeEvent([
+                "viewerRegistration": viewerRegistration(status: "offered"),
+                "confirmedCount": 10,
+                "availableCapacity": 0,
+                "availableActions": ["joinWaitlist"],
+            ]),
+            session: .verified,
+            now: now
+        )
+
+        XCTAssertEqual(
+            missingExpiry,
+            .init(kind: .joinWaitlist, intent: .register, disabled: false)
+        )
+    }
+
+    func testExpiredOfferDoesNotInventAnActionWhenTheServerProvidesNone() throws {
+        let state = EventCTAState.resolve(
+            event: try makeEvent([
+                "viewerRegistration": viewerRegistration(
+                    status: "offered",
+                    expiry: "2026-07-15T23:59:59Z"
+                ),
+                "confirmedCount": 10,
+                "availableCapacity": 0,
+                "waitlistEnabled": false,
+                "availableActions": [],
+            ]),
+            session: .verified,
+            now: now
+        )
+
+        XCTAssertEqual(state, .init(kind: .fullClosed, intent: .none, disabled: true))
+    }
+
     private func makeEvent(_ overrides: [String: Any]) throws -> EventSummary {
         let data = try JSONSerialization.data(withJSONObject: eventPayload(overrides: overrides))
         let decoder = JSONDecoder()

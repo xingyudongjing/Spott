@@ -2,7 +2,7 @@ import EventKit
 import SwiftUI
 import UIKit
 
-struct EventDetailView: View {
+private struct LegacyEventDetailView: View {
     @Environment(AppModel.self) private var model
     private let sourceTab: AppTab
     private let refreshOnAppear: Bool
@@ -957,6 +957,7 @@ private struct RegistrationSheet: View {
                     eventID: event.id,
                     partySize: partySize,
                     quoteID: quote.id,
+                    expectedEventVersion: event.version,
                     joinWaitlist: joinWaitlist,
                     answers: sanitizedAnswers,
                     attendeeNote: attendeeNote,

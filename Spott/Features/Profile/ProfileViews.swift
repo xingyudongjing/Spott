@@ -1740,6 +1740,7 @@ struct SafetyReportTarget: Identifiable, Sendable {
 struct SafetyReportView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
     let target: SafetyReportTarget?
     @State private var targetType: SafetyTargetType
     @State private var targetIDText: String
@@ -1747,6 +1748,7 @@ struct SafetyReportView: View {
     @State private var details = ""
     @State private var busy = false
     @State private var receipt: SafetyReportReceipt?
+    @State private var attempt: StableIdempotencyAttempt?
     @State private var error: UserFacingError?
 
     init(target: SafetyReportTarget? = nil) {
@@ -1761,43 +1763,53 @@ struct SafetyReportView: View {
                 ScrollView {
                     SpottStateCard(
                         icon: "checkmark.shield.fill",
-                        title: "举报已安全提交",
-                        message: "参考编号：\(receipt.reference)\n你可以凭此编号查询处理进度。",
-                        actionTitle: "完成"
+                        title: text("journey.safety.report_success"),
+                        message: CoreJourneyLocalization.format(
+                            "journey.safety.report_reference",
+                            locale: locale,
+                            receipt.reference
+                        ),
+                        actionTitle: text("journey.common.done")
                     ) { dismiss() }
                     .padding(SpottMetric.pageInset)
                 }
                 .background(SpottColor.canvas.ignoresSafeArea())
             } else {
                 Form {
-                    Section("举报对象") {
+                    Section(text("journey.safety.target")) {
                         if let target {
-                            LabeledContent(target.type.displayTitle, value: target.displayName)
+                            LabeledContent(targetTypeText(target.type), value: target.displayName)
                         } else {
-                            Picker("对象类型", selection: $targetType) {
+                            Picker(text("journey.safety.target_type"), selection: $targetType) {
                                 ForEach(SafetyTargetType.allCases, id: \.self) { type in
-                                    Text(type.displayTitle).tag(type)
+                                    Text(targetTypeText(type)).tag(type)
                                 }
                             }
-                            TextField("活动或用户编号", text: $targetIDText)
+                            TextField(text("journey.safety.target_id"), text: $targetIDText)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled()
                         }
                     }
-                    Section("问题") {
-                        Picker("问题类型", selection: $reason) {
-                            Text("请选择").tag("")
-                            Text("不安全或欺诈").tag("unsafe")
-                            Text("骚扰或歧视").tag("harassment")
-                            Text("垃圾内容").tag("spam")
-                            Text("涉及未成年人安全").tag("minor safety")
+                    Section(text("journey.safety.issue")) {
+                        Picker(text("journey.safety.issue_type"), selection: $reason) {
+                            Text(text("journey.safety.choose")).tag("")
+                            Text(text("journey.safety.danger")).tag("danger")
+                            Text(text("journey.safety.fraud")).tag("fraud")
+                            Text(text("journey.safety.harassment")).tag("harassment")
+                            Text(text("journey.safety.spam")).tag("spam")
+                            Text(text("journey.safety.minor")).tag("minor_safety")
                         }
-                        TextField("补充说明", text: $details, axis: .vertical)
+                        TextField(text("journey.safety.details"), text: $details, axis: .vertical)
                             .lineLimit(5...12)
+                            .onChange(of: details) { _, value in
+                                if value.count > 2_000 {
+                                    details = String(value.prefix(2_000))
+                                }
+                            }
                     }
-                    if let error {
-                        Section("无法提交") {
-                            Label(error.message, systemImage: "exclamationmark.circle.fill")
+                    if error != nil {
+                        Section(text("journey.safety.submit_failed")) {
+                            Label(text("journey.safety.error"), systemImage: "exclamationmark.circle.fill")
                                 .foregroundStyle(SpottColor.danger)
                         }
                     }
@@ -1805,18 +1817,18 @@ struct SafetyReportView: View {
                         Button(action: submit) {
                             HStack {
                                 if busy { ProgressView().tint(.white) }
-                                Text("安全提交")
+                                Text(text(busy ? "journey.safety.submitting" : "journey.safety.submit"))
                             }
                         }
                         .buttonStyle(PrimaryButtonStyle())
                         .disabled(!canSubmit || busy)
                     } footer: {
-                        Text("举报内容会加密保存。被举报者不会看到你的身份或补充说明。")
+                        Text(text("journey.safety.privacy"))
                     }
                 }
             }
         }
-        .navigationTitle("安全支持")
+        .navigationTitle(text("journey.safety.title"))
     }
 
     private var resolvedTargetID: UUID? { UUID(uuidString: targetIDText) }
@@ -1825,24 +1837,58 @@ struct SafetyReportView: View {
     private func submit() {
         guard model.session != nil else { model.presentedGate = .login; return }
         guard let targetID = resolvedTargetID else { return }
+        let payload = SafetyReportPayload(
+            targetType: targetType,
+            targetId: targetID,
+            reason: reason,
+            details: details,
+            evidenceAssetIds: []
+        )
+        guard let resolvedAttempt = try? StableIdempotencyAttempt.resolve(
+            existing: attempt,
+            payload: payload
+        ) else {
+            error = .init(
+                id: "SAFETY_REPORT_ENCODING_FAILED",
+                message: text("journey.safety.error"),
+                retryable: true
+            )
+            return
+        }
+        attempt = resolvedAttempt
         busy = true
         error = nil
         Task { @MainActor in
             defer { busy = false }
             do {
                 receipt = try await model.api.submitSafetyReport(
-                    .init(
-                        targetType: targetType,
-                        targetId: targetID,
-                        reason: reason,
-                        details: details,
-                        evidenceAssetIds: []
-                    )
+                    payload,
+                    idempotencyKey: resolvedAttempt.idempotencyKey
                 )
+                attempt = nil
             } catch {
-                self.error = AppModel.map(error)
+                self.error = .init(
+                    id: (error as? APIError)?.code ?? "SAFETY_REPORT_FAILED",
+                    message: text("journey.safety.error"),
+                    retryable: true
+                )
             }
         }
+    }
+
+    private func targetTypeText(_ type: SafetyTargetType) -> String {
+        let key: String.LocalizationValue = switch type {
+        case .event: "journey.safety.target.event"
+        case .group: "journey.safety.target.group"
+        case .user: "journey.safety.target.user"
+        case .comment: "journey.safety.target.comment"
+        case .announcement: "journey.safety.target.announcement"
+        }
+        return text(key)
+    }
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        CoreJourneyLocalization.text(key, locale: locale)
     }
 }
 

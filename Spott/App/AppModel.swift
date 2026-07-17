@@ -33,13 +33,15 @@ final class AppModel {
 
     let api: SpottAPIClient
     let analytics: AnalyticsClient
-    let persistence: PersistenceStore
+    let persistence: any DiscoveryCaching
     let sync: SyncEngine
     let discovery: DiscoveryStore
     @ObservationIgnored let router: AppRouter
     @ObservationIgnored private let sessionRestorer: any SessionRestoring
     @ObservationIgnored private let sessionEnder: any SessionEnding
     @ObservationIgnored private let syncLifecycle: any SyncLifecycleManaging
+    @ObservationIgnored private let syncPuller: any SyncPulling
+    @ObservationIgnored private let ownerWriteLeaseAuthority: OwnerWriteLeaseAuthority
     @ObservationIgnored private var authGeneration: UInt64 = 0
     @ObservationIgnored private var authTask: Task<Void, Never>?
 
@@ -51,12 +53,15 @@ final class AppModel {
     init(
         api: SpottAPIClient,
         analytics: AnalyticsClient,
-        persistence: PersistenceStore,
+        persistence: any DiscoveryCaching,
         sync: SyncEngine,
         router: AppRouter,
         sessionRestorer: (any SessionRestoring)? = nil,
         sessionEnder: (any SessionEnding)? = nil,
-        syncLifecycle: (any SyncLifecycleManaging)? = nil
+        syncLifecycle: (any SyncLifecycleManaging)? = nil,
+        syncPuller: (any SyncPulling)? = nil,
+        ownerWriteLeaseAuthority: OwnerWriteLeaseAuthority? = nil,
+        discovery injectedDiscovery: DiscoveryStore? = nil
     ) {
         self.api = api
         self.analytics = analytics
@@ -66,7 +71,13 @@ final class AppModel {
         self.sessionRestorer = sessionRestorer ?? api
         self.sessionEnder = sessionEnder ?? api
         self.syncLifecycle = syncLifecycle ?? sync
-        discovery = DiscoveryStore(service: api, cache: persistence)
+        self.syncPuller = syncPuller ?? sync
+        self.ownerWriteLeaseAuthority = ownerWriteLeaseAuthority ?? sync.ownerWriteLeaseAuthority
+        discovery = injectedDiscovery ?? DiscoveryStore(service: api, cache: persistence)
+        api.setAuthenticationExpirationHandler { [weak self] sessionID in
+            guard let self else { return }
+            await self.handleSessionExpiration(expectedSessionID: sessionID)
+        }
     }
 
     var usesNavigationUITestFixture: Bool {
@@ -103,15 +114,30 @@ final class AppModel {
         }
         guard discovery.phase == .initial else { return }
         let generation = beginAuthTransition()
-        if let restoredSession = try? await sessionRestorer.currentSession() {
+        let discoveryReceipt: DiscoveryReplacementReceipt?
+        let restoredSession: UserSession?
+        do {
+            restoredSession = try await sessionRestorer.currentSession()
+        } catch {
+            guard isCurrentAuthTransition(generation) else { return }
+            banner = .init(title: Self.map(error).message, tone: .warning)
+            return
+        }
+        if let restoredSession {
             guard isCurrentAuthTransition(generation) else { return }
             session = restoredSession
-            try? await syncLifecycle.bootstrap(
-                userID: restoredSession.user.id,
-                generation: generation
-            )
+            do {
+                try await syncLifecycle.bootstrap(
+                    userID: restoredSession.user.id,
+                    generation: generation
+                )
+            } catch {
+                guard isCurrentAuth(generation, sessionID: restoredSession.sessionId) else { return }
+                banner = .init(title: Self.map(error).message, tone: .warning)
+                return
+            }
             guard isCurrentAuth(generation, sessionID: restoredSession.sessionId) else { return }
-            await discovery.loadInitial()
+            discoveryReceipt = await discovery.loadInitial()
             guard isCurrentAuth(generation, sessionID: restoredSession.sessionId) else { return }
             await reconcileStorePurchases()
             guard isCurrentAuth(generation, sessionID: restoredSession.sessionId) else { return }
@@ -119,31 +145,52 @@ final class AppModel {
             guard isCurrentAuth(generation, sessionID: restoredSession.sessionId) else { return }
         } else {
             guard isCurrentSignedOut(generation) else { return }
-            await discovery.loadInitial()
+            discoveryReceipt = await discovery.loadInitial()
             guard isCurrentSignedOut(generation) else { return }
         }
+        guard let discoveryReceipt else { return }
         trackAnalytics(.discoveryViewed(
-            region: region,
-            itemCount: discovery.items.count,
+            region: discoveryReceipt.region,
+            itemCount: discoveryReceipt.itemCount,
             reason: "initial"
         ))
     }
 
     func refresh(reason: SyncReason = .manual) async {
+        let generation = authGeneration
+        let sessionID = session?.sessionId
         banner = .init(title: "正在同步…", tone: .syncing)
         do {
-            _ = try await sync.pull(reason: reason)
-            await discovery.refresh()
+            _ = try await syncPuller.pull(reason: reason)
+            guard isCurrentRefresh(generation: generation, sessionID: sessionID) else { return }
+            let receipt = await discovery.refresh()
+            guard isCurrentRefresh(generation: generation, sessionID: sessionID) else { return }
+            guard let receipt else {
+                banner = .init(
+                    title: discovery.refreshError?.message
+                        ?? discovery.fatalError?.message
+                        ?? String(localized: "操作暂时无法完成，请重试。"),
+                    tone: .warning
+                )
+                await dismissRefreshBanner(generation: generation, sessionID: sessionID)
+                return
+            }
             trackAnalytics(.discoveryViewed(
-                region: region,
-                itemCount: discovery.items.count,
+                region: receipt.region,
+                itemCount: receipt.itemCount,
                 reason: reason.rawValue
             ))
             banner = .init(title: "已是最新", tone: .success)
         } catch {
+            guard isCurrentRefresh(generation: generation, sessionID: sessionID) else { return }
             banner = .init(title: Self.map(error).message, tone: .warning)
         }
+        await dismissRefreshBanner(generation: generation, sessionID: sessionID)
+    }
+
+    private func dismissRefreshBanner(generation: UInt64, sessionID: UUID?) async {
         try? await Task.sleep(for: .seconds(2))
+        guard authGeneration == generation, session?.sessionId == sessionID else { return }
         banner = nil
     }
 
@@ -230,6 +277,7 @@ final class AppModel {
     }
 
     func didAuthenticate(_ newSession: UserSession) {
+        let previousUserID = session?.user.id
         let generation = beginAuthTransition()
         let completedGate = presentedGate
         let authenticatedUserID = newSession.user.id
@@ -237,7 +285,7 @@ final class AppModel {
         if session?.user.id != newSession.user.id {
             discovery.resetForSessionChange()
         }
-        if let previousUserID = session?.user.id, previousUserID != newSession.user.id {
+        if let previousUserID, previousUserID != newSession.user.id {
             router.resetSensitiveNavigation()
         }
         session = newSession
@@ -254,7 +302,20 @@ final class AppModel {
         }
         authTask = Task { [weak self] in
             guard let self, isCurrentAuth(generation, sessionID: authenticatedSessionID) else { return }
-            try? await syncLifecycle.bootstrap(userID: authenticatedUserID, generation: generation)
+            do {
+                if let previousUserID, previousUserID != authenticatedUserID {
+                    try await syncLifecycle.deactivateScope(
+                        reason: .accountChanged,
+                        generation: generation
+                    )
+                    guard isCurrentAuth(generation, sessionID: authenticatedSessionID) else { return }
+                }
+                try await syncLifecycle.bootstrap(userID: authenticatedUserID, generation: generation)
+            } catch {
+                guard isCurrentAuth(generation, sessionID: authenticatedSessionID) else { return }
+                banner = .init(title: Self.map(error).message, tone: .warning)
+                return
+            }
             guard isCurrentAuth(generation, sessionID: authenticatedSessionID) else { return }
             await discovery.refresh()
             guard isCurrentAuth(generation, sessionID: authenticatedSessionID) else { return }
@@ -326,18 +387,50 @@ final class AppModel {
         discovery.resetForSessionChange()
         authTask = Task { [weak self] in
             guard let self else { return }
+            guard isCurrentSignedOut(generation) else { return }
+            do {
+                try await syncLifecycle.deactivateScope(reason: .signOut, generation: generation)
+            } catch {
+                guard isCurrentSignedOut(generation) else { return }
+                banner = .init(title: Self.map(error).message, tone: .warning)
+                return
+            }
+            guard isCurrentSignedOut(generation) else { return }
             if let endingSessionID {
                 _ = try? await sessionEnder.signOut(expectedSessionID: endingSessionID)
             }
-            guard isCurrentSignedOut(generation) else { return }
-            try? await syncLifecycle.resetSensitiveScope(reason: .signOut, generation: generation)
             guard isCurrentSignedOut(generation) else { return }
             await discovery.refresh()
         }
     }
 
+    private func handleSessionExpiration(expectedSessionID: UUID) async {
+        guard session?.sessionId == expectedSessionID else { return }
+        let generation = beginAuthTransition()
+        GoogleSignInManager.shared.signOut()
+        session = nil
+        presentedGate = .login
+        router.resetSensitiveNavigation()
+        discovery.resetForSessionChange()
+        banner = .init(
+            title: String(localized: "登录已过期。"),
+            tone: .warning
+        )
+        do {
+            try await syncLifecycle.deactivateScope(
+                reason: .sessionExpired,
+                generation: generation
+            )
+        } catch {
+            guard isCurrentSignedOut(generation) else { return }
+            return
+        }
+        guard isCurrentSignedOut(generation) else { return }
+        await discovery.refresh()
+    }
+
     private func beginAuthTransition() -> UInt64 {
-        authGeneration &+= 1
+        authGeneration = ownerWriteLeaseAuthority.revoke()
         authTask?.cancel()
         authTask = nil
         return authGeneration
@@ -355,11 +448,46 @@ final class AppModel {
         authGeneration == generation && session == nil && !Task.isCancelled
     }
 
+    private func isCurrentRefresh(generation: UInt64, sessionID: UUID?) -> Bool {
+        guard !Task.isCancelled, authGeneration == generation else { return false }
+        return session?.sessionId == sessionID
+    }
+
     static func map(_ error: Error) -> UserFacingError {
         if let apiError = error as? APIError {
-            return .init(id: apiError.code, message: apiError.message, retryable: apiError.retryable)
+            let message: String
+            switch apiError.code {
+            case "CHALLENGE_EXPIRED":
+                message = String(localized: "验证码已过期，请重新获取。")
+            case "OTP_RATE_LIMITED":
+                message = String(localized: "尝试次数过多，请稍后再试。")
+            case "AUTH_CREDENTIAL_INVALID", "PHONE_VERIFICATION_FAILED":
+                message = String(localized: "验证码或登录凭证不正确，请重新检查。")
+            case "PHONE_ALREADY_BOUND", "PHONE_BINDING_CONFLICT":
+                message = String(localized: "此手机号已绑定其他账号。")
+            case "TOKEN_EXPIRED", "TOKEN_INVALID", "SESSION_NOT_FOUND", "REFRESH_TOKEN_REUSED":
+                message = String(localized: "登录已过期，请重新登录。")
+            case "VERSION_CONFLICT", "EVENT_CHANGED", "EVENT_VERSION_CONFLICT":
+                message = String(localized: "内容已更新，请重新核对后继续。")
+            default:
+                switch apiError.status {
+                case 401:
+                    message = String(localized: "请登录后继续。")
+                case 403:
+                    message = String(localized: "当前账号没有执行此操作的权限。")
+                case 404:
+                    message = String(localized: "内容不存在或已下线。")
+                default:
+                    message = String(localized: "操作暂时无法完成，请重试。")
+                }
+            }
+            return .init(id: apiError.code, message: message, retryable: apiError.retryable)
         }
-        return .init(id: "NETWORK_UNAVAILABLE", message: "暂时无法连接 Spott，请检查网络后重试。", retryable: true)
+        return .init(
+            id: "NETWORK_UNAVAILABLE",
+            message: String(localized: "暂时无法连接 Spott，请检查网络后重试。"),
+            retryable: true
+        )
     }
 
     static var preview: AppModel {

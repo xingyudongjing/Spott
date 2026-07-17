@@ -33,6 +33,7 @@ struct DiscoveryMap: View {
             }
             .onMapCameraChange(frequency: .onEnd, cameraSettled)
             .onChange(of: selectedEventID, selectionChanged)
+            .onChange(of: store.mapCameraRevision, cameraRefitRequested)
             .accessibilityLabel("活动地图")
             .accessibilityHint("地图位置均为主办方公开的约略位置；结果也可在列表中浏览。")
             .accessibilityIdentifier("discovery.map")
@@ -54,6 +55,12 @@ struct DiscoveryMap: View {
 
     private func selectionChanged(oldValue: UUID?, newValue: UUID?) {
         if newValue != nil { showsResults = true }
+    }
+
+    private func cameraRefitRequested(oldValue: Int, newValue: Int) {
+        guard oldValue != newValue else { return }
+        selectedEventID = nil
+        cameraPosition = .fitting(store.mapEvents)
     }
 
     private func showResults() {

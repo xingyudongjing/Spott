@@ -4,6 +4,80 @@ import XCTest
 
 @MainActor
 final class DiscoveryStoreTests: XCTestCase {
+    func testSuccessfulInitialReplacementReturnsAnAppliedResponseReceipt() async throws {
+        let event = try Self.event(id: 1, title: "Applied")
+        let store = DiscoveryStore(
+            service: TestDiscoveryService { _, _ in Self.page(items: [event]) },
+            cache: TestDiscoveryCache()
+        )
+
+        let receipt = await store.loadInitial()
+
+        XCTAssertEqual(
+            receipt,
+            DiscoveryReplacementReceipt(region: "tokyo", itemCount: 1)
+        )
+    }
+
+    func testFailedInitialReplacementReturnsNoReceiptWhenOfflineCacheRemainsVisible() async throws {
+        let cached = try Self.event(id: 1, title: "Cached")
+        let store = DiscoveryStore(
+            service: TestDiscoveryService { _, _ in
+                throw URLError(.notConnectedToInternet)
+            },
+            cache: TestDiscoveryCache(cached: [cached])
+        )
+
+        let receipt = await store.loadInitial()
+
+        XCTAssertNil(receipt)
+        XCTAssertEqual(store.items.map(\.title), ["Cached"])
+        XCTAssertEqual(store.phase, .offline)
+    }
+
+    func testCancelledOlderReplacementReturnsNoReceipt() async throws {
+        let firstStarted = expectation(description: "first request started")
+        let firstCancelled = expectation(description: "first request cancelled")
+        let replacement = try Self.event(id: 2, title: "Replacement")
+        let service = TestDiscoveryService { _, requestNumber in
+            if requestNumber == 1 {
+                firstStarted.fulfill()
+                do {
+                    try await Task.sleep(for: .seconds(5))
+                } catch is CancellationError {
+                    firstCancelled.fulfill()
+                    throw CancellationError()
+                }
+            }
+            return Self.page(items: [replacement])
+        }
+        let store = DiscoveryStore(service: service, cache: TestDiscoveryCache())
+
+        let older = Task { await store.loadInitial() }
+        await fulfillment(of: [firstStarted], timeout: 1)
+        let latest = await store.refresh()
+        await fulfillment(of: [firstCancelled], timeout: 1)
+
+        let olderReceipt = await older.value
+        XCTAssertNil(olderReceipt)
+        XCTAssertEqual(latest, DiscoveryReplacementReceipt(region: "tokyo", itemCount: 1))
+    }
+
+    func testFixtureNeverProducesAnAppliedNetworkReceipt() async throws {
+        let fixture = try Self.event(id: 1, title: "Fixture")
+        let service = TestDiscoveryService { _, _ in Self.page(items: []) }
+        let store = DiscoveryStore(service: service, cache: TestDiscoveryCache())
+        store.replaceWithFixture([fixture])
+
+        let initialReceipt = await store.loadInitial()
+        let refreshReceipt = await store.refresh()
+
+        XCTAssertNil(initialReceipt)
+        XCTAssertNil(refreshReceipt)
+        let queryCount = await service.recordedQueryCount()
+        XCTAssertEqual(queryCount, 0)
+    }
+
     func testDefaultSearchDebounceIsExactlyThreeHundredMilliseconds() async throws {
         let service = TestDiscoveryService { _, _ in Self.page(items: []) }
         let store = DiscoveryStore(service: service, cache: TestDiscoveryCache())
@@ -257,6 +331,153 @@ final class DiscoveryStoreTests: XCTestCase {
 
         let queries = await service.recordedQueries()
         XCTAssertEqual(queries.last?.bounds, bounds)
+        XCTAssertEqual(store.mapCameraRevision, 0)
+    }
+
+    func testSelectingRegionClearsStaleBoundsAndRequestsCameraRefitAfterReplacement() async throws {
+        let osaka = try Self.event(
+            id: 1,
+            title: "Osaka",
+            coordinate: ["latitude": 34.6937, "longitude": 135.5023, "precision": "approximate"]
+        )
+        let service = TestDiscoveryService { query, _ in
+            XCTAssertEqual(query.region, "osaka")
+            XCTAssertNil(query.bounds)
+            return Self.page(items: [osaka])
+        }
+        let store = DiscoveryStore(
+            service: service,
+            cache: TestDiscoveryCache(),
+            debounce: .milliseconds(10)
+        )
+        store.bounds = MapBounds(west: 139.6, south: 35.5, east: 139.9, north: 35.8)
+        let initialRevision = store.mapCameraRevision
+
+        store.selectRegion("osaka")
+
+        XCTAssertEqual(store.region, "osaka")
+        XCTAssertNil(store.bounds)
+        XCTAssertEqual(store.mapCameraRevision, initialRevision)
+
+        try await Task.sleep(for: .milliseconds(80))
+
+        let queries = await service.recordedQueries()
+        XCTAssertEqual(queries.count, 1)
+        XCTAssertEqual(queries.last?.region, "osaka")
+        XCTAssertNil(queries.last?.bounds)
+        XCTAssertEqual(store.mapEvents.map(\.title), ["Osaka"])
+        XCTAssertEqual(store.mapCameraRevision, initialRevision + 1)
+    }
+
+    func testRegionCameraRefitPendingSurvivesRetryableFailureAndAdvancesOnceAfterRetry() async throws {
+        let osaka = try Self.event(
+            id: 1,
+            title: "Osaka retry",
+            coordinate: ["latitude": 34.6937, "longitude": 135.5023, "precision": "approximate"]
+        )
+        let service = TestDiscoveryService { query, requestNumber in
+            XCTAssertEqual(query.region, "osaka")
+            XCTAssertNil(query.bounds)
+            if requestNumber == 1 {
+                throw URLError(.networkConnectionLost)
+            }
+            return Self.page(items: [osaka])
+        }
+        let store = DiscoveryStore(
+            service: service,
+            cache: TestDiscoveryCache(),
+            debounce: .milliseconds(10)
+        )
+        store.bounds = MapBounds(west: 139.6, south: 35.5, east: 139.9, north: 35.8)
+
+        store.selectRegion("osaka")
+        try await Task.sleep(for: .milliseconds(80))
+
+        XCTAssertEqual(store.mapCameraRevision, 0)
+        XCTAssertEqual(store.fatalError?.id, "NETWORK_UNAVAILABLE")
+        XCTAssertTrue(store.fatalError?.retryable == true)
+
+        await store.refresh()
+
+        XCTAssertEqual(store.mapCameraRevision, 1)
+        XCTAssertEqual(store.mapEvents.map(\.title), ["Osaka retry"])
+
+        await store.refresh()
+
+        XCTAssertEqual(
+            store.mapCameraRevision,
+            1,
+            "A settled region intent must be consumed after its authoritative retry succeeds"
+        )
+        let queries = await service.recordedQueries()
+        XCTAssertEqual(queries.count, 3)
+    }
+
+    func testSessionResetClearsPendingRegionRefitBeforeOldAndSameRegionResultsArrive() async throws {
+        let firstRequestStarted = expectation(description: "region replacement started")
+        let osaka = try Self.event(
+            id: 1,
+            title: "Osaka after reset",
+            coordinate: ["latitude": 34.6937, "longitude": 135.5023, "precision": "approximate"]
+        )
+        let service = TestDiscoveryService { _, requestNumber in
+            if requestNumber == 1 {
+                firstRequestStarted.fulfill()
+                try? await Task.sleep(for: .milliseconds(120))
+            }
+            return Self.page(items: [osaka])
+        }
+        let store = DiscoveryStore(
+            service: service,
+            cache: TestDiscoveryCache(),
+            debounce: .milliseconds(5)
+        )
+
+        store.selectRegion("osaka")
+        await fulfillment(of: [firstRequestStarted], timeout: 1)
+        store.resetForSessionChange()
+        await store.refresh()
+        try await Task.sleep(for: .milliseconds(40))
+
+        XCTAssertEqual(store.mapCameraRevision, 0)
+        let queries = await service.recordedQueries()
+        XCTAssertEqual(queries.count, 2)
+        XCTAssertTrue(queries.allSatisfy { $0.region == "osaka" && $0.bounds == nil })
+    }
+
+    func testFixtureReplacementClearsPendingRegionRefitAndRejectsTheOldResponse() async throws {
+        let firstRequestStarted = expectation(description: "region replacement started")
+        let stale = try Self.event(
+            id: 1,
+            title: "Stale Osaka",
+            coordinate: ["latitude": 34.6937, "longitude": 135.5023, "precision": "approximate"]
+        )
+        let fixture = try Self.event(
+            id: 2,
+            title: "Fixture Osaka",
+            coordinate: ["latitude": 34.7000, "longitude": 135.4900, "precision": "approximate"]
+        )
+        let service = TestDiscoveryService { _, _ in
+            firstRequestStarted.fulfill()
+            try? await Task.sleep(for: .milliseconds(120))
+            return Self.page(items: [stale])
+        }
+        let store = DiscoveryStore(
+            service: service,
+            cache: TestDiscoveryCache(),
+            debounce: .milliseconds(5)
+        )
+
+        store.selectRegion("osaka")
+        await fulfillment(of: [firstRequestStarted], timeout: 1)
+        store.replaceWithFixture([fixture])
+        await store.refresh()
+        try await Task.sleep(for: .milliseconds(40))
+
+        XCTAssertEqual(store.mapCameraRevision, 0)
+        XCTAssertEqual(store.items.map(\.title), ["Fixture Osaka"])
+        let queryCount = await service.recordedQueryCount()
+        XCTAssertEqual(queryCount, 1)
     }
 
     func testWorldSizedMapBoundsAreIgnoredInsteadOfReplacingDiscoveryResults() async throws {
@@ -341,6 +562,42 @@ final class DiscoveryStoreTests: XCTestCase {
             store.fatalError?.message,
             "Unable to connect to Spott. Check your network and try again."
         )
+        let queryCount = await service.recordedQueryCount()
+        XCTAssertEqual(queryCount, 1)
+    }
+
+    func testDiscoveryAPIErrorUsesLocalizedSafeCopyAndNeverServerMessage() async {
+        let diagnostic = "SQLSTATE 42P01 registrations_internal request_id=secret"
+        let service = TestDiscoveryService { _, _ in
+            throw APIError(
+                status: 500,
+                code: "DISCOVERY_QUERY_FAILED",
+                message: diagnostic,
+                retryable: true
+            )
+        }
+        let store = DiscoveryStore(
+            service: service,
+            cache: TestDiscoveryCache(),
+            locale: Locale(identifier: "zh-Hans")
+        )
+
+        await store.loadInitial()
+
+        XCTAssertEqual(store.fatalError?.id, "DISCOVERY_QUERY_FAILED")
+        XCTAssertTrue(store.fatalError?.retryable == true)
+        XCTAssertEqual(store.fatalError?.message, "请求暂时无法完成。")
+        XCTAssertFalse(store.fatalError?.message.contains(diagnostic) == true)
+
+        store.updateLocale(Locale(identifier: "ja"))
+        XCTAssertEqual(store.fatalError?.message, "現在リクエストを完了できません。")
+        XCTAssertFalse(store.fatalError?.message.contains(diagnostic) == true)
+
+        store.updateLocale(Locale(identifier: "en"))
+        XCTAssertEqual(store.fatalError?.message, "Unable to complete the request right now.")
+        XCTAssertFalse(store.fatalError?.message.contains(diagnostic) == true)
+        XCTAssertEqual(store.fatalError?.id, "DISCOVERY_QUERY_FAILED")
+        XCTAssertTrue(store.fatalError?.retryable == true)
         let queryCount = await service.recordedQueryCount()
         XCTAssertEqual(queryCount, 1)
     }

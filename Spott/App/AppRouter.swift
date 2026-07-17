@@ -65,17 +65,20 @@ struct DeferredRegistrationDraft: Hashable, Sendable {
     var joinWaitlistIfFull: Bool
     var answers: [UUID: RegistrationAnswer]
     var attendeeNote: String
+    var acceptedTerms: Bool
 
     init(
         partySize: Int = 1,
         joinWaitlistIfFull: Bool = true,
         answers: [UUID: RegistrationAnswer] = [:],
-        attendeeNote: String = ""
+        attendeeNote: String = "",
+        acceptedTerms: Bool = false
     ) {
         self.partySize = max(1, partySize)
         self.joinWaitlistIfFull = joinWaitlistIfFull
         self.answers = answers
         self.attendeeNote = attendeeNote
+        self.acceptedTerms = acceptedTerms
     }
 }
 
@@ -114,6 +117,7 @@ final class AppRouter {
     private(set) var paths: [AppTab: [AppRoute]]
     private(set) var deferredRegistrationIntent: DeferredRegistrationIntent?
     private(set) var pendingRegistrationPresentation: DeferredRegistrationIntent?
+    private(set) var pendingItineraryRegistrationID: UUID?
     private var eventSnapshots: [EventRouteReference: EventSummary] = [:]
 
     init() {
@@ -147,6 +151,19 @@ final class AppRouter {
         let reference = EventRouteReference(event: event)
         eventSnapshots[reference] = event
         push(.event(reference), in: tab, selectingExplicitTab: tab != nil)
+    }
+
+    func showItinerary(registrationID: UUID?) {
+        pendingItineraryRegistrationID = registrationID
+        paths[.activities] = []
+        selectedTab = .activities
+    }
+
+    @discardableResult
+    func completeItineraryFocus(_ registrationID: UUID) -> Bool {
+        guard pendingItineraryRegistrationID == registrationID else { return false }
+        pendingItineraryRegistrationID = nil
+        return true
     }
 
     func cachedEvent(for reference: EventRouteReference) -> EventSummary? {
@@ -241,6 +258,7 @@ final class AppRouter {
         paths = Dictionary(uniqueKeysWithValues: AppTab.allCases.map { ($0, []) })
         deferredRegistrationIntent = nil
         pendingRegistrationPresentation = nil
+        pendingItineraryRegistrationID = nil
         eventSnapshots.removeAll()
     }
 

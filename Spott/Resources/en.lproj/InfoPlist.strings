@@ -1,0 +1,4 @@
+"NSCalendarsWriteOnlyAccessUsageDescription" = "Spott adds events you choose to your calendar. It cannot read or change your other events.";
+"NSCameraUsageDescription" = "Spott uses the camera only while you scan an on-site event check-in code.";
+"NSLocationWhenInUseUsageDescription" = "Spott uses your location to show nearby events and map distance. You can also choose a region manually.";
+"NSPhotoLibraryUsageDescription" = "Spott lets you choose photos for event covers and community posts.";

@@ -204,6 +204,26 @@ final class AppRouterTests: XCTestCase {
         XCTAssertNil(router.pendingRegistrationPresentation)
     }
 
+    func testItineraryNavigationPreservesTheRegistrationToFocusUntilConsumed() {
+        let router = AppRouter()
+        let registrationID = UUID(
+            uuidString: "019b0000-0000-7000-8100-000000000088"
+        )!
+        router.setPath([.event(.init(event: firstEvent))], for: .activities)
+        router.setPath([.settings], for: .profile)
+
+        router.showItinerary(registrationID: registrationID)
+
+        XCTAssertEqual(router.selectedTab, .activities)
+        XCTAssertTrue(router.path(for: .activities).isEmpty)
+        XCTAssertEqual(router.path(for: .profile), [.settings])
+        XCTAssertEqual(router.pendingItineraryRegistrationID, registrationID)
+        XCTAssertFalse(router.completeItineraryFocus(UUID()))
+        XCTAssertEqual(router.pendingItineraryRegistrationID, registrationID)
+        XCTAssertTrue(router.completeItineraryFocus(registrationID))
+        XCTAssertNil(router.pendingItineraryRegistrationID)
+    }
+
     func testAccountResetClearsSensitivePathsAndRegistrationIntent() {
         let router = AppRouter()
         router.selectedTab = .profile
@@ -216,5 +236,6 @@ final class AppRouterTests: XCTestCase {
         XCTAssertTrue(AppTab.allCases.allSatisfy { router.path(for: $0).isEmpty })
         XCTAssertNil(router.deferredRegistrationIntent)
         XCTAssertNil(router.pendingRegistrationPresentation)
+        XCTAssertNil(router.pendingItineraryRegistrationID)
     }
 }

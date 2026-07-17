@@ -3,12 +3,58 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import SwiftUI
 
+enum CheckInCameraPanelState: Equatable, Sendable {
+    case requesting
+    case denied
+    case scanner
+
+    init(cameraAllowed: Bool?) {
+        switch cameraAllowed {
+        case nil: self = .requesting
+        case false: self = .denied
+        case true: self = .scanner
+        }
+    }
+}
+
+enum CheckInAccessibilityFocusTarget: Hashable, Sendable {
+    case error
+    case success
+}
+
+enum CheckInAccessibilityEvent: Equatable, Sendable {
+    case failure
+    case success
+
+    var focusTarget: CheckInAccessibilityFocusTarget {
+        switch self {
+        case .failure: .error
+        case .success: .success
+        }
+    }
+
+    func announcement(eventTitle: String, locale: Locale) -> String {
+        switch self {
+        case .failure:
+            CoreJourneyLocalization.text("journey.checkin.error", locale: locale)
+        case .success:
+            CoreJourneyLocalization.format(
+                "journey.checkin.success_announcement",
+                locale: locale,
+                eventTitle
+            )
+        }
+    }
+}
+
 struct ParticipantCheckInView: View {
     private enum EntryMode: String, CaseIterable, Identifiable {
         case camera
         case code
         var id: String { rawValue }
-        var title: LocalizedStringKey { self == .camera ? "扫描二维码" : "输入 6 位码" }
+        var localizationKey: String.LocalizationValue {
+            self == .camera ? "journey.checkin.scan" : "journey.checkin.code"
+        }
     }
 
     private struct Attempt: Equatable {
@@ -18,9 +64,14 @@ struct ParticipantCheckInView: View {
     }
 
     @Environment(AppModel.self) private var model
+    @Environment(\.locale) private var locale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     let event: EventSummary
     let registration: Registration
 
+    @ScaledMetric(relativeTo: .largeTitle) private var successIconSize = 72.0
+    @AccessibilityFocusState private var accessibilityFocus: CheckInAccessibilityFocusTarget?
     @State private var entryMode: EntryMode = .camera
     @State private var token: String?
     @State private var code = ""
@@ -40,9 +91,16 @@ struct ParticipantCheckInView: View {
             }
         }
         .background(SpottColor.canvas.ignoresSafeArea())
-        .navigationTitle("现场签到")
+        .navigationTitle(text("journey.checkin.title"))
         .navigationBarTitleDisplayMode(.inline)
-        .task { await requestCameraAccessIfNeeded() }
+        .task(id: entryMode) {
+            guard entryMode == .camera else { return }
+            await requestCameraAccessIfNeeded()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, entryMode == .camera else { return }
+            Task { await requestCameraAccessIfNeeded() }
+        }
         .onChange(of: token) { _, newValue in
             guard let newValue else { return }
             submit(token: newValue, code: nil)
@@ -53,16 +111,20 @@ struct ParticipantCheckInView: View {
         VStack(spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(event.title)
-                    .font(.system(size: 23, weight: .bold, design: .rounded))
-                Text("签到码由局头现场展示，每 30 秒更新。请勿接受他人远程转发的码。")
+                    .font(.title2.bold())
+                    .fontDesign(.rounded)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(text("journey.checkin.guidance"))
                     .font(.subheadline)
                     .foregroundStyle(SpottColor.muted)
                     .lineSpacing(3)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            Picker("签到方式", selection: $entryMode) {
-                ForEach(EntryMode.allCases) { Text($0.title).tag($0) }
+            Picker(text("journey.checkin.method"), selection: $entryMode) {
+                ForEach(EntryMode.allCases) {
+                    Text(text($0.localizationKey)).tag($0)
+                }
             }
             .pickerStyle(.segmented)
 
@@ -72,13 +134,16 @@ struct ParticipantCheckInView: View {
                 codePanel
             }
 
-            if let error {
-                Label(error.message, systemImage: "exclamationmark.circle.fill")
+            if error != nil {
+                Label(text("journey.checkin.error"), systemImage: "exclamationmark.circle.fill")
                     .font(.subheadline)
                     .foregroundStyle(SpottColor.danger)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(14)
                     .background(SpottColor.danger.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityFocused($accessibilityFocus, equals: .error)
+                    .accessibilityIdentifier("checkin.error")
             }
 
             Spacer(minLength: 0)
@@ -88,17 +153,26 @@ struct ParticipantCheckInView: View {
 
     @ViewBuilder
     private var cameraPanel: some View {
-        if cameraAllowed == false {
+        switch CheckInCameraPanelState(cameraAllowed: cameraAllowed) {
+        case .requesting:
+            ProgressView(text("journey.checkin.camera_requesting"))
+                .frame(maxWidth: .infinity, minHeight: 220)
+                .background(
+                    Color(uiColor: .secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+                )
+                .accessibilityIdentifier("checkin.camera.requesting")
+        case .denied:
             SpottStateCard(
                 icon: "camera.fill",
-                title: "需要相机权限",
-                message: "你仍可切换到 6 位码完成签到，也可以在系统设置中允许相机。",
-                actionTitle: "打开设置"
+                title: text("journey.checkin.camera_title"),
+                message: text("journey.checkin.camera_message"),
+                actionTitle: text("journey.checkin.open_settings")
             ) {
                 guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
                 model.openExternal(url: url)
             }
-        } else {
+        case .scanner:
             ZStack {
                 QRScannerRepresentable(token: $token, torch: torch)
                 RoundedRectangle(cornerRadius: 28, style: .continuous)
@@ -108,16 +182,23 @@ struct ParticipantCheckInView: View {
                 VStack {
                     Spacer()
                     Button { torch.toggle() } label: {
-                        Label(torch ? "关闭手电筒" : "打开手电筒", systemImage: torch ? "flashlight.off.fill" : "flashlight.on.fill")
+                        Label(
+                            text(
+                                torch
+                                    ? "journey.checkin.torch_off"
+                                    : "journey.checkin.torch_on"
+                            ),
+                            systemImage: torch ? "flashlight.off.fill" : "flashlight.on.fill"
+                        )
                             .padding(.horizontal, 16)
                             .frame(height: 44)
                     }
-                    .spottGlassPanel(shape: Capsule())
+                    .modifier(CheckInFloatingButtonStyle())
                     .foregroundStyle(.white)
                     .padding(.bottom, 18)
                 }
                 if busy {
-                    ProgressView("正在验证…")
+                    ProgressView(text("journey.checkin.verifying"))
                         .tint(.white)
                         .foregroundStyle(.white)
                         .padding(18)
@@ -137,21 +218,30 @@ struct ParticipantCheckInView: View {
                 .keyboardType(.numberPad)
                 .textContentType(.oneTimeCode)
                 .multilineTextAlignment(.center)
-                .font(.system(size: 34, weight: .bold, design: .monospaced))
+                .font(.system(.largeTitle, design: .monospaced, weight: .bold))
                 .tracking(9)
+                .minimumScaleFactor(0.72)
                 .onChange(of: code) { _, value in
                     code = String(value.filter(\.isNumber).prefix(6))
                     if code.count == 6 { error = nil }
                 }
                 .frame(height: 72)
-                .spottGlassPanel(shape: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .background(
+                    Color(uiColor: .secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(Color.primary.opacity(0.1), lineWidth: 0.5)
+                }
+                .accessibilityLabel(text("journey.checkin.code_field"))
 
             Button {
                 submit(token: nil, code: code)
             } label: {
                 HStack(spacing: 9) {
                     if busy { ProgressView().tint(.white) }
-                    Text("验证并签到")
+                    Text(text("journey.checkin.submit"))
                 }
             }
             .buttonStyle(PrimaryButtonStyle())
@@ -161,34 +251,49 @@ struct ParticipantCheckInView: View {
     }
 
     private func successView(_ registration: Registration) -> some View {
-        VStack(spacing: 22) {
-            Spacer()
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 72, weight: .semibold))
-                .foregroundStyle(SpottColor.mint)
-                .symbolEffect(.bounce, value: registration.status)
-            VStack(spacing: 8) {
-                Text("签到成功")
-                    .font(.system(size: 32, weight: .bold, design: .rounded))
-                Text(event.title)
-                    .font(.headline)
-                    .multilineTextAlignment(.center)
-                if let points = registration.rewardPoints, points > 0 {
-                    Label("真实到场奖励 +\(points) 积分", systemImage: "sparkles")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(SpottColor.mint)
-                } else {
-                    Text("签到状态已同步，重复验证不会重复发放奖励。")
-                        .font(.subheadline)
-                        .foregroundStyle(SpottColor.muted)
+        ScrollView {
+            VStack(spacing: 22) {
+                successIcon(registration)
+                VStack(spacing: 8) {
+                    Text(text("journey.checkin.success"))
+                        .font(.largeTitle.bold())
+                        .fontDesign(.rounded)
+                        .multilineTextAlignment(.center)
+                        .accessibilityFocused($accessibilityFocus, equals: .success)
+                        .accessibilityIdentifier("checkin.success")
+                    Text(event.title)
+                        .font(.headline)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let points = registration.rewardPoints, points > 0 {
+                        Label(
+                            CoreJourneyLocalization.format(
+                                "journey.checkin.reward",
+                                locale: locale,
+                                points
+                            ),
+                            systemImage: "sparkles"
+                        )
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(SpottColor.mint)
+                    } else {
+                        Text(text("journey.checkin.synced"))
+                            .font(.subheadline)
+                            .foregroundStyle(SpottColor.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
+                .padding(24)
+                .frame(maxWidth: .infinity)
+                .background(
+                    Color(uiColor: .secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 28, style: .continuous)
+                )
             }
-            .padding(24)
+            .padding(SpottMetric.pageInset)
+            .padding(.top, 36)
             .frame(maxWidth: .infinity)
-            .spottGlassPanel(shape: RoundedRectangle(cornerRadius: 28, style: .continuous), interactive: false)
-            Spacer()
         }
-        .padding(SpottMetric.pageInset)
     }
 
     private func requestCameraAccessIfNeeded() async {
@@ -208,6 +313,7 @@ struct ParticipantCheckInView: View {
         guard let attempt else { return }
         busy = true
         error = nil
+        accessibilityFocus = nil
 
         Task { @MainActor in
             defer { busy = false }
@@ -220,11 +326,55 @@ struct ParticipantCheckInView: View {
                 )
                 result = try await model.api.checkIn(payload, idempotencyKey: attempt.idempotencyKey)
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
+                focusAndAnnounce(.success)
             } catch {
-                self.error = AppModel.map(error)
+                self.error = .init(
+                    id: (error as? APIError)?.code ?? "CHECK_IN_FAILED",
+                    message: text("journey.checkin.error"),
+                    retryable: true
+                )
                 if token != nil { self.token = nil }
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
+                focusAndAnnounce(.failure)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func successIcon(_ registration: Registration) -> some View {
+        let icon = Image(systemName: "checkmark.circle.fill")
+            .font(.system(size: successIconSize, weight: .semibold))
+            .foregroundStyle(SpottColor.mint)
+            .accessibilityHidden(true)
+        if reduceMotion {
+            icon
+        } else {
+            icon.symbolEffect(.bounce, value: registration.status)
+        }
+    }
+
+    private func focusAndAnnounce(_ event: CheckInAccessibilityEvent) {
+        let message = event.announcement(eventTitle: self.event.title, locale: locale)
+        accessibilityFocus = nil
+        Task { @MainActor in
+            await Task.yield()
+            await Task.yield()
+            accessibilityFocus = event.focusTarget
+            UIAccessibility.post(notification: .announcement, argument: message)
+        }
+    }
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        CoreJourneyLocalization.text(key, locale: locale)
+    }
+}
+
+private struct CheckInFloatingButtonStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.buttonStyle(.glass)
+        } else {
+            content.buttonStyle(.bordered)
         }
     }
 }

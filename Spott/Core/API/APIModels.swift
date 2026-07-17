@@ -452,6 +452,7 @@ enum RegistrationAnswer: Codable, Hashable, Sendable {
 struct RegistrationRequestPayload: Encodable, Sendable {
     let partySize: Int
     let quoteId: String
+    let expectedEventVersion: Int
     let joinWaitlistIfFull: Bool
     let answers: [String: RegistrationAnswer]
     let attendeeNote: String?
@@ -459,17 +460,35 @@ struct RegistrationRequestPayload: Encodable, Sendable {
     init(
         partySize: Int,
         quoteID: UUID,
+        expectedEventVersion: Int,
         joinWaitlistIfFull: Bool,
         answers: [UUID: RegistrationAnswer],
         attendeeNote: String? = nil
     ) {
         self.partySize = partySize
         quoteId = quoteID.uuidString.lowercased()
+        self.expectedEventVersion = expectedEventVersion
         self.joinWaitlistIfFull = joinWaitlistIfFull
         self.answers = Dictionary(uniqueKeysWithValues: answers.map {
             ($0.key.uuidString.lowercased(), $0.value)
         })
         self.attendeeNote = attendeeNote?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+}
+
+struct WaitlistAcceptancePayload: Encodable, Sendable {
+    let quoteId: String
+    let expectedRegistrationVersion: Int
+    let expectedEventVersion: Int
+
+    init(
+        quoteID: UUID,
+        expectedRegistrationVersion: Int,
+        expectedEventVersion: Int
+    ) {
+        quoteId = quoteID.uuidString.lowercased()
+        self.expectedRegistrationVersion = expectedRegistrationVersion
+        self.expectedEventVersion = expectedEventVersion
     }
 }
 
@@ -661,6 +680,28 @@ struct FeedbackSubmissionPayload: Codable, Sendable {
     let visibility: FeedbackVisibility
 }
 
+struct StableIdempotencyAttempt: Equatable, Sendable {
+    let idempotencyKey: UUID
+    private let payloadFingerprint: Data
+
+    static func resolve<Payload: Encodable>(
+        existing: StableIdempotencyAttempt?,
+        payload: Payload,
+        makeKey: () -> UUID = UUID.init
+    ) throws -> StableIdempotencyAttempt {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let fingerprint = try encoder.encode(payload)
+        if let existing, existing.payloadFingerprint == fingerprint {
+            return existing
+        }
+        return StableIdempotencyAttempt(
+            idempotencyKey: makeKey(),
+            payloadFingerprint: fingerprint
+        )
+    }
+}
+
 struct FeedbackReceipt: Codable, Identifiable, Sendable {
     let id: UUID
     let eventId: UUID
@@ -668,6 +709,36 @@ struct FeedbackReceipt: Codable, Identifiable, Sendable {
     let editCount: Int
     let rewardPoints: Int
     let createdAt: Date
+}
+
+enum FeedbackSubmissionState: String, Codable, Sendable {
+    case notSubmitted = "not_submitted"
+    case editAvailable = "edit_available"
+    case editLimitReached = "edit_limit_reached"
+    case windowClosed = "window_closed"
+    case notEligible = "not_eligible"
+}
+
+struct OwnFeedback: Codable, Identifiable, Sendable {
+    let id: UUID
+    let attendanceRating: Int
+    let tags: [FeedbackTag]
+    let comment: String?
+    let visibility: FeedbackVisibility
+    let moderationState: String
+    let editCount: Int
+    let createdAt: Date?
+    let updatedAt: Date?
+}
+
+struct OwnFeedbackState: Codable, Sendable {
+    let registrationId: UUID
+    let eventId: UUID
+    let state: FeedbackSubmissionState
+    let canSubmit: Bool
+    let canEdit: Bool
+    let windowClosesAt: Date?
+    let feedback: OwnFeedback?
 }
 
 struct FeedbackSummary: Codable, Sendable {

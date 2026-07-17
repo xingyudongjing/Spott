@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct MyActivitiesView: View {
+private struct LegacyMyActivitiesView: View {
     @Environment(AppModel.self) private var model
     @State private var selection: ActivityScope = .upcoming
     @State private var items: [ActivityItem] = []
@@ -180,7 +180,8 @@ struct MyActivitiesView: View {
     private func performPrimaryAction(_ item: ActivityItem) async {
         do {
             if item.registration.status == "offered" {
-                _ = try await model.api.acceptWaitlist(registrationID: item.registration.id)
+                model.router.showItinerary(registrationID: item.registration.id)
+                return
             } else if ["pending", "confirmed", "waitlisted"].contains(item.registration.status) {
                 _ = try await model.api.cancelRegistration(registrationID: item.registration.id)
             } else {
@@ -346,9 +347,38 @@ private struct ActivityCard: View {
     }
 }
 
-private struct FeedbackSubmissionView: View {
+struct FeedbackSubmissionAuthority: Sendable {
+    private(set) var value: OwnFeedbackState?
+    private(set) var refreshFailedAfterSubmission = false
+
+    init(value: OwnFeedbackState? = nil) {
+        self.value = value
+    }
+
+    var canSubmit: Bool { value?.canSubmit == true }
+    var canEdit: Bool { value?.canEdit == true }
+
+    mutating func mutationSucceeded() {
+        value = nil
+        refreshFailedAfterSubmission = false
+    }
+
+    mutating func received(_ value: OwnFeedbackState) {
+        self.value = value
+        refreshFailedAfterSubmission = false
+    }
+
+    mutating func refreshFailed(afterSubmission: Bool) {
+        guard afterSubmission else { return }
+        value = nil
+        refreshFailedAfterSubmission = true
+    }
+}
+
+struct FeedbackSubmissionView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
     let event: EventSummary
     let registration: Registration
 
@@ -357,104 +387,30 @@ private struct FeedbackSubmissionView: View {
     @State private var comment = ""
     @State private var visibility: FeedbackVisibility = .aggregateOnly
     @State private var busy = false
-    @State private var receipt: FeedbackReceipt?
+    @State private var loading = true
+    @State private var authority = FeedbackSubmissionAuthority()
+    @State private var editingExisting = false
+    @State private var submittedReceipt: FeedbackReceipt?
+    @State private var attempt: StableIdempotencyAttempt?
     @State private var error: UserFacingError?
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    if let receipt {
-                        success(receipt)
+                    if loading {
+                        ProgressView(text("journey.feedback.loading"))
+                            .frame(maxWidth: .infinity, minHeight: 260)
+                    } else if let feedback = authority.value?.feedback, !editingExisting {
+                        submittedStatus(feedback)
+                    } else if let submittedReceipt, authority.value?.feedback == nil {
+                        submittedFallback(submittedReceipt)
+                    } else if authority.value == nil {
+                        loadFailure
+                    } else if !authority.canSubmit {
+                        unavailableState
                     } else {
-                        VStack(alignment: .leading, spacing: 7) {
-                            Text("活动反馈")
-                                .font(.system(size: 31, weight: .bold, design: .rounded))
-                            Text(event.title)
-                                .font(.subheadline)
-                                .foregroundStyle(SpottColor.muted)
-                        }
-
-                        feedbackSection(title: "这次见面整体如何？") {
-                            HStack(spacing: 8) {
-                                ForEach(1...5, id: \.self) { value in
-                                    Button {
-                                        rating = value
-                                    } label: {
-                                        Image(systemName: value <= rating ? "star.fill" : "star")
-                                            .font(.system(size: 22, weight: .medium))
-                                            .foregroundStyle(value <= rating ? SpottColor.amber : SpottColor.muted)
-                                            .frame(maxWidth: .infinity, minHeight: 46)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-
-                        feedbackSection(title: "哪些体验值得保留？") {
-                            LazyVGrid(
-                                columns: [GridItem(.adaptive(minimum: 132), spacing: 8)],
-                                alignment: .leading,
-                                spacing: 8
-                            ) {
-                                ForEach(FeedbackTag.allCases) { tag in
-                                    Button {
-                                        if tags.contains(tag) { tags.remove(tag) } else { tags.insert(tag) }
-                                    } label: {
-                                        Label(tag.title, systemImage: tags.contains(tag) ? "checkmark.circle.fill" : "circle")
-                                            .font(.subheadline.weight(.semibold))
-                                            .foregroundStyle(tags.contains(tag) ? SpottColor.twilight : SpottColor.ink)
-                                            .padding(.horizontal, 12)
-                                            .frame(minHeight: 38)
-                                            .spottGlassPanel(
-                                                shape: Capsule(),
-                                                tint: tags.contains(tag) ? SpottColor.twilight.opacity(0.11) : .clear
-                                            )
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-
-                        feedbackSection(title: "给局头的改进建议") {
-                            TextField("可选，最多 500 字", text: $comment, axis: .vertical)
-                                .lineLimit(4...8)
-                                .padding(14)
-                                .background(Color.white.opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
-                                .onChange(of: comment) { _, value in
-                                    if value.count > 500 { comment = String(value.prefix(500)) }
-                                }
-                        }
-
-                        feedbackSection(title: "隐私方式") {
-                            Picker("隐私方式", selection: $visibility) {
-                                Text("仅局头可见").tag(FeedbackVisibility.private)
-                                Text("匿名聚合").tag(FeedbackVisibility.aggregateOnly)
-                            }
-                            .pickerStyle(.segmented)
-                            Text(visibility == .private
-                                 ? "建议只会出现在局头的私密改进面板，不公开展示。"
-                                 : "不会公开你的文字；仅当至少 5 人提交后，展示匿名标签比例。")
-                                .font(.caption)
-                                .foregroundStyle(SpottColor.muted)
-                                .lineSpacing(3)
-                        }
-
-                        if let error {
-                            Label("\(error.message)（\(error.id)）", systemImage: "exclamationmark.circle.fill")
-                                .font(.caption)
-                                .foregroundStyle(SpottColor.danger)
-                        }
-
-                        Button(action: submit) {
-                            HStack {
-                                if busy { ProgressView().tint(.white) }
-                                Text(busy ? "正在提交…" : "提交反馈")
-                            }
-                            .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(PrimaryButtonStyle())
-                        .disabled(busy)
+                        form
                     }
                 }
                 .padding(SpottMetric.pageInset)
@@ -463,14 +419,141 @@ private struct FeedbackSubmissionView: View {
             .background(SpottColor.canvas.ignoresSafeArea())
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") { dismiss() }
+                    Button(text("journey.common.close")) { dismiss() }
                 }
             }
+            .task(id: registration.id) { await loadState() }
         }
     }
 
+    @ViewBuilder private var form: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(text(editingExisting ? "journey.feedback.edit_title" : "journey.feedback.title"))
+                .font(.system(size: 31, weight: .bold, design: .rounded))
+            Text(event.title)
+                .font(.subheadline)
+                .foregroundStyle(SpottColor.muted)
+        }
+
+        feedbackSection(title: text("journey.feedback.overall")) {
+            HStack(spacing: 8) {
+                ForEach(1...5, id: \.self) { value in
+                    Button { rating = value } label: {
+                        Image(systemName: value <= rating ? "star.fill" : "star")
+                            .font(.system(size: 22, weight: .medium))
+                            .foregroundStyle(value <= rating ? SpottColor.amber : SpottColor.muted)
+                            .frame(maxWidth: .infinity, minHeight: 46)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(
+                        CoreJourneyLocalization.format("journey.feedback.star_label", locale: locale, value)
+                    )
+                    .accessibilityValue(value == rating ? text("journey.feedback.star_selected") : "")
+                    .accessibilityAddTraits(value == rating ? .isSelected : [])
+                }
+            }
+        }
+
+        feedbackSection(title: text("journey.feedback.highlights")) {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 132), spacing: 8)],
+                alignment: .leading,
+                spacing: 8
+            ) {
+                ForEach(FeedbackTag.allCases) { tag in
+                    Button {
+                        if tags.contains(tag) { tags.remove(tag) } else { tags.insert(tag) }
+                    } label: {
+                        Label(
+                            text(tag.localizationKey),
+                            systemImage: tags.contains(tag) ? "checkmark.circle.fill" : "circle"
+                        )
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(tags.contains(tag) ? SpottColor.twilight : SpottColor.ink)
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 38)
+                        .background(
+                            tags.contains(tag)
+                                ? SpottColor.twilight.opacity(0.11)
+                                : Color(uiColor: .tertiarySystemGroupedBackground),
+                            in: Capsule()
+                        )
+                        .overlay {
+                            Capsule().stroke(
+                                tags.contains(tag)
+                                    ? SpottColor.twilight.opacity(0.35)
+                                    : Color.primary.opacity(0.08),
+                                lineWidth: 0.5
+                            )
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(tags.contains(tag) ? .isSelected : [])
+                }
+            }
+        }
+
+        feedbackSection(title: text("journey.feedback.suggestion")) {
+            TextField(
+                text("journey.feedback.comment_placeholder"),
+                text: $comment,
+                axis: .vertical
+            )
+            .lineLimit(4...8)
+            .padding(14)
+            .background(
+                Color(uiColor: .tertiarySystemGroupedBackground),
+                in: RoundedRectangle(cornerRadius: 16)
+            )
+            .onChange(of: comment) { _, value in
+                if value.count > 500 { comment = String(value.prefix(500)) }
+            }
+        }
+
+        feedbackSection(title: text("journey.feedback.privacy")) {
+            Picker(text("journey.feedback.privacy"), selection: $visibility) {
+                Text(text("journey.feedback.private")).tag(FeedbackVisibility.private)
+                Text(text("journey.feedback.aggregate")).tag(FeedbackVisibility.aggregateOnly)
+            }
+            .pickerStyle(.segmented)
+            Text(
+                visibility == .private
+                    ? text("journey.feedback.private_note")
+                    : text("journey.feedback.aggregate_note")
+            )
+            .font(.caption)
+            .foregroundStyle(SpottColor.muted)
+            .lineSpacing(3)
+        }
+
+        if error != nil {
+            Label(submissionErrorText, systemImage: "exclamationmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(SpottColor.danger)
+                .accessibilityIdentifier("feedback-submission-error")
+        }
+
+        Button(action: submit) {
+            HStack {
+                if busy { ProgressView().tint(.white) }
+                Text(
+                    text(
+                        busy
+                            ? "journey.feedback.submitting"
+                            : editingExisting
+                                ? "journey.feedback.save_edit"
+                                : "journey.feedback.submit"
+                    )
+                )
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(PrimaryButtonStyle())
+        .disabled(busy)
+    }
+
     private func feedbackSection<Content: View>(
-        title: LocalizedStringKey,
+        title: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 13) {
@@ -478,35 +561,186 @@ private struct FeedbackSubmissionView: View {
             content()
         }
         .padding(17)
-        .spottGlassPanel(shape: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(
+            Color(uiColor: .secondarySystemGroupedBackground),
+            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+        }
     }
 
-    private func success(_ receipt: FeedbackReceipt) -> some View {
+    private func submittedFallback(_ receipt: FeedbackReceipt) -> some View {
         SpottStateCard(
             icon: "heart.text.clipboard.fill",
-            title: "谢谢你的认真反馈",
-            message: receipt.rewardPoints > 0
-                ? "反馈已提交并进入隐私审核。你获得了 \(receipt.rewardPoints) 积分。"
-                : "反馈已提交并进入隐私审核。每份反馈最多可修改一次。",
-            actionTitle: "完成"
+            title: text("journey.feedback.success_title"),
+            message: submittedFallbackMessage(receipt),
+            actionTitle: text(
+                authority.refreshFailedAfterSubmission
+                    ? "journey.common.retry"
+                    : "journey.common.done"
+            )
+        ) {
+            if authority.refreshFailedAfterSubmission {
+                Task { await loadState() }
+            } else {
+                dismiss()
+            }
+        }
+    }
+
+    private func submittedFallbackMessage(_ receipt: FeedbackReceipt) -> String {
+        let confirmation = receipt.rewardPoints > 0
+            ? CoreJourneyLocalization.format(
+                "journey.feedback.success_points",
+                locale: locale,
+                receipt.rewardPoints
+            )
+            : text("journey.feedback.submitted_message")
+        guard authority.refreshFailedAfterSubmission else { return confirmation }
+        return confirmation + "\n\n" + text("journey.feedback.status_refresh_failed")
+    }
+
+    private func submittedStatus(_ feedback: OwnFeedback) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Image(systemName: "heart.text.clipboard.fill")
+                .font(.system(size: 40, weight: .semibold))
+                .foregroundStyle(SpottColor.twilight)
+                .accessibilityHidden(true)
+            Text(text("journey.feedback.received_title"))
+                .font(.system(size: 29, weight: .bold, design: .rounded))
+            Text(statusMessage(feedback))
+                .foregroundStyle(SpottColor.muted)
+                .lineSpacing(4)
+            if canEditFeedback {
+                Button(text("journey.feedback.edit_once")) {
+                    editingExisting = true
+                    error = nil
+                }
+                .buttonStyle(PrimaryButtonStyle())
+            }
+            Button(text("journey.common.done")) { dismiss() }
+                .buttonStyle(.bordered)
+        }
+        .padding(22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            Color(uiColor: .secondarySystemGroupedBackground),
+            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+        )
+    }
+
+    private var loadFailure: some View {
+        SpottStateCard(
+            icon: "wifi.exclamationmark",
+            title: text("journey.feedback.load_error_title"),
+            message: text("journey.feedback.load_error_message"),
+            actionTitle: text("journey.common.retry")
+        ) { Task { await loadState() } }
+    }
+
+    private var unavailableState: some View {
+        SpottStateCard(
+            icon: "clock.badge.xmark",
+            title: text("journey.feedback.unavailable_title"),
+            message: authority.value?.state == .windowClosed
+                ? text("journey.feedback.window_closed")
+                : text("journey.feedback.not_eligible"),
+            actionTitle: text("journey.common.done")
         ) { dismiss() }
     }
 
+    private func statusMessage(_ feedback: OwnFeedback) -> String {
+        if let rewardPoints = submittedReceipt?.rewardPoints, rewardPoints > 0 {
+            return CoreJourneyLocalization.format(
+                "journey.feedback.success_points",
+                locale: locale,
+                rewardPoints
+            )
+        }
+        if authority.canEdit {
+            return text("journey.feedback.edit_available_message")
+        }
+        return feedback.editCount >= 1
+            ? text("journey.feedback.edit_used_message")
+            : text("journey.feedback.submitted_message")
+    }
+
+    private var canEditFeedback: Bool {
+        authority.canEdit && (submittedReceipt?.editCount ?? 0) < 1
+    }
+
+    private var submissionErrorText: String {
+        switch error?.id {
+        case "FEEDBACK_WINDOW_CLOSED": text("journey.feedback.window_closed")
+        case "FEEDBACK_EDIT_LIMIT_REACHED": text("journey.feedback.edit_used_message")
+        case "FEEDBACK_NOT_ALLOWED": text("journey.feedback.not_eligible")
+        default: text("journey.feedback.submit_error")
+        }
+    }
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        CoreJourneyLocalization.text(key, locale: locale)
+    }
+
+    @MainActor
+    private func loadState() async {
+        loading = authority.value == nil
+        error = nil
+        defer { loading = false }
+        do {
+            let value = try await model.api.ownFeedback(registrationID: registration.id)
+            authority.received(value)
+            if let feedback = value.feedback {
+                rating = feedback.attendanceRating
+                tags = Set(feedback.tags)
+                comment = feedback.comment ?? ""
+                visibility = feedback.visibility
+            }
+            editingExisting = false
+        } catch {
+            authority.refreshFailed(afterSubmission: submittedReceipt != nil)
+            self.error = AppModel.map(error)
+        }
+    }
+
     private func submit() {
+        let trimmedComment = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        let submittedTags = FeedbackTag.allCases.filter(tags.contains)
+        let payload = FeedbackSubmissionPayload(
+            attendanceRating: rating,
+            tags: submittedTags,
+            comment: trimmedComment.isEmpty ? nil : trimmedComment,
+            visibility: visibility
+        )
+        guard let resolvedAttempt = try? StableIdempotencyAttempt.resolve(
+            existing: attempt,
+            payload: payload
+        ) else {
+            error = .init(
+                id: "FEEDBACK_ENCODING_FAILED",
+                message: text("journey.feedback.submit_error"),
+                retryable: true
+            )
+            return
+        }
+        attempt = resolvedAttempt
         busy = true
         error = nil
         Task { @MainActor in
             defer { busy = false }
             do {
-                receipt = try await model.api.submitFeedback(
+                let receipt = try await model.api.submitFeedback(
                     registrationID: registration.id,
-                    payload: .init(
-                        attendanceRating: rating,
-                        tags: FeedbackTag.allCases.filter(tags.contains),
-                        comment: comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : comment,
-                        visibility: visibility
-                    )
+                    payload: payload,
+                    idempotencyKey: resolvedAttempt.idempotencyKey
                 )
+                authority.mutationSucceeded()
+                submittedReceipt = receipt
+                attempt = nil
+                editingExisting = false
+                await loadState()
             } catch {
                 self.error = AppModel.map(error)
             }
@@ -514,9 +748,10 @@ private struct FeedbackSubmissionView: View {
     }
 }
 
-private struct CheckInCorrectionView: View {
+struct CheckInCorrectionView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
     let event: EventSummary
     let registration: Registration
 
@@ -532,39 +767,46 @@ private struct CheckInCorrectionView: View {
                     if submitted {
                         SpottStateCard(
                             icon: "checkmark.seal.fill",
-                            title: "补签申请已提交",
-                            message: "局头确认后，到场状态和积分会自动在 iOS 与 Web 同步。",
-                            actionTitle: "完成"
+                            title: text("journey.correction.success_title"),
+                            message: text("journey.correction.success_message"),
+                            actionTitle: text("journey.common.done")
                         ) { dismiss() }
                     } else {
-                        Text("申请补签")
+                        Text(text("journey.correction.title"))
                             .font(.system(size: 31, weight: .bold, design: .rounded))
                         Text(event.title)
                             .foregroundStyle(SpottColor.muted)
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("说明现场情况")
+                            Text(text("journey.correction.situation"))
                                 .font(.headline)
-                            TextField("例如：已到场，但扫码时网络中断", text: $reason, axis: .vertical)
+                            TextField(
+                                text("journey.correction.placeholder"),
+                                text: $reason,
+                                axis: .vertical
+                            )
                                 .lineLimit(5...10)
                                 .padding(14)
                                 .background(Color.white.opacity(0.52), in: RoundedRectangle(cornerRadius: 16))
                                 .onChange(of: reason) { _, value in
                                     if value.count > 1_000 { reason = String(value.prefix(1_000)) }
                                 }
-                            Text("补签只在活动结束后 48 小时内开放，提交记录可审计。")
+                            Text(text("journey.correction.window_hint"))
                                 .font(.caption)
                                 .foregroundStyle(SpottColor.muted)
                         }
                         .padding(17)
-                        .spottGlassPanel(shape: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                        if let error {
-                            Label("\(error.message)（\(error.id)）", systemImage: "exclamationmark.circle.fill")
+                        .background(
+                            Color(uiColor: .secondarySystemGroupedBackground),
+                            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        )
+                        if error != nil {
+                            Label(text("journey.error.action"), systemImage: "exclamationmark.circle.fill")
                                 .foregroundStyle(SpottColor.danger)
                         }
                         Button(action: submit) {
                             HStack {
                                 if busy { ProgressView().tint(.white) }
-                                Text(busy ? "正在提交…" : "提交补签申请")
+                                Text(text(busy ? "journey.correction.submitting" : "journey.correction.submit"))
                             }
                             .frame(maxWidth: .infinity)
                         }
@@ -575,9 +817,13 @@ private struct CheckInCorrectionView: View {
                 .padding(SpottMetric.pageInset)
             }
             .background(SpottColor.canvas.ignoresSafeArea())
-            .navigationTitle("签到纠错")
+            .navigationTitle(text("journey.correction.navigation_title"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(text("journey.common.close")) { dismiss() }
+                }
+            }
         }
     }
 
@@ -597,16 +843,20 @@ private struct CheckInCorrectionView: View {
             }
         }
     }
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        CoreJourneyLocalization.text(key, locale: locale)
+    }
 }
 
 private extension FeedbackTag {
-    var title: LocalizedStringKey {
+    var localizationKey: String.LocalizationValue {
         switch self {
-        case .friendly: "氛围友好"
-        case .wellOrganized: "组织有序"
-        case .clearInformation: "信息清楚"
-        case .safe: "让人安心"
-        case .wouldJoinAgain: "愿意再参加"
+        case .friendly: "journey.feedback.tag.friendly"
+        case .wellOrganized: "journey.feedback.tag.well_organized"
+        case .clearInformation: "journey.feedback.tag.clear_information"
+        case .safe: "journey.feedback.tag.safe"
+        case .wouldJoinAgain: "journey.feedback.tag.join_again"
         }
     }
 }

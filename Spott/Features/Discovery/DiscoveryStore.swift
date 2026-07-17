@@ -23,6 +23,11 @@ enum DiscoveryPhase: Equatable, Sendable {
     case error
 }
 
+struct DiscoveryReplacementReceipt: Equatable, Sendable {
+    let region: String
+    let itemCount: Int
+}
+
 @MainActor
 @Observable
 final class DiscoveryStore {
@@ -37,6 +42,7 @@ final class DiscoveryStore {
     var isLoadingNextPage = false
     var hasMore = false
     var locale: Locale
+    private(set) var mapCameraRevision = 0
 
     var searchText = ""
     var region = "tokyo"
@@ -60,6 +66,7 @@ final class DiscoveryStore {
     @ObservationIgnored private var paginationBaseQuery: EventDiscoveryQuery?
     @ObservationIgnored private var paginationRecoveryRequiresReplacement = false
     @ObservationIgnored private var usesFixture = false
+    @ObservationIgnored private var pendingCameraRegion: String?
 
     init(
         service: any DiscoveryServing,
@@ -82,8 +89,8 @@ final class DiscoveryStore {
             || format != nil || language != nil || price != nil || bounds != nil
     }
 
-    func loadInitial() async {
-        guard !usesFixture else { return }
+    func loadInitial() async -> DiscoveryReplacementReceipt? {
+        guard !usesFixture else { return nil }
         beginReplacement()
         let requestGeneration = generation
         let requestQuery = query(cursor: nil)
@@ -101,13 +108,13 @@ final class DiscoveryStore {
             }
         }
 
-        await replaceResults(generation: requestGeneration, query: requestQuery)
+        return await replaceResults(generation: requestGeneration, query: requestQuery)
     }
 
-    func refresh() async {
-        guard !usesFixture else { return }
+    func refresh() async -> DiscoveryReplacementReceipt? {
+        guard !usesFixture else { return nil }
         beginReplacement()
-        await replaceResults(generation: generation, query: query(cursor: nil))
+        return await replaceResults(generation: generation, query: query(cursor: nil))
     }
 
     func searchDidChange() {
@@ -115,6 +122,14 @@ final class DiscoveryStore {
     }
 
     func filtersDidChange() {
+        scheduleReplacement()
+    }
+
+    func selectRegion(_ region: String) {
+        guard self.region != region else { return }
+        self.region = region
+        bounds = nil
+        pendingCameraRegion = region
         scheduleReplacement()
     }
 
@@ -219,6 +234,7 @@ final class DiscoveryStore {
         nextCursor = nil
         paginationBaseQuery = nil
         paginationRecoveryRequiresReplacement = false
+        pendingCameraRegion = nil
         phase = items.isEmpty ? .initial : .content
     }
 
@@ -234,6 +250,7 @@ final class DiscoveryStore {
         nextCursor = nil
         paginationBaseQuery = nil
         paginationRecoveryRequiresReplacement = false
+        pendingCameraRegion = nil
         usesFixture = true
     }
 
@@ -262,8 +279,8 @@ final class DiscoveryStore {
     private func replaceResults(
         generation requestGeneration: Int,
         query requestQuery: EventDiscoveryQuery
-    ) async {
-        guard requestGeneration == generation else { return }
+    ) async -> DiscoveryReplacementReceipt? {
+        guard requestGeneration == generation else { return nil }
         isRefreshing = !items.isEmpty
         if items.isEmpty { phase = .loading }
         fatalError = nil
@@ -274,15 +291,25 @@ final class DiscoveryStore {
             try await service.discovery(requestQuery).privacySanitized
         }
         replacementRequest = request
+        defer {
+            if requestGeneration == generation {
+                isRefreshing = false
+                replacementRequest = nil
+            }
+        }
 
         do {
             let page = try await request.value
             try Task.checkCancellation()
-            guard requestGeneration == generation else { return }
+            guard requestGeneration == generation else { return nil }
 
             items = page.items
             phase = items.isEmpty ? .empty : .content
             paginationBaseQuery = requestQuery
+            if pendingCameraRegion == requestQuery.region {
+                mapCameraRevision += 1
+                pendingCameraRegion = nil
+            }
             if page.hasMore, page.nextCursor == nil {
                 hasMore = false
                 nextCursor = nil
@@ -297,10 +324,15 @@ final class DiscoveryStore {
                 nextCursor = page.nextCursor
             }
             await persistCanonicalCacheIfNeeded(query: requestQuery)
+            guard requestGeneration == generation, !Task.isCancelled else { return nil }
+            return DiscoveryReplacementReceipt(
+                region: requestQuery.region ?? region,
+                itemCount: page.items.count
+            )
         } catch is CancellationError {
-            return
+            return nil
         } catch {
-            guard requestGeneration == generation else { return }
+            guard requestGeneration == generation else { return nil }
             let mapped = map(error)
             if items.isEmpty {
                 fatalError = mapped
@@ -309,11 +341,7 @@ final class DiscoveryStore {
                 refreshError = mapped
                 phase = Self.isOffline(error) ? .offline : .content
             }
-        }
-
-        if requestGeneration == generation {
-            isRefreshing = false
-            replacementRequest = nil
+            return nil
         }
     }
 
@@ -379,7 +407,18 @@ final class DiscoveryStore {
 
     private func map(_ error: Error) -> UserFacingError {
         if let apiError = error as? APIError {
-            return .init(id: apiError.code, message: apiError.message, retryable: apiError.retryable)
+            return .init(
+                id: apiError.code,
+                message: localized("请求暂时无法完成。"),
+                retryable: apiError.retryable
+            )
+        }
+        guard Self.isOffline(error) else {
+            return .init(
+                id: "DISCOVERY_REQUEST_FAILED",
+                message: localized("请求暂时无法完成。"),
+                retryable: true
+            )
         }
         return .init(
             id: "NETWORK_UNAVAILABLE",
@@ -401,7 +440,7 @@ final class DiscoveryStore {
         case "DISCOVERY_CURSOR_MISSING", "DISCOVERY_CURSOR_STALLED":
             message = localized("更多活动暂时无法加载，请稍后重试。")
         default:
-            return error
+            message = localized("请求暂时无法完成。")
         }
         return .init(id: error.id, message: message, retryable: error.retryable)
     }

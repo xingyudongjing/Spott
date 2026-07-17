@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import XCTest
 @testable import Spott
@@ -6,6 +7,9 @@ import XCTest
 final class SessionIsolationTests: XCTestCase {
     override func tearDown() {
         ControlledRefreshURLProtocol.reset()
+        SessionBoundaryURLProtocol.reset()
+        BootstrapURLProtocol.reset()
+        UserDefaults.standard.removeObject(forKey: Self.syncOwnerKey)
         super.tearDown()
     }
 
@@ -93,7 +97,509 @@ final class SessionIsolationTests: XCTestCase {
         _ = try await vault.clear(expectedSessionID: refreshedReplacement.sessionId)
     }
 
-    func testStaleSignOutCannotResetAReplacementAuthenticatedSession() async throws {
+    func testAuthenticatedSuccessFromAIsRejectedAfterBBecomesActive() async throws {
+        let vault = CredentialVault(service: "jp.spott.request-success-boundary.\(UUID().uuidString)")
+        let first = Self.session(user: 1, session: 1)
+        let replacement = Self.session(user: 2, session: 2)
+        try await vault.save(session: first)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SessionBoundaryURLProtocol.self]
+        let client = SpottAPIClient(
+            environment: .init(baseURL: URL(string: "https://api.spott.test/v1")!),
+            credentials: vault,
+            session: URLSession(configuration: configuration)
+        )
+        let requestStarted = expectation(description: "A request started")
+        SessionBoundaryURLProtocol.onStart = { _, requestNumber in
+            if requestNumber == 1 { requestStarted.fulfill() }
+        }
+
+        let request = Task { try await client.discovery(.init(region: "tokyo")) }
+        await fulfillment(of: [requestStarted], timeout: 1)
+        try await vault.save(session: replacement)
+        try SessionBoundaryURLProtocol.respond(
+            requestNumber: 1,
+            status: 200,
+            data: Self.emptyDiscoveryPageData
+        )
+
+        do {
+            _ = try await request.value
+            XCTFail("A response must not cross into B's authenticated lifetime")
+        } catch is CancellationError {
+            // Expected: the authenticated request no longer belongs to the active account.
+        }
+        XCTAssertEqual(SessionBoundaryURLProtocol.requests().count, 1)
+        let storedAfterSuccess = try await vault.session()
+        XCTAssertEqual(storedAfterSuccess?.sessionId, replacement.sessionId)
+        _ = try await vault.clear(expectedSessionID: replacement.sessionId)
+    }
+
+    func testAuthenticatedSuccessIsRejectedAfterSameUserStartsANewSession() async throws {
+        let vault = CredentialVault(service: "jp.spott.request-same-user-boundary.\(UUID().uuidString)")
+        let first = Self.session(user: 1, session: 1)
+        let replacement = Self.session(user: 1, session: 2)
+        try await vault.save(session: first)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SessionBoundaryURLProtocol.self]
+        let client = SpottAPIClient(
+            environment: .init(baseURL: URL(string: "https://api.spott.test/v1")!),
+            credentials: vault,
+            session: URLSession(configuration: configuration)
+        )
+        let requestStarted = expectation(description: "old session request started")
+        SessionBoundaryURLProtocol.onStart = { _, requestNumber in
+            if requestNumber == 1 { requestStarted.fulfill() }
+        }
+
+        let request = Task { try await client.discovery(.init(region: "tokyo")) }
+        await fulfillment(of: [requestStarted], timeout: 1)
+        try await vault.save(session: replacement)
+        try SessionBoundaryURLProtocol.respond(
+            requestNumber: 1,
+            status: 200,
+            data: Self.emptyDiscoveryPageData
+        )
+
+        do {
+            _ = try await request.value
+            XCTFail("A response from an earlier login epoch must be rejected")
+        } catch is CancellationError {
+            // Expected: a same-user login still establishes a new authentication boundary.
+        }
+        XCTAssertEqual(SessionBoundaryURLProtocol.requests().count, 1)
+        _ = try await vault.clear(expectedSessionID: replacement.sessionId)
+    }
+
+    func testTransientFailureFromAIsNotRetriedAfterBBecomesActive() async throws {
+        let vault = CredentialVault(service: "jp.spott.request-retry-boundary.\(UUID().uuidString)")
+        let first = Self.session(user: 1, session: 1)
+        let replacement = Self.session(user: 2, session: 2)
+        try await vault.save(session: first)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SessionBoundaryURLProtocol.self]
+        let client = SpottAPIClient(
+            environment: .init(baseURL: URL(string: "https://api.spott.test/v1")!),
+            credentials: vault,
+            session: URLSession(configuration: configuration)
+        )
+        let requestStarted = expectation(description: "A request started")
+        SessionBoundaryURLProtocol.onStart = { _, requestNumber in
+            if requestNumber == 1 {
+                requestStarted.fulfill()
+            } else {
+                try? SessionBoundaryURLProtocol.respond(
+                    requestNumber: requestNumber,
+                    status: 200,
+                    data: Self.emptyDiscoveryPageData
+                )
+            }
+        }
+
+        let request = Task { try await client.discovery(.init(region: "tokyo")) }
+        await fulfillment(of: [requestStarted], timeout: 1)
+        try await vault.save(session: replacement)
+        try SessionBoundaryURLProtocol.fail(
+            requestNumber: 1,
+            error: URLError(.timedOut)
+        )
+
+        do {
+            _ = try await request.value
+            XCTFail("A failed request must not retry after B becomes active")
+        } catch is CancellationError {
+            // Expected: the retry boundary detects the account transition.
+        }
+        XCTAssertEqual(SessionBoundaryURLProtocol.requests().count, 1)
+        _ = try await vault.clear(expectedSessionID: replacement.sessionId)
+    }
+
+    func testA401NeverRefreshesOrRetriesWithB() async throws {
+        let vault = CredentialVault(service: "jp.spott.request-401-boundary.\(UUID().uuidString)")
+        let first = Self.session(user: 1, session: 1)
+        let replacement = Self.session(user: 2, session: 2)
+        let refreshedReplacement = Self.session(user: 2, session: 3)
+        try await vault.save(session: first)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SessionBoundaryURLProtocol.self]
+        let client = SpottAPIClient(
+            environment: .init(baseURL: URL(string: "https://api.spott.test/v1")!),
+            credentials: vault,
+            session: URLSession(configuration: configuration)
+        )
+        let requestStarted = expectation(description: "A request started")
+        let refreshedReplacementData = try Self.encodedSession(refreshedReplacement)
+        SessionBoundaryURLProtocol.onStart = { _, requestNumber in
+            switch requestNumber {
+            case 1:
+                requestStarted.fulfill()
+            case 2:
+                try? SessionBoundaryURLProtocol.respond(
+                    requestNumber: requestNumber,
+                    status: 200,
+                    data: refreshedReplacementData
+                )
+            case 3:
+                try? SessionBoundaryURLProtocol.respond(
+                    requestNumber: requestNumber,
+                    status: 200,
+                    data: Self.emptyDiscoveryPageData
+                )
+            default:
+                break
+            }
+        }
+
+        let request = Task { try await client.discovery(.init(region: "tokyo")) }
+        await fulfillment(of: [requestStarted], timeout: 1)
+        try await vault.save(session: replacement)
+        try SessionBoundaryURLProtocol.respond(
+            requestNumber: 1,
+            status: 401,
+            data: Self.authenticationErrorData
+        )
+
+        do {
+            _ = try await request.value
+            XCTFail("A 401 must not refresh B and retry the stale A request")
+        } catch is CancellationError {
+            // Expected: account B is outside the request's authentication boundary.
+        }
+        XCTAssertEqual(SessionBoundaryURLProtocol.requests().count, 1)
+        let storedAfter401 = try await vault.session()
+        XCTAssertEqual(storedAfter401?.sessionId, replacement.sessionId)
+        _ = try await vault.clear(expectedSessionID: replacement.sessionId)
+    }
+
+    func testA401NeverRetriesWithSameUsersReplacementSession() async throws {
+        let vault = CredentialVault(service: "jp.spott.request-401-same-user-boundary.\(UUID().uuidString)")
+        let first = Self.session(user: 1, session: 1)
+        let replacement = Self.session(user: 1, session: 2)
+        try await vault.save(session: first)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SessionBoundaryURLProtocol.self]
+        let client = SpottAPIClient(
+            environment: .init(baseURL: URL(string: "https://api.spott.test/v1")!),
+            credentials: vault,
+            session: URLSession(configuration: configuration)
+        )
+        let requestStarted = expectation(description: "old session request started")
+        SessionBoundaryURLProtocol.onStart = { _, requestNumber in
+            if requestNumber == 1 {
+                requestStarted.fulfill()
+            } else {
+                try? SessionBoundaryURLProtocol.respond(
+                    requestNumber: requestNumber,
+                    status: 200,
+                    data: Self.emptyDiscoveryPageData
+                )
+            }
+        }
+
+        let request = Task { try await client.discovery(.init(region: "tokyo")) }
+        await fulfillment(of: [requestStarted], timeout: 1)
+        try await vault.save(session: replacement)
+        try SessionBoundaryURLProtocol.respond(
+            requestNumber: 1,
+            status: 401,
+            data: Self.authenticationErrorData
+        )
+
+        do {
+            _ = try await request.value
+            XCTFail("A 401 from an earlier login epoch must not replay as the new session")
+        } catch is CancellationError {
+            // Expected.
+        }
+        XCTAssertEqual(SessionBoundaryURLProtocol.requests().count, 1)
+        _ = try await vault.clear(expectedSessionID: replacement.sessionId)
+    }
+
+    func testCurrentSession401RefreshesAndRetriesWithinTheSameAuthBoundary() async throws {
+        let vault = CredentialVault(service: "jp.spott.request-current-refresh.\(UUID().uuidString)")
+        let current = Self.session(user: 1, session: 1)
+        let refreshed = Self.session(user: 1, session: 3)
+        let refreshedData = try Self.encodedSession(refreshed)
+        try await vault.save(session: current)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SessionBoundaryURLProtocol.self]
+        let client = SpottAPIClient(
+            environment: .init(baseURL: URL(string: "https://api.spott.test/v1")!),
+            credentials: vault,
+            session: URLSession(configuration: configuration)
+        )
+        let requestStarted = expectation(description: "authenticated request started")
+        SessionBoundaryURLProtocol.onStart = { _, requestNumber in
+            switch requestNumber {
+            case 1:
+                requestStarted.fulfill()
+            case 2:
+                try? SessionBoundaryURLProtocol.respond(
+                    requestNumber: requestNumber,
+                    status: 200,
+                    data: refreshedData
+                )
+            case 3:
+                try? SessionBoundaryURLProtocol.respond(
+                    requestNumber: requestNumber,
+                    status: 200,
+                    data: Self.emptyDiscoveryPageData
+                )
+            default:
+                break
+            }
+        }
+
+        let request = Task { try await client.discovery(.init(region: "tokyo")) }
+        await fulfillment(of: [requestStarted], timeout: 1)
+        try SessionBoundaryURLProtocol.respond(
+            requestNumber: 1,
+            status: 401,
+            data: Self.authenticationErrorData
+        )
+
+        let page = try await request.value
+        let requests = SessionBoundaryURLProtocol.requests()
+        XCTAssertTrue(page.items.isEmpty)
+        XCTAssertEqual(requests.count, 3)
+        XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer \(current.accessToken)")
+        XCTAssertEqual(requests[2].value(forHTTPHeaderField: "Authorization"), "Bearer \(refreshed.accessToken)")
+        let storedSessionID = try await vault.session()?.sessionId
+        XCTAssertEqual(storedSessionID, refreshed.sessionId)
+        _ = try await vault.clear(expectedSessionID: refreshed.sessionId)
+    }
+
+    func testTerminalRefresh401ClearsEverySensitiveAppBoundaryBeforeReturning() async throws {
+        let current = Self.session(user: 1, session: 1)
+        let vault = InMemoryCredentialStore(session: current)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SessionBoundaryURLProtocol.self]
+        let api = SpottAPIClient(
+            environment: .init(baseURL: URL(string: "https://api.spott.test/v1")!),
+            credentials: vault,
+            session: URLSession(configuration: configuration)
+        )
+        let persistence = PersistenceStore.makeInMemory()
+        let lifecycle = RecordingSyncLifecycle()
+        let router = AppRouter()
+        var sensitiveEvent = EventSummary.samples[0]
+        sensitiveEvent.exactAddress = "participant-only exact address"
+        router.show(event: sensitiveEvent, in: .activities)
+        let reference = EventRouteReference(event: sensitiveEvent)
+        let model = AppModel(
+            api: api,
+            analytics: AnalyticsClient(environment: .preview),
+            persistence: persistence,
+            sync: SyncEngine(api: api, persistence: persistence),
+            router: router,
+            syncLifecycle: lifecycle
+        )
+        model.session = current
+        SessionBoundaryURLProtocol.onStart = { _, requestNumber in
+            switch requestNumber {
+            case 1, 2:
+                try? SessionBoundaryURLProtocol.respond(
+                    requestNumber: requestNumber,
+                    status: 401,
+                    data: Self.authenticationErrorData
+                )
+            case 3:
+                try? SessionBoundaryURLProtocol.respond(
+                    requestNumber: requestNumber,
+                    status: 200,
+                    data: Self.emptyDiscoveryPageData
+                )
+            default:
+                break
+            }
+        }
+
+        do {
+            _ = try await api.discovery(.init(region: "tokyo"))
+            XCTFail("A terminal refresh failure must be surfaced")
+        } catch let error as APIError {
+            XCTAssertEqual(error.status, 401)
+        }
+
+        XCTAssertNil(model.session)
+        XCTAssertEqual(model.presentedGate, .login)
+        XCTAssertTrue(AppTab.allCases.allSatisfy { router.path(for: $0).isEmpty })
+        XCTAssertNil(router.cachedEvent(for: reference))
+        let expiredStoredSession = try await vault.session()
+        let expirationDeactivationReasons = await lifecycle.deactivationReasons()
+        XCTAssertNil(expiredStoredSession)
+        XCTAssertEqual(expirationDeactivationReasons, [.sessionExpired])
+    }
+
+    func testTransientRefreshFailureRetriesWithoutClearingTheSession() async throws {
+        let current = Self.session(user: 1, session: 1)
+        let vault = InMemoryCredentialStore(session: current)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SessionBoundaryURLProtocol.self]
+        let api = SpottAPIClient(
+            environment: .init(baseURL: URL(string: "https://api.spott.test/v1")!),
+            credentials: vault,
+            session: URLSession(configuration: configuration)
+        )
+        let persistence = PersistenceStore.makeInMemory()
+        let lifecycle = RecordingSyncLifecycle()
+        let model = AppModel(
+            api: api,
+            analytics: AnalyticsClient(environment: .preview),
+            persistence: persistence,
+            sync: SyncEngine(api: api, persistence: persistence),
+            router: AppRouter(),
+            syncLifecycle: lifecycle
+        )
+        model.session = current
+        SessionBoundaryURLProtocol.onStart = { _, requestNumber in
+            if requestNumber == 1 {
+                try? SessionBoundaryURLProtocol.respond(
+                    requestNumber: requestNumber,
+                    status: 401,
+                    data: Self.authenticationErrorData
+                )
+            } else {
+                try? SessionBoundaryURLProtocol.respond(
+                    requestNumber: requestNumber,
+                    status: 503,
+                    data: Self.serviceUnavailableErrorData,
+                    headerFields: ["Retry-After": "0"]
+                )
+            }
+        }
+
+        do {
+            _ = try await api.discovery(.init(region: "tokyo"))
+            XCTFail("The exhausted refresh failure must be surfaced")
+        } catch let error as APIError {
+            XCTAssertEqual(error.status, 503)
+            XCTAssertTrue(error.retryable)
+        }
+
+        XCTAssertEqual(SessionBoundaryURLProtocol.requests().count, 4)
+        XCTAssertEqual(model.session?.sessionId, current.sessionId)
+        let transientStoredSessionID = try await vault.session()?.sessionId
+        let transientDeactivationReasons = await lifecycle.deactivationReasons()
+        XCTAssertEqual(transientStoredSessionID, current.sessionId)
+        XCTAssertTrue(transientDeactivationReasons.isEmpty)
+        _ = try await vault.clear(expectedSessionID: current.sessionId)
+    }
+
+    func testTerminalRefreshStillQuarantinesNavigationWhenScopeDeactivationFails() async throws {
+        let current = Self.session(user: 1, session: 1)
+        let credentials = InMemoryCredentialStore(session: current)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SessionBoundaryURLProtocol.self]
+        let api = SpottAPIClient(
+            environment: .init(baseURL: URL(string: "https://api.spott.test/v1")!),
+            credentials: credentials,
+            session: URLSession(configuration: configuration)
+        )
+        let lifecycle = FailingSyncLifecycle(failBootstrap: false, failDeactivate: true)
+        let persistence = PersistenceStore.makeInMemory()
+        let router = AppRouter()
+        router.show(event: EventSummary.samples[0], in: .activities)
+        let model = AppModel(
+            api: api,
+            analytics: AnalyticsClient(environment: .preview),
+            persistence: persistence,
+            sync: SyncEngine(api: api, persistence: persistence),
+            router: router,
+            syncLifecycle: lifecycle
+        )
+        model.session = current
+        SessionBoundaryURLProtocol.onStart = { _, requestNumber in
+            try? SessionBoundaryURLProtocol.respond(
+                requestNumber: requestNumber,
+                status: 401,
+                data: Self.authenticationErrorData
+            )
+        }
+
+        do {
+            _ = try await api.discovery(.init(region: "tokyo"))
+            XCTFail("A terminal refresh failure must be surfaced")
+        } catch let error as APIError {
+            XCTAssertEqual(error.status, 401)
+        }
+
+        let deactivationAttempts = await lifecycle.deactivationAttemptCount()
+        XCTAssertEqual(deactivationAttempts, 1)
+        XCTAssertNil(model.session)
+        XCTAssertEqual(model.presentedGate, .login)
+        XCTAssertTrue(AppTab.allCases.allSatisfy { router.path(for: $0).isEmpty })
+        XCTAssertEqual(SessionBoundaryURLProtocol.requests().count, 2)
+    }
+
+    func testStaleAPostIsNeverRetriedAsB() async throws {
+        let vault = CredentialVault(service: "jp.spott.request-post-boundary.\(UUID().uuidString)")
+        let first = Self.session(user: 1, session: 1)
+        let replacement = Self.session(user: 2, session: 2)
+        let refreshedReplacement = Self.session(user: 2, session: 3)
+        try await vault.save(session: first)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SessionBoundaryURLProtocol.self]
+        let client = SpottAPIClient(
+            environment: .init(baseURL: URL(string: "https://api.spott.test/v1")!),
+            credentials: vault,
+            session: URLSession(configuration: configuration)
+        )
+        let requestStarted = expectation(description: "A POST started")
+        let refreshedReplacementData = try Self.encodedSession(refreshedReplacement)
+        SessionBoundaryURLProtocol.onStart = { _, requestNumber in
+            switch requestNumber {
+            case 1:
+                requestStarted.fulfill()
+            case 2:
+                try? SessionBoundaryURLProtocol.respond(
+                    requestNumber: requestNumber,
+                    status: 200,
+                    data: refreshedReplacementData
+                )
+            case 3:
+                try? SessionBoundaryURLProtocol.respond(
+                    requestNumber: requestNumber,
+                    status: 200,
+                    data: Data("{}".utf8)
+                )
+            default:
+                break
+            }
+        }
+
+        let request = Task {
+            try await client.registerPushDevice(
+                token: "0123456789abcdef0123456789abcdef",
+                environment: "sandbox"
+            )
+        }
+        await fulfillment(of: [requestStarted], timeout: 1)
+        try await vault.save(session: replacement)
+        try SessionBoundaryURLProtocol.respond(
+            requestNumber: 1,
+            status: 401,
+            data: Self.authenticationErrorData
+        )
+
+        do {
+            _ = try await request.value
+            XCTFail("A stale POST must not be replayed with B's credentials")
+        } catch is CancellationError {
+            // Expected: the account transition cancels the mutation.
+        } catch {
+            XCTFail("Expected cancellation, received \(error)")
+        }
+        let requests = SessionBoundaryURLProtocol.requests()
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.map(\.httpMethod), ["POST"])
+        XCTAssertEqual(requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer \(first.accessToken)")
+        let storedAfterPost = try await vault.session()
+        XCTAssertEqual(storedAfterPost?.sessionId, replacement.sessionId)
+        _ = try await vault.clear(expectedSessionID: replacement.sessionId)
+    }
+
+    func testStaleRemoteSignOutCannotReplaceANewerAuthenticatedSession() async throws {
         let sessionEnder = ControlledSessionEnder()
         let syncLifecycle = RecordingSyncLifecycle()
         let model = Self.model(sessionEnder: sessionEnder, syncLifecycle: syncLifecycle)
@@ -108,11 +614,52 @@ final class SessionIsolationTests: XCTestCase {
         await sessionEnder.finish()
         await Task.yield()
         let expectedSessionIDs = await sessionEnder.expectedSessionIDs()
-        let resetGenerations = await syncLifecycle.resetGenerations()
+        let deactivationReasons = await syncLifecycle.deactivationReasons()
 
         XCTAssertEqual(model.session?.sessionId, replacement.sessionId)
         XCTAssertEqual(expectedSessionIDs, [first.sessionId])
-        XCTAssertTrue(resetGenerations.isEmpty)
+        XCTAssertEqual(deactivationReasons, [.signOut])
+    }
+
+    func testAppModelSignOutAndExpirationNeverInvokeDestructivePersistenceReset() async throws {
+        let expirationBoundary = AuthenticationExpirationBoundary()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BootstrapURLProtocol.self]
+        let api = SpottAPIClient(
+            environment: .init(baseURL: URL(string: "https://api.spott.test/v1")!),
+            credentials: InMemoryCredentialStore(session: nil),
+            session: URLSession(configuration: configuration),
+            authenticationExpirationBoundary: expirationBoundary
+        )
+        let persistenceSpy = DestructivePersistenceResetSpy()
+        let syncPersistence = RecordingSyncPersistence()
+        let syncLifecycle = RecordingSyncLifecycle()
+        let model = AppModel(
+            api: api,
+            analytics: AnalyticsClient(environment: .preview),
+            persistence: persistenceSpy,
+            sync: SyncEngine(api: api, persistence: syncPersistence),
+            router: AppRouter(),
+            sessionEnder: ImmediateSessionEnder(),
+            syncLifecycle: syncLifecycle
+        )
+        let signedOutSession = Self.session(user: 31, session: 31)
+        let expiredSession = Self.session(user: 32, session: 32)
+
+        model.session = signedOutSession
+        model.signOut()
+        await persistenceSpy.waitForCacheReplacement(count: 1)
+
+        model.session = expiredSession
+        await expirationBoundary.expire(sessionID: expiredSession.sessionId)
+        await persistenceSpy.waitForCacheReplacement(count: 2)
+
+        let destructiveInvocationCount = await persistenceSpy.destructiveInvocationCount()
+        let deactivationReasons = await syncLifecycle.deactivationReasons()
+        XCTAssertEqual(destructiveInvocationCount, 0)
+        XCTAssertEqual(deactivationReasons, [.signOut, .sessionExpired])
+        XCTAssertNil(model.session)
+        XCTAssertEqual(model.presentedGate, .login)
     }
 
     func testNewSyncGenerationRejectsALateResponseFromThePreviousAccount() async throws {
@@ -124,20 +671,22 @@ final class SessionIsolationTests: XCTestCase {
 
         let first = Task { try? await engine.bootstrap(userID: firstUser, generation: 1) }
         await api.waitUntilFirstPullStarted()
-        let replacement = Task { try? await engine.bootstrap(userID: replacementUser, generation: 2) }
-        await api.waitUntilSecondPullFinished()
+        let replacement = Task {
+            try? await engine.deactivateScope(reason: .accountChanged, generation: 2)
+            try? await engine.bootstrap(userID: replacementUser, generation: 2)
+        }
+        await api.waitUntilFirstPullCancellationObserved()
         await api.finishFirstPull()
+        await api.waitUntilSecondPullFinished()
         _ = await first.value
         _ = await replacement.value
 
         let applications = await persistence.applications()
-        let resetCountAfterSwitch = await persistence.resetCount()
         XCTAssertEqual(applications.map(\.scope), [replacementUser.uuidString.lowercased()])
-        XCTAssertEqual(resetCountAfterSwitch, 1)
 
-        try await engine.resetSensitiveScope(reason: .signOut, generation: 1)
-        let resetCountAfterStaleReset = await persistence.resetCount()
-        XCTAssertEqual(resetCountAfterStaleReset, 1)
+        try await engine.deactivateScope(reason: .signOut, generation: 1)
+        let retainedApplications = await persistence.applications()
+        XCTAssertEqual(retainedApplications.map(\.scope), [replacementUser.uuidString.lowercased()])
     }
 
     func testAccountSwitchResetsTheRealtimeHintSequence() async throws {
@@ -149,6 +698,7 @@ final class SessionIsolationTests: XCTestCase {
 
         try await engine.bootstrap(userID: firstUser, generation: 1)
         await engine.handleRealtimeHint(sequence: 100)
+        try await engine.deactivateScope(reason: .accountChanged, generation: 2)
         try await engine.bootstrap(userID: replacementUser, generation: 2)
         await engine.handleRealtimeHint(sequence: 1)
 
@@ -184,6 +734,334 @@ final class SessionIsolationTests: XCTestCase {
         XCTAssertEqual(model.session?.sessionId, restored.sessionId)
         XCTAssertEqual(bootstrapUserIDs, [restored.user.id])
         _ = try await vault.clear(expectedSessionID: restored.sessionId)
+    }
+
+    func testAccountASignOutThenBThenAReturnPreservesAQueueBytesExactly() async throws {
+        let api = NonAcknowledgingSyncAPI()
+        let persistence = RecordingSyncPersistence()
+        let firstUser = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let replacementUser = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        let engine = SyncEngine(api: api, persistence: persistence)
+
+        try await engine.bootstrap(userID: firstUser, generation: 1)
+        let operation = PendingOperation(
+            operationID: UUID(),
+            entityType: "registration",
+            entityID: UUID(),
+            action: "cancel",
+            baseVersion: 1,
+            payload: Data([0x00, 0x7f, 0xff, 0x42]),
+            dependencies: [UUID()]
+        )
+        try await engine.enqueue(operation)
+        let ownerA = firstUser.uuidString.lowercased()
+        let before = try await persistence.allOperations(ownerScope: ownerA)
+
+        try await engine.deactivateScope(reason: .signOut, generation: 2)
+        try await engine.bootstrap(userID: replacementUser, generation: 2)
+        let pushedBeforeAReturn = await api.pushedOperationIDs()
+        try await engine.deactivateScope(reason: .signOut, generation: 3)
+        try await engine.bootstrap(userID: firstUser, generation: 3)
+
+        let after = try await persistence.allOperations(ownerScope: ownerA)
+        let ownerAPending = try await persistence.pendingOperations(ownerScope: ownerA)
+        let ownerBPending = try await persistence.pendingOperations(
+            ownerScope: replacementUser.uuidString.lowercased()
+        )
+        XCTAssertTrue(pushedBeforeAReturn.isEmpty, "B must never push A's operation")
+        XCTAssertEqual(after, before)
+        XCTAssertEqual(ownerAPending, [operation])
+        XCTAssertTrue(ownerBPending.isEmpty)
+    }
+
+    func testMissingOwnerScopeBlocksBootstrapWithoutMutatingLegacyRows() async throws {
+        let api = CountingSyncAPI()
+        let persistence = RecordingSyncPersistence(hasUnownedLegacyRows: true)
+        let user = UUID(uuidString: "00000000-0000-0000-0000-000000000009")!
+        let engine = SyncEngine(api: api, persistence: persistence)
+
+        do {
+            try await engine.bootstrap(userID: user, generation: 1)
+            XCTFail("Unresolved legacy ownership must block before sync starts")
+        } catch PersistenceOwnershipError.unresolvedLegacyOwner {
+            // Expected.
+        }
+
+        let writeCount = await persistence.writeCount()
+        let pushedOperationIDs = await api.pushedOperationIDs()
+        XCTAssertEqual(writeCount, 0)
+        XCTAssertTrue(pushedOperationIDs.isEmpty)
+    }
+
+    func testSignOutDeactivatesScopeWithoutDeletingOrRewritingOwnerRows() async throws {
+        let api = NonAcknowledgingSyncAPI()
+        let persistence = RecordingSyncPersistence()
+        let engine = SyncEngine(api: api, persistence: persistence)
+        let owner = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let operation = PendingOperation(
+            operationID: UUID(),
+            entityType: "event",
+            entityID: UUID(),
+            action: "update",
+            baseVersion: 2,
+            payload: Data([0xde, 0xad, 0xbe, 0xef]),
+            dependencies: []
+        )
+
+        try await engine.bootstrap(userID: owner, generation: 1)
+        try await engine.enqueue(operation)
+        let scope = owner.uuidString.lowercased()
+        let before = try await persistence.allOperations(ownerScope: scope)
+        let writesBefore = await persistence.writeCount()
+
+        try await engine.deactivateScope(reason: .signOut, generation: 2)
+
+        let after = try await persistence.allOperations(ownerScope: scope)
+        let writesAfter = await persistence.writeCount()
+        XCTAssertEqual(after, before)
+        XCTAssertEqual(writesAfter, writesBefore)
+    }
+
+    func testSessionExpiryDeactivatesScopeWithoutDeletingOrRewritingOwnerRows() async throws {
+        let api = NonAcknowledgingSyncAPI()
+        let authority = OwnerWriteLeaseAuthority()
+        let persistence = PersistenceStore.makeInMemory(
+            ownerWriteLeaseAuthority: authority
+        )
+        let engine = SyncEngine(api: api, persistence: persistence)
+        let owner = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let scope = owner.uuidString.lowercased()
+        let operation = PendingOperation(
+            operationID: UUID(),
+            entityType: "event",
+            entityID: UUID(),
+            action: "update",
+            baseVersion: 2,
+            payload: Data([0x00, 0xde, 0xad, 0xff]),
+            dependencies: [UUID()]
+        )
+        let draft = LocalEventDraftSnapshot(
+            localID: UUID(),
+            serverID: UUID(),
+            title: "expiry must preserve",
+            payload: Data([0xff, 0x00, 0x7f]),
+            draftRevision: 4,
+            serverVersion: 2,
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_123)
+        )
+
+        try await engine.bootstrap(userID: owner, generation: 1)
+        try await engine.enqueue(operation)
+        let lease = try authority.activate(ownerScope: scope, generation: 1)
+        try await persistence.upsertDraft(draft, ownerScope: scope, lease: lease)
+        let operationsBefore = try await persistence.allOperations(ownerScope: scope)
+        let draftsBefore = try await persistence.drafts(ownerScope: scope)
+
+        try await engine.deactivateScope(reason: .sessionExpired, generation: 2)
+
+        let operationsAfter = try await persistence.allOperations(ownerScope: scope)
+        let draftsAfter = try await persistence.drafts(ownerScope: scope)
+        XCTAssertEqual(operationsAfter, operationsBefore)
+        XCTAssertEqual(draftsAfter, draftsBefore)
+    }
+
+    func testAccountASignOutThenBThenAReturnPreservesAQueueAndDraftDigestAndBytesExactly() async throws {
+        let syncAPI = AccountTransitionSyncAPI()
+        let syncPersistence = RecordingSyncPersistence()
+        let authority = syncPersistence.ownerWriteLeaseAuthority
+        let persistence = PersistenceStore.makeInMemory(
+            ownerWriteLeaseAuthority: authority
+        )
+        let sync = SyncEngine(api: syncAPI, persistence: syncPersistence)
+        let lifecycle = ObservedSyncLifecycle(engine: sync)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BootstrapURLProtocol.self]
+        let api = SpottAPIClient(
+            environment: .preview,
+            credentials: CredentialVault(service: "jp.spott.owner-transition.\(UUID().uuidString)"),
+            session: URLSession(configuration: configuration)
+        )
+        let model = AppModel(
+            api: api,
+            analytics: AnalyticsClient(environment: .preview),
+            persistence: persistence,
+            sync: sync,
+            router: AppRouter(),
+            sessionEnder: ImmediateSessionEnder(),
+            syncLifecycle: lifecycle,
+            ownerWriteLeaseAuthority: authority
+        )
+        let sessionA = Self.session(user: 1, session: 1)
+        let sessionB = Self.session(user: 2, session: 2)
+        let ownerA = sessionA.user.id.uuidString.lowercased()
+        let ownerB = sessionB.user.id.uuidString.lowercased()
+
+        model.didAuthenticate(sessionA)
+        await lifecycle.waitForBootstrap(userID: sessionA.user.id, count: 1)
+        let operation = PendingOperation(
+            operationID: UUID(),
+            entityType: "registration",
+            entityID: UUID(),
+            action: "cancel",
+            baseVersion: 9,
+            payload: Data([0x00, 0x7f, 0x80, 0xff, 0x42]),
+            dependencies: [UUID(), UUID()]
+        )
+        let draft = LocalEventDraftSnapshot(
+            localID: UUID(),
+            serverID: UUID(),
+            title: "A exact-byte draft",
+            payload: Data([0xff, 0x00, 0x01, 0x7f, 0x80]),
+            draftRevision: 11,
+            serverVersion: 8,
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_456.789)
+        )
+        try await sync.enqueue(operation)
+        let leaseA = try authority.activate(ownerScope: ownerA, generation: 1)
+        try await persistence.upsertDraft(draft, ownerScope: ownerA, lease: leaseA)
+        let before = try await SessionIsolationOwnerDataCapture.capture(
+            ownerScope: ownerA,
+            syncPersistence: syncPersistence,
+            draftPersistence: persistence
+        )
+        await syncPersistence.resetMutationCount(ownerScope: ownerA)
+
+        model.signOut()
+        await lifecycle.waitForDeactivation(count: 1)
+        model.didAuthenticate(sessionB)
+        await lifecycle.waitForBootstrap(userID: sessionB.user.id, count: 1)
+        let ownerBPending = try await syncPersistence.pendingOperations(ownerScope: ownerB)
+        let pushedBeforeAReturn = await syncAPI.pushedOperationIDs()
+        XCTAssertTrue(ownerBPending.isEmpty)
+        XCTAssertTrue(pushedBeforeAReturn.isEmpty)
+
+        model.signOut()
+        await lifecycle.waitForDeactivation(count: 2)
+        model.didAuthenticate(sessionA)
+        await syncAPI.waitUntilPullStarted(number: 3)
+
+        let after = try await SessionIsolationOwnerDataCapture.capture(
+            ownerScope: ownerA,
+            syncPersistence: syncPersistence,
+            draftPersistence: persistence
+        )
+        let ownerAMutationCount = await syncPersistence.mutationCount(ownerScope: ownerA)
+        XCTAssertEqual(after.canonicalDigest, before.canonicalDigest)
+        XCTAssertEqual(after.operations, before.operations)
+        XCTAssertEqual(after.drafts, before.drafts)
+        XCTAssertEqual(ownerAMutationCount, 0)
+
+        await syncAPI.finishPull(number: 3)
+        await lifecycle.waitForBootstrap(userID: sessionA.user.id, count: 2)
+        let lifecycleFailed = await lifecycle.didFail()
+        XCTAssertFalse(lifecycleFailed)
+    }
+
+    func testInFlightPushCannotMarkAppliedAfterScopeDeactivationBegins() async throws {
+        let api = ControlledPushSyncAPI()
+        let persistence = RecordingSyncPersistence()
+        let engine = SyncEngine(api: api, persistence: persistence)
+        let owner = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        let scope = owner.uuidString.lowercased()
+        let operation = PendingOperation(
+            operationID: UUID(),
+            entityType: "registration",
+            entityID: UUID(),
+            action: "cancel",
+            baseVersion: 3,
+            payload: Data("must-remain-pending".utf8),
+            dependencies: []
+        )
+        try await engine.bootstrap(userID: owner, generation: 1)
+        try await engine.enqueue(operation)
+
+        let flushTask = Task { await engine.flushPendingOperations() }
+        await api.waitUntilPushStarted()
+        let deactivationCompletion = SessionIsolationCompletionFlag()
+        let deactivationTask = Task {
+            do {
+                try await engine.deactivateScope(reason: .signOut, generation: 2)
+                await deactivationCompletion.finish(failed: false)
+            } catch {
+                await deactivationCompletion.finish(failed: true)
+            }
+        }
+
+        for _ in 0..<100 {
+            let cancellationObserved = await api.wasCancellationObserved()
+            let deactivationFinished = await deactivationCompletion.isFinished()
+            if cancellationObserved || deactivationFinished {
+                break
+            }
+            await Task.yield()
+        }
+
+        let cancellationObserved = await api.wasCancellationObserved()
+        let deactivationFinishedEarly = await deactivationCompletion.isFinished()
+        XCTAssertTrue(
+            cancellationObserved,
+            "Scope deactivation must cancel the owner-bound push task"
+        )
+        XCTAssertFalse(
+            deactivationFinishedEarly,
+            "Deactivation must wait for cancelled network work to quiesce"
+        )
+
+        await api.finishPushWithAppliedAcknowledgement()
+        await deactivationTask.value
+        _ = await flushTask.value
+
+        let deactivationFailed = await deactivationCompletion.didFail()
+        let pending = try await persistence.pendingOperations(ownerScope: scope)
+        XCTAssertFalse(deactivationFailed)
+        XCTAssertEqual(pending, [operation])
+    }
+
+    func testDeactivateScopeWaitsForCursorBoundaryBeforeNetworkStarts() async throws {
+        try await assertDeactivationWaitsForPersistenceBoundary(.cursor)
+    }
+
+    func testDeactivateScopeWaitsForApplyBoundaryAfterNetworkFinishes() async throws {
+        try await assertDeactivationWaitsForPersistenceBoundary(.apply)
+    }
+
+    func testDeactivateScopeWaitsForPendingOperationsBoundaryBeforePushStarts() async throws {
+        try await assertDeactivationWaitsForPersistenceBoundary(.pendingOperations)
+    }
+
+    func testDeactivateScopeWaitsForMarkAppliedBoundaryAfterPushFinishes() async throws {
+        try await assertDeactivationWaitsForPersistenceBoundary(.markApplied)
+    }
+
+    func testAuthenticationBootstrapFailureStopsAuthenticatedFollowOnWork() async throws {
+        let lifecycle = FailingSyncLifecycle(failBootstrap: true, failDeactivate: false)
+        let model = Self.model(
+            sessionEnder: ImmediateSessionEnder(),
+            syncLifecycle: lifecycle
+        )
+
+        model.didAuthenticate(Self.session(user: 8, session: 8))
+        await lifecycle.waitForBootstrapAttempt()
+        await Self.yieldRepeatedly()
+
+        XCTAssertEqual(BootstrapURLProtocol.requestCount(), 0)
+        XCTAssertEqual(model.banner?.tone, .warning)
+    }
+
+    func testSignOutDeactivationFailureDoesNotReloadPublicDiscoveryFromSensitiveStorage() async throws {
+        let lifecycle = FailingSyncLifecycle(failBootstrap: false, failDeactivate: true)
+        let model = Self.model(
+            sessionEnder: ImmediateSessionEnder(),
+            syncLifecycle: lifecycle
+        )
+        model.session = Self.session(user: 9, session: 9)
+
+        model.signOut()
+        await lifecycle.waitForDeactivationAttempt()
+        await Self.yieldRepeatedly()
+
+        XCTAssertEqual(BootstrapURLProtocol.requestCount(), 0)
+        XCTAssertEqual(model.banner?.tone, .warning)
     }
 
     func testLateColdStartRestoreCannotReplaceANewerAuthentication() async throws {
@@ -285,6 +1163,112 @@ final class SessionIsolationTests: XCTestCase {
             )
         )
     }
+
+    nonisolated private static func encodedSession(_ session: UserSession) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return try encoder.encode(session)
+    }
+
+    nonisolated private static let emptyDiscoveryPageData = Data(
+        #"{"items":[],"nextCursor":null,"hasMore":false,"serverTime":"2026-07-16T00:00:00Z","queryExplanationId":"session-boundary"}"#.utf8
+    )
+
+    nonisolated private static let authenticationErrorData = Data(
+        #"{"error":{"code":"TOKEN_EXPIRED","message":"expired","requestId":"session-boundary","retryable":false}}"#.utf8
+    )
+
+    nonisolated private static let serviceUnavailableErrorData = Data(
+        #"{"error":{"code":"AUTH_SERVICE_UNAVAILABLE","message":"temporary","requestId":"session-boundary","retryable":true}}"#.utf8
+    )
+
+    nonisolated private static let syncOwnerKey = "jp.spott.sync.owner-user-id"
+
+    private static func yieldRepeatedly() async {
+        for _ in 0..<20 { await Task.yield() }
+    }
+
+    private func assertDeactivationWaitsForPersistenceBoundary(
+        _ boundary: LifecyclePersistenceBoundary
+    ) async throws {
+        let gate = LifecyclePersistenceBoundaryGate(selectedBoundary: boundary)
+        let operation = PendingOperation(
+            operationID: UUID(),
+            entityType: "registration",
+            entityID: UUID(),
+            action: "cancel",
+            baseVersion: 3,
+            payload: Data(#"{"reason":"boundary-test"}"#.utf8),
+            dependencies: []
+        )
+        let persistence = LifecycleBlockingSyncPersistence(
+            gate: gate,
+            pendingOperation: boundary == .pendingOperations || boundary == .markApplied
+                ? operation
+                : nil
+        )
+        let api = LifecycleBoundarySyncAPI(
+            changes: boundary == .apply ? [Self.lifecycleBoundaryChange] : []
+        )
+        let engine = SyncEngine(api: api, persistence: persistence)
+        let owner = UUID(uuidString: "00000000-0000-0000-0000-000000000081")!
+
+        let bootstrapTask = Task {
+            try? await engine.bootstrap(userID: owner, generation: 1)
+        }
+        let boundaryEntered = await Task.detached {
+            gate.waitUntilEntered(timeout: 2)
+        }.value
+        XCTAssertTrue(boundaryEntered, "Expected sync to enter the \(boundary) persistence boundary")
+
+        let completion = SessionIsolationCompletionFlag()
+        let deactivationTask = Task {
+            await completion.start()
+            do {
+                try await engine.deactivateScope(reason: .signOut, generation: 2)
+                await completion.finish(failed: false)
+            } catch {
+                await completion.finish(failed: true)
+            }
+        }
+        await completion.waitUntilStarted()
+        try await Task.sleep(for: .milliseconds(50))
+
+        let finishedWhileOldContextWasActive = await completion.isFinished()
+        XCTAssertTrue(gate.isActive)
+        XCTAssertFalse(
+            finishedWhileOldContextWasActive,
+            "Deactivation returned while old-generation \(boundary) work was still alive"
+        )
+
+        gate.release()
+        await deactivationTask.value
+        _ = await bootstrapTask.value
+
+        let deactivationFailed = await completion.didFail()
+        let deactivationFinished = await completion.isFinished()
+        let pushCount = await api.pushCount()
+        XCTAssertFalse(deactivationFailed)
+        XCTAssertTrue(deactivationFinished)
+        XCTAssertFalse(
+            gate.isActive,
+            "No old-generation persistence context may remain alive when deactivation returns"
+        )
+        if boundary == .pendingOperations {
+            XCTAssertEqual(pushCount, 0, "Revoked pending work must not reach the network")
+        }
+    }
+
+    nonisolated private static let lifecycleBoundaryChange = SyncChange(
+        seq: 1,
+        topic: "event",
+        entityType: "event",
+        entityId: UUID(uuidString: "00000000-0000-0000-0000-000000000091")!,
+        operation: "upsert",
+        version: 1,
+        changedFields: ["title"],
+        payload: ["title": .string("Boundary")]
+    )
 }
 
 private actor ControlledSessionEnder: SessionEnding {
@@ -311,6 +1295,91 @@ private actor ControlledSessionEnder: SessionEnding {
     }
 
     func expectedSessionIDs() -> [UUID] { expectedIDs }
+}
+
+private actor ImmediateSessionEnder: SessionEnding {
+    func signOut(expectedSessionID: UUID) async throws -> Bool {
+        _ = expectedSessionID
+        return true
+    }
+}
+
+private protocol DestructivePersistenceResetEntry: Actor {
+    func resetSensitiveScope(
+        reason: ScopeDeactivationReason,
+        generation: UInt64
+    ) async throws
+}
+
+private actor DestructivePersistenceResetSpy:
+    DiscoveryCaching,
+    DestructivePersistenceResetEntry {
+    private var cached: [EventSummary] = []
+    private var replacementCount = 0
+    private var destructiveInvocations = 0
+    private var replacementWaiters: [
+        (count: Int, continuation: CheckedContinuation<Void, Never>)
+    ] = []
+
+    func cachedEvents() async throws -> [EventSummary] { cached }
+
+    func replaceEvents(_ events: [EventSummary]) async throws {
+        cached = events
+        replacementCount += 1
+        let waiters = replacementWaiters
+        replacementWaiters.removeAll()
+        for waiter in waiters {
+            if waiter.count <= replacementCount {
+                waiter.continuation.resume()
+            } else {
+                replacementWaiters.append(waiter)
+            }
+        }
+    }
+
+    func resetSensitiveScope(
+        reason: ScopeDeactivationReason,
+        generation: UInt64
+    ) async throws {
+        _ = reason
+        _ = generation
+        destructiveInvocations += 1
+    }
+
+    func waitForCacheReplacement(count: Int) async {
+        if replacementCount >= count { return }
+        await withCheckedContinuation {
+            replacementWaiters.append((count, $0))
+        }
+    }
+
+    func destructiveInvocationCount() -> Int { destructiveInvocations }
+}
+
+private actor InMemoryCredentialStore: CredentialStoring {
+    private var storedSession: UserSession?
+
+    init(session: UserSession? = nil) {
+        storedSession = session
+    }
+
+    func save(session: UserSession) throws {
+        storedSession = session
+    }
+
+    func replace(session: UserSession, expectedSessionID: UUID) throws -> Bool {
+        guard storedSession?.sessionId == expectedSessionID else { return false }
+        storedSession = session
+        return true
+    }
+
+    func session() throws -> UserSession? { storedSession }
+
+    func clear(expectedSessionID: UUID) throws -> Bool {
+        guard storedSession?.sessionId == expectedSessionID else { return false }
+        storedSession = nil
+        return true
+    }
 }
 
 private actor ControlledSessionRestorer: SessionRestoring {
@@ -345,7 +1414,7 @@ private actor ControlledSessionRestorer: SessionRestoring {
 
 private actor RecordingSyncLifecycle: SyncLifecycleManaging {
     private var bootstraps: [(UUID, UInt64)] = []
-    private var resets: [UInt64] = []
+    private var deactivations: [(ScopeDeactivationReason, UInt64)] = []
     private var bootstrapWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
 
     func bootstrap(userID: UUID, generation: UInt64) async throws {
@@ -354,9 +1423,8 @@ private actor RecordingSyncLifecycle: SyncLifecycleManaging {
         waiters.forEach { $0.resume() }
     }
 
-    func resetSensitiveScope(reason: SensitiveResetReason, generation: UInt64) async throws {
-        _ = reason
-        resets.append(generation)
+    func deactivateScope(reason: ScopeDeactivationReason, generation: UInt64) async throws {
+        deactivations.append((reason, generation))
     }
 
     func waitForBootstrap(userID: UUID) async {
@@ -364,8 +1432,142 @@ private actor RecordingSyncLifecycle: SyncLifecycleManaging {
         await withCheckedContinuation { bootstrapWaiters[userID, default: []].append($0) }
     }
 
-    func resetGenerations() -> [UInt64] { resets }
+    func deactivationGenerations() -> [UInt64] { deactivations.map(\.1) }
+    func deactivationReasons() -> [ScopeDeactivationReason] { deactivations.map(\.0) }
     func bootstrapUserIDs() -> [UUID] { bootstraps.map(\.0) }
+}
+
+private actor FailingSyncLifecycle: SyncLifecycleManaging {
+    enum Failure: Error { case injected }
+
+    private let failBootstrap: Bool
+    private let failDeactivate: Bool
+    private var bootstrapAttempts = 0
+    private var deactivationAttempts = 0
+    private var bootstrapWaiters: [CheckedContinuation<Void, Never>] = []
+    private var deactivationWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(failBootstrap: Bool, failDeactivate: Bool) {
+        self.failBootstrap = failBootstrap
+        self.failDeactivate = failDeactivate
+    }
+
+    func bootstrap(userID: UUID, generation: UInt64) async throws {
+        _ = userID
+        _ = generation
+        bootstrapAttempts += 1
+        let waiters = bootstrapWaiters
+        bootstrapWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        if failBootstrap { throw Failure.injected }
+    }
+
+    func deactivateScope(
+        reason: ScopeDeactivationReason,
+        generation: UInt64
+    ) async throws {
+        _ = reason
+        _ = generation
+        deactivationAttempts += 1
+        let waiters = deactivationWaiters
+        deactivationWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        if failDeactivate { throw Failure.injected }
+    }
+
+    func waitForBootstrapAttempt() async {
+        if bootstrapAttempts > 0 { return }
+        await withCheckedContinuation { bootstrapWaiters.append($0) }
+    }
+
+    func waitForDeactivationAttempt() async {
+        if deactivationAttempts > 0 { return }
+        await withCheckedContinuation { deactivationWaiters.append($0) }
+    }
+
+    func deactivationAttemptCount() -> Int { deactivationAttempts }
+}
+
+private actor ObservedSyncLifecycle: SyncLifecycleManaging {
+    private let engine: SyncEngine
+    private var bootstrapCounts: [UUID: Int] = [:]
+    private var bootstrapWaiters: [
+        UUID: [(count: Int, continuation: CheckedContinuation<Void, Never>)]
+    ] = [:]
+    private var deactivationCount = 0
+    private var deactivationWaiters: [
+        (count: Int, continuation: CheckedContinuation<Void, Never>)
+    ] = []
+    private var failed = false
+
+    init(engine: SyncEngine) {
+        self.engine = engine
+    }
+
+    func bootstrap(userID: UUID, generation: UInt64) async throws {
+        do {
+            try await engine.bootstrap(userID: userID, generation: generation)
+            finishBootstrap(userID: userID, failed: false)
+        } catch {
+            finishBootstrap(userID: userID, failed: true)
+            throw error
+        }
+    }
+
+    func deactivateScope(
+        reason: ScopeDeactivationReason,
+        generation: UInt64
+    ) async throws {
+        do {
+            try await engine.deactivateScope(reason: reason, generation: generation)
+            finishDeactivation(failed: false)
+        } catch {
+            finishDeactivation(failed: true)
+            throw error
+        }
+    }
+
+    func waitForBootstrap(userID: UUID, count: Int) async {
+        if bootstrapCounts[userID, default: 0] >= count { return }
+        await withCheckedContinuation {
+            bootstrapWaiters[userID, default: []].append((count, $0))
+        }
+    }
+
+    func waitForDeactivation(count: Int) async {
+        if deactivationCount >= count { return }
+        await withCheckedContinuation { deactivationWaiters.append((count, $0)) }
+    }
+
+    func didFail() -> Bool { failed }
+
+    private func finishBootstrap(userID: UUID, failed: Bool) {
+        self.failed = self.failed || failed
+        bootstrapCounts[userID, default: 0] += 1
+        let completedCount = bootstrapCounts[userID, default: 0]
+        let waiters = bootstrapWaiters.removeValue(forKey: userID) ?? []
+        for waiter in waiters {
+            if waiter.count <= completedCount {
+                waiter.continuation.resume()
+            } else {
+                bootstrapWaiters[userID, default: []].append(waiter)
+            }
+        }
+    }
+
+    private func finishDeactivation(failed: Bool) {
+        self.failed = self.failed || failed
+        deactivationCount += 1
+        let waiters = deactivationWaiters
+        deactivationWaiters.removeAll()
+        for waiter in waiters {
+            if waiter.count <= deactivationCount {
+                waiter.continuation.resume()
+            } else {
+                deactivationWaiters.append(waiter)
+            }
+        }
+    }
 }
 
 private actor ControlledSyncAPI: SyncServing {
@@ -373,6 +1575,8 @@ private actor ControlledSyncAPI: SyncServing {
     private var firstPullWaiters: [CheckedContinuation<Void, Never>] = []
     private var secondPullWaiters: [CheckedContinuation<Void, Never>] = []
     private var firstPullContinuation: CheckedContinuation<SyncPullPage, Never>?
+    private var firstPullCancellationObserved = false
+    private var firstPullCancellationWaiters: [CheckedContinuation<Void, Never>] = []
 
     func pull(cursor: Int64, topics: [String]) async throws -> SyncPullPage {
         _ = cursor
@@ -382,7 +1586,11 @@ private actor ControlledSyncAPI: SyncServing {
             let waiters = firstPullWaiters
             firstPullWaiters.removeAll()
             waiters.forEach { $0.resume() }
-            return await withCheckedContinuation { firstPullContinuation = $0 }
+            return await withTaskCancellationHandler {
+                await withCheckedContinuation { firstPullContinuation = $0 }
+            } onCancel: {
+                Task { await self.noteFirstPullCancellation() }
+            }
         }
         let waiters = secondPullWaiters
         secondPullWaiters.removeAll()
@@ -405,14 +1613,305 @@ private actor ControlledSyncAPI: SyncServing {
         await withCheckedContinuation { secondPullWaiters.append($0) }
     }
 
+    func waitUntilFirstPullCancellationObserved() async {
+        if firstPullCancellationObserved { return }
+        await withCheckedContinuation { firstPullCancellationWaiters.append($0) }
+    }
+
     func finishFirstPull() {
         firstPullContinuation?.resume(returning: Self.page(sequence: 1))
         firstPullContinuation = nil
     }
 
+    private func noteFirstPullCancellation() {
+        firstPullCancellationObserved = true
+        let waiters = firstPullCancellationWaiters
+        firstPullCancellationWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
     nonisolated private static func page(sequence: Int64) -> SyncPullPage {
         SyncPullPage(changes: [], nextCursor: sequence, hasMore: false, serverTime: .now)
     }
+}
+
+private actor ControlledPushSyncAPI: SyncServing {
+    private var pushedOperations: [SyncPushOperation] = []
+    private var pushContinuation: CheckedContinuation<SyncPushResponse, Never>?
+    private var pushStartedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var cancellationObserved = false
+
+    func pull(cursor: Int64, topics: [String]) async throws -> SyncPullPage {
+        _ = topics
+        return SyncPullPage(
+            changes: [],
+            nextCursor: cursor,
+            hasMore: false,
+            serverTime: .now
+        )
+    }
+
+    func push(operations: [SyncPushOperation]) async throws -> SyncPushResponse {
+        pushedOperations = operations
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                pushContinuation = continuation
+                let waiters = pushStartedWaiters
+                pushStartedWaiters.removeAll()
+                waiters.forEach { $0.resume() }
+            }
+        } onCancel: {
+            Task { await self.noteCancellation() }
+        }
+    }
+
+    func waitUntilPushStarted() async {
+        if pushContinuation != nil { return }
+        await withCheckedContinuation { pushStartedWaiters.append($0) }
+    }
+
+    func wasCancellationObserved() -> Bool { cancellationObserved }
+
+    func finishPushWithAppliedAcknowledgement() {
+        pushContinuation?.resume(returning: SyncPushResponse(
+            results: pushedOperations.map {
+                .init(operationId: $0.operationId, state: "applied", result: nil)
+            }
+        ))
+        pushContinuation = nil
+    }
+
+    private func noteCancellation() {
+        cancellationObserved = true
+    }
+}
+
+private actor AccountTransitionSyncAPI: SyncServing {
+    private var pullCount = 0
+    private var pullStartedWaiters: [
+        (number: Int, continuation: CheckedContinuation<Void, Never>)
+    ] = []
+    private var pullFinishContinuations: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var pushed: [UUID] = []
+
+    func pull(cursor: Int64, topics: [String]) async throws -> SyncPullPage {
+        _ = topics
+        pullCount += 1
+        let number = pullCount
+        let waiters = pullStartedWaiters
+        pullStartedWaiters.removeAll()
+        for waiter in waiters {
+            if waiter.number <= number {
+                waiter.continuation.resume()
+            } else {
+                pullStartedWaiters.append(waiter)
+            }
+        }
+        if number == 3 {
+            await withCheckedContinuation { pullFinishContinuations[number] = $0 }
+        }
+        return SyncPullPage(
+            changes: [],
+            nextCursor: cursor,
+            hasMore: false,
+            serverTime: .now
+        )
+    }
+
+    func push(operations: [SyncPushOperation]) async throws -> SyncPushResponse {
+        pushed.append(contentsOf: operations.map(\.operationId))
+        return SyncPushResponse(results: operations.map {
+            .init(operationId: $0.operationId, state: "failed", result: nil)
+        })
+    }
+
+    func waitUntilPullStarted(number: Int) async {
+        if pullCount >= number { return }
+        await withCheckedContinuation { pullStartedWaiters.append((number, $0)) }
+    }
+
+    func finishPull(number: Int) {
+        pullFinishContinuations.removeValue(forKey: number)?.resume()
+    }
+
+    func pushedOperationIDs() -> [UUID] { pushed }
+}
+
+private actor SessionIsolationCompletionFlag {
+    private var started = false
+    private var finished = false
+    private var failed = false
+    private var startedWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func start() {
+        started = true
+        let waiters = startedWaiters
+        startedWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { startedWaiters.append($0) }
+    }
+
+    func finish(failed: Bool) {
+        self.failed = failed
+        finished = true
+    }
+
+    func isFinished() -> Bool { finished }
+    func didFail() -> Bool { failed }
+}
+
+private enum LifecyclePersistenceBoundary: String, Sendable {
+    case cursor
+    case apply
+    case pendingOperations
+    case markApplied
+}
+
+private final class LifecyclePersistenceBoundaryGate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private let selectedBoundary: LifecyclePersistenceBoundary
+    private var entered = false
+    private var active = false
+    private var released = false
+
+    init(selectedBoundary: LifecyclePersistenceBoundary) {
+        self.selectedBoundary = selectedBoundary
+    }
+
+    var isActive: Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return active
+    }
+
+    func blockIfSelected(_ boundary: LifecyclePersistenceBoundary) {
+        guard boundary == selectedBoundary else { return }
+        condition.lock()
+        entered = true
+        active = true
+        condition.broadcast()
+        while !released {
+            condition.wait()
+        }
+        active = false
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    func waitUntilEntered(timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        condition.lock()
+        defer { condition.unlock() }
+        while !entered {
+            guard condition.wait(until: deadline) else { return entered }
+        }
+        return true
+    }
+
+    func release() {
+        condition.lock()
+        released = true
+        condition.broadcast()
+        condition.unlock()
+    }
+}
+
+private actor LifecycleBlockingSyncPersistence: SyncPersisting {
+    nonisolated let ownerWriteLeaseAuthority = OwnerWriteLeaseAuthority()
+    private let gate: LifecyclePersistenceBoundaryGate
+    private let pendingOperation: PendingOperation?
+
+    init(
+        gate: LifecyclePersistenceBoundaryGate,
+        pendingOperation: PendingOperation?
+    ) {
+        self.gate = gate
+        self.pendingOperation = pendingOperation
+    }
+
+    func validateOwnerScope(_ ownerScope: String) throws {
+        _ = try OwnerWriteLeaseAuthority.normalizedOwnerScope(ownerScope)
+    }
+
+    func cursor(scope: String) throws -> Int64 {
+        _ = scope
+        gate.blockIfSelected(.cursor)
+        return 0
+    }
+
+    func apply(
+        changes: [SyncChange],
+        nextCursor: Int64,
+        scope: String,
+        lease: OwnerWriteLease
+    ) throws {
+        _ = changes
+        _ = nextCursor
+        gate.blockIfSelected(.apply)
+        try ownerWriteLeaseAuthority.validate(lease, ownerScope: scope)
+    }
+
+    func enqueue(
+        _ operation: PendingOperation,
+        ownerScope: String,
+        lease: OwnerWriteLease
+    ) throws {
+        _ = operation
+        try ownerWriteLeaseAuthority.validate(lease, ownerScope: ownerScope)
+    }
+
+    func pendingOperations(ownerScope: String) throws -> [PendingOperation] {
+        _ = ownerScope
+        gate.blockIfSelected(.pendingOperations)
+        return pendingOperation.map { [$0] } ?? []
+    }
+
+    func allOperations(ownerScope: String) throws -> [StoredOperationSnapshot] {
+        _ = ownerScope
+        return []
+    }
+
+    func markApplied(
+        operationIDs: Set<UUID>,
+        ownerScope: String,
+        lease: OwnerWriteLease
+    ) throws {
+        _ = operationIDs
+        gate.blockIfSelected(.markApplied)
+        try ownerWriteLeaseAuthority.validate(lease, ownerScope: ownerScope)
+    }
+}
+
+private actor LifecycleBoundarySyncAPI: SyncServing {
+    private let changes: [SyncChange]
+    private var pushes = 0
+
+    init(changes: [SyncChange]) {
+        self.changes = changes
+    }
+
+    func pull(cursor: Int64, topics: [String]) async throws -> SyncPullPage {
+        _ = topics
+        return SyncPullPage(
+            changes: changes,
+            nextCursor: cursor + 1,
+            hasMore: false,
+            serverTime: .now
+        )
+    }
+
+    func push(operations: [SyncPushOperation]) async throws -> SyncPushResponse {
+        pushes += 1
+        return SyncPushResponse(results: operations.map {
+            .init(operationId: $0.operationId, state: "applied", result: nil)
+        })
+    }
+
+    func pushCount() -> Int { pushes }
 }
 
 private actor RecordingSyncPersistence: SyncPersisting {
@@ -421,24 +1920,182 @@ private actor RecordingSyncPersistence: SyncPersisting {
         let cursor: Int64
     }
 
+    private struct OwnedOperation: Sendable {
+        let ownerScope: String
+        let operation: PendingOperation
+        var state: String
+        let createdAt: Date
+    }
+
+    nonisolated let ownerWriteLeaseAuthority = OwnerWriteLeaseAuthority()
+    private let hasUnownedLegacyRows: Bool
     private var applied: [Application] = []
-    private var resets = 0
+    private var operations: [OwnedOperation] = []
+    private var writes = 0
+    private var ownerMutationCounts: [String: Int] = [:]
+
+    init(hasUnownedLegacyRows: Bool = false) {
+        self.hasUnownedLegacyRows = hasUnownedLegacyRows
+    }
+
+    func validateOwnerScope(_ ownerScope: String) throws {
+        _ = try OwnerWriteLeaseAuthority.normalizedOwnerScope(ownerScope)
+        if hasUnownedLegacyRows {
+            throw PersistenceOwnershipError.unresolvedLegacyOwner
+        }
+    }
 
     func cursor(scope: String) throws -> Int64 { 0 }
-    func apply(changes: [SyncChange], nextCursor: Int64, scope: String) throws {
+    func apply(
+        changes: [SyncChange],
+        nextCursor: Int64,
+        scope: String,
+        lease: OwnerWriteLease
+    ) throws {
         _ = changes
+        try ownerWriteLeaseAuthority.validate(lease, ownerScope: scope)
         applied.append(.init(scope: scope, cursor: nextCursor))
+        writes += 1
+        ownerMutationCounts[scope, default: 0] += 1
     }
-    func pendingOperations() throws -> [PendingOperation] { [] }
-    func enqueue(_ operation: PendingOperation) throws { _ = operation }
-    func markApplied(operationIDs: Set<UUID>) throws { _ = operationIDs }
-    func resetSensitive() throws { resets += 1 }
+
+    func pendingOperations(ownerScope: String) throws -> [PendingOperation] {
+        operations
+            .filter { $0.ownerScope == ownerScope && $0.state == "pending" }
+            .map(\.operation)
+    }
+
+    func allOperations(ownerScope: String) throws -> [StoredOperationSnapshot] {
+        operations.filter { $0.ownerScope == ownerScope }.map {
+            StoredOperationSnapshot(
+                operationID: $0.operation.operationID,
+                ownerScope: $0.ownerScope,
+                entityType: $0.operation.entityType,
+                entityID: $0.operation.entityID,
+                action: $0.operation.action,
+                baseVersion: $0.operation.baseVersion,
+                payload: $0.operation.payload,
+                dependencies: $0.operation.dependencies,
+                state: $0.state,
+                attempts: 0,
+                createdAt: $0.createdAt
+            )
+        }
+    }
+
+    func enqueue(
+        _ operation: PendingOperation,
+        ownerScope: String,
+        lease: OwnerWriteLease
+    ) throws {
+        try ownerWriteLeaseAuthority.validate(lease, ownerScope: ownerScope)
+        operations.append(.init(
+            ownerScope: ownerScope,
+            operation: operation,
+            state: "pending",
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        ))
+        writes += 1
+        ownerMutationCounts[ownerScope, default: 0] += 1
+    }
+
+    func markApplied(
+        operationIDs: Set<UUID>,
+        ownerScope: String,
+        lease: OwnerWriteLease
+    ) throws {
+        try ownerWriteLeaseAuthority.validate(lease, ownerScope: ownerScope)
+        for index in operations.indices where
+            operations[index].ownerScope == ownerScope &&
+            operationIDs.contains(operations[index].operation.operationID) {
+            operations[index].state = "applied"
+        }
+        writes += 1
+        ownerMutationCounts[ownerScope, default: 0] += 1
+    }
+
     func applications() -> [Application] { applied }
-    func resetCount() -> Int { resets }
+    func writeCount() -> Int { writes }
+    func mutationCount(ownerScope: String) -> Int {
+        ownerMutationCounts[ownerScope, default: 0]
+    }
+    func resetMutationCount(ownerScope: String) {
+        ownerMutationCounts[ownerScope] = 0
+    }
+}
+
+private struct SessionIsolationOwnerDataCapture {
+    let canonicalDigest: String
+    let operations: [StoredOperationSnapshot]
+    let drafts: [LocalEventDraftSnapshot]
+
+    static func capture(
+        ownerScope: String,
+        syncPersistence: RecordingSyncPersistence,
+        draftPersistence: PersistenceStore
+    ) async throws -> Self {
+        let operations = try await syncPersistence.allOperations(ownerScope: ownerScope)
+        let drafts = try await draftPersistence.drafts(ownerScope: ownerScope)
+        let operationObjects: [[String: Any]] = operations.map { operation in
+            [
+                "operationID": operation.operationID.uuidString.lowercased(),
+                "ownerScope": operation.ownerScope,
+                "entityType": operation.entityType,
+                "entityID": operation.entityID.map {
+                    $0.uuidString.lowercased() as Any
+                } ?? NSNull(),
+                "action": operation.action,
+                "baseVersion": operation.baseVersion.map { $0 as Any } ?? NSNull(),
+                "payload": operation.payload.base64EncodedString(),
+                "dependencies": operation.dependencies.map { $0.uuidString.lowercased() },
+                "state": operation.state,
+                "attempts": operation.attempts,
+                "createdAtBits": String(
+                    operation.createdAt.timeIntervalSinceReferenceDate.bitPattern,
+                    radix: 16
+                ),
+            ]
+        }
+        let draftObjects: [[String: Any]] = drafts.map { draft in
+            [
+                "ownerScope": ownerScope,
+                "localID": draft.localID.uuidString.lowercased(),
+                "serverID": draft.serverID.map {
+                    $0.uuidString.lowercased() as Any
+                } ?? NSNull(),
+                "title": draft.title,
+                "payload": draft.payload.base64EncodedString(),
+                "draftRevision": draft.draftRevision,
+                "serverVersion": draft.serverVersion.map { $0 as Any } ?? NSNull(),
+                "updatedAtBits": String(
+                    draft.updatedAt.timeIntervalSinceReferenceDate.bitPattern,
+                    radix: 16
+                ),
+            ]
+        }
+        let canonicalData = try JSONSerialization.data(
+            withJSONObject: [
+                "digestVersion": 1,
+                "ownerScope": ownerScope,
+                "operations": operationObjects,
+                "drafts": draftObjects,
+            ],
+            options: [.sortedKeys]
+        )
+        let digest = SHA256.hash(data: canonicalData)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return Self(
+            canonicalDigest: "spott-owner-data-v1:\(digest)",
+            operations: operations,
+            drafts: drafts
+        )
+    }
 }
 
 private actor CountingSyncAPI: SyncServing {
     private var count = 0
+    private var pushed: [UUID] = []
 
     func pull(cursor: Int64, topics: [String]) async throws -> SyncPullPage {
         _ = cursor
@@ -448,11 +2105,36 @@ private actor CountingSyncAPI: SyncServing {
     }
 
     func push(operations: [SyncPushOperation]) async throws -> SyncPushResponse {
-        _ = operations
-        return SyncPushResponse(results: [])
+        pushed.append(contentsOf: operations.map(\.operationId))
+        return SyncPushResponse(
+            results: operations.map {
+                .init(operationId: $0.operationId, state: "applied", result: nil)
+            }
+        )
     }
 
     func pullCount() -> Int { count }
+    func pushedOperationIDs() -> [UUID] { pushed }
+}
+
+private actor NonAcknowledgingSyncAPI: SyncServing {
+    private var pushed: [UUID] = []
+
+    func pull(cursor: Int64, topics: [String]) async throws -> SyncPullPage {
+        _ = topics
+        return SyncPullPage(changes: [], nextCursor: cursor, hasMore: false, serverTime: .now)
+    }
+
+    func push(operations: [SyncPushOperation]) async throws -> SyncPushResponse {
+        pushed.append(contentsOf: operations.map(\.operationId))
+        return SyncPushResponse(
+            results: operations.map {
+                .init(operationId: $0.operationId, state: "failed", result: nil)
+            }
+        )
+    }
+
+    func pushedOperationIDs() -> [UUID] { pushed }
 }
 
 private final class ControlledRefreshURLProtocol: URLProtocol, @unchecked Sendable {
@@ -499,6 +2181,84 @@ private final class ControlledRefreshURLProtocol: URLProtocol, @unchecked Sendab
     }()
 }
 
+private final class SessionBoundaryURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var onStart: ((URLRequest, Int) -> Void)?
+    private static let storage = SessionBoundaryProtocolStorage()
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let requestNumber = Self.storage.insert(self)
+        Self.onStart?(request, requestNumber)
+    }
+
+    override func stopLoading() {}
+
+    static func respond(
+        requestNumber: Int,
+        status: Int,
+        data: Data,
+        headerFields: [String: String] = [:]
+    ) throws {
+        guard let request = storage.remove(requestNumber: requestNumber) else {
+            throw URLError(.resourceUnavailable)
+        }
+        let response = HTTPURLResponse(
+            url: request.request.url!,
+            statusCode: status,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "application/json"]
+                .merging(headerFields) { _, new in new }
+        )!
+        request.client?.urlProtocol(request, didReceive: response, cacheStoragePolicy: .notAllowed)
+        request.client?.urlProtocol(request, didLoad: data)
+        request.client?.urlProtocolDidFinishLoading(request)
+    }
+
+    static func fail(requestNumber: Int, error: Error) throws {
+        guard let request = storage.remove(requestNumber: requestNumber) else {
+            throw URLError(.resourceUnavailable)
+        }
+        request.client?.urlProtocol(request, didFailWithError: error)
+    }
+
+    static func requests() -> [URLRequest] { storage.requests() }
+
+    static func reset() {
+        onStart = nil
+        storage.reset()
+    }
+}
+
+private final class SessionBoundaryProtocolStorage: @unchecked Sendable {
+    private let lock = NSLock()
+    private var active: [Int: SessionBoundaryURLProtocol] = [:]
+    private var recorded: [URLRequest] = []
+
+    func insert(_ request: SessionBoundaryURLProtocol) -> Int {
+        lock.withLock {
+            let requestNumber = recorded.count + 1
+            active[requestNumber] = request
+            recorded.append(request.request)
+            return requestNumber
+        }
+    }
+
+    func remove(requestNumber: Int) -> SessionBoundaryURLProtocol? {
+        lock.withLock { active.removeValue(forKey: requestNumber) }
+    }
+
+    func requests() -> [URLRequest] { lock.withLock { recorded } }
+
+    func reset() {
+        lock.withLock {
+            active.removeAll()
+            recorded.removeAll()
+        }
+    }
+}
+
 private final class RefreshProtocolStorage: @unchecked Sendable {
     private let lock = NSLock()
     private var requests: [Int: ControlledRefreshURLProtocol] = [:]
@@ -528,10 +2288,14 @@ private final class RefreshProtocolStorage: @unchecked Sendable {
 }
 
 private final class BootstrapURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var count = 0
+
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        Self.lock.withLock { Self.count += 1 }
         let payload: [String: Any] = [
             "items": [],
             "nextCursor": NSNull(),
@@ -552,6 +2316,12 @@ private final class BootstrapURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     override func stopLoading() {}
+
+    static func requestCount() -> Int { lock.withLock { count } }
+
+    static func reset() {
+        lock.withLock { count = 0 }
+    }
 }
 
 private final class FieldErrorURLProtocol: URLProtocol, @unchecked Sendable {

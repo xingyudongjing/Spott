@@ -113,13 +113,43 @@ private extension View {
     }
 }
 
+struct RoutedEventCopy: Equatable {
+    let errorTitle: String
+    let invalidMessage: String
+    let reload: String
+    let loading: String
+
+    init(locale: Locale) {
+        errorTitle = CoreJourneyLocalization.text(
+            "journey.route.event_error_title",
+            locale: locale
+        )
+        invalidMessage = CoreJourneyLocalization.text(
+            "journey.route.event_invalid",
+            locale: locale
+        )
+        reload = CoreJourneyLocalization.text("journey.route.reload", locale: locale)
+        loading = CoreJourneyLocalization.text(
+            "journey.route.event_loading",
+            locale: locale
+        )
+    }
+
+    func displayMessage(for error: UserFacingError) -> String {
+        error.id == "EVENT_ROUTE_INVALID" ? invalidMessage : error.message
+    }
+}
+
 private struct RoutedEventView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.locale) private var locale
     let reference: EventRouteReference
     let sourceTab: AppTab
     @State private var event: EventSummary?
     @State private var error: UserFacingError?
     @State private var refreshEventOnAppear = true
+
+    private var copy: RoutedEventCopy { RoutedEventCopy(locale: locale) }
 
     var body: some View {
         Group {
@@ -132,15 +162,15 @@ private struct RoutedEventView: View {
             } else if let error {
                 SpottStateCard(
                     icon: "calendar.badge.exclamationmark",
-                    title: "无法打开活动",
-                    message: error.message,
-                    actionTitle: "重新加载"
+                    title: copy.errorTitle,
+                    message: copy.displayMessage(for: error),
+                    actionTitle: copy.reload
                 ) {
                     Task { await load(force: true) }
                 }
                 .padding(SpottMetric.pageInset)
             } else {
-                ProgressView("正在加载活动…")
+                ProgressView(copy.loading)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -156,7 +186,11 @@ private struct RoutedEventView: View {
             return
         }
         guard !reference.identifier.isEmpty else {
-            error = .init(id: "EVENT_ROUTE_INVALID", message: "活动链接无效。", retryable: false)
+            error = .init(
+                id: "EVENT_ROUTE_INVALID",
+                message: copy.invalidMessage,
+                retryable: false
+            )
             return
         }
         do {

@@ -100,6 +100,181 @@ final class SpottUITests: XCTestCase {
     }
 
     @MainActor
+    private func nativeAlertAction(
+        identifier: String,
+        label: String,
+        in alert: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) -> XCUIElement {
+        let matches = alert.descendants(matching: .any).matching(identifier: identifier)
+        let count = matches.count
+
+        // iOS 26 UIKit may expose one UIAlertAction as a wrapper and a nested
+        // control. They are the same native button only when their frames match.
+        XCTAssertTrue(
+            (1...2).contains(count),
+            "系统 Alert 操作必须只有一个按钮，或 iOS 26 已知的同按钮双 XCUI 表示",
+            file: file,
+            line: line
+        )
+        guard count > 0 else { return matches.firstMatch }
+
+        let elements = (0..<count).map(matches.element(boundBy:))
+        let referenceFrame = elements[0].frame
+        XCTAssertGreaterThan(referenceFrame.width, 0, file: file, line: line)
+        XCTAssertGreaterThan(referenceFrame.height, 0, file: file, line: line)
+
+        for element in elements {
+            XCTAssertTrue(element.exists, file: file, line: line)
+            XCTAssertTrue(element.isHittable, file: file, line: line)
+            XCTAssertEqual(element.label, label, file: file, line: line)
+            XCTAssertEqual(
+                element.frame.origin.x,
+                referenceFrame.origin.x,
+                accuracy: 0.5,
+                file: file,
+                line: line
+            )
+            XCTAssertEqual(
+                element.frame.origin.y,
+                referenceFrame.origin.y,
+                accuracy: 0.5,
+                file: file,
+                line: line
+            )
+            XCTAssertEqual(
+                element.frame.width,
+                referenceFrame.width,
+                accuracy: 0.5,
+                file: file,
+                line: line
+            )
+            XCTAssertEqual(
+                element.frame.height,
+                referenceFrame.height,
+                accuracy: 0.5,
+                file: file,
+                line: line
+            )
+        }
+        return matches.firstMatch
+    }
+
+    @MainActor
+    func testCoreJourneyRegistrationAndConfirmationRemainUsableAtLargestAccessibilityText() throws {
+        let app = XCUIApplication()
+        app.launchArguments = coreJourneyLaunchArguments(
+            state: "registration",
+            routeTab: "activities",
+            largestAccessibilityText: true
+        )
+        app.launch()
+
+        let form = app.descendants(matching: .any)["registration.form"]
+        XCTAssertTrue(form.waitForExistence(timeout: 5))
+        let continueButton = app.descendants(matching: .any)["registration.continue"]
+        XCTAssertTrue(continueButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(continueButton.isHittable)
+        XCTAssertGreaterThanOrEqual(continueButton.frame.height, 44)
+
+        app.terminate()
+        app.launchArguments = coreJourneyLaunchArguments(
+            state: "confirmed",
+            routeTab: "activities",
+            largestAccessibilityText: true
+        )
+        app.launch()
+
+        let confirmation = app.descendants(matching: .any)["registration.confirmation"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        let itineraryButton = app.descendants(matching: .any)[
+            "registration.confirmation.view_itinerary"
+        ]
+        XCTAssertTrue(itineraryButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(itineraryButton.isHittable)
+        XCTAssertGreaterThanOrEqual(itineraryButton.frame.height, 44)
+        itineraryButton.tap()
+        XCTAssertTrue(app.tabBars.buttons["行程"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.tabBars.buttons["行程"].isSelected)
+    }
+
+    @MainActor
+    func testItineraryCardOpensNativeDetailAndCancellationRequiresConfirmation() throws {
+        let registrationID = "019b0000-0000-7000-8400-000000000001"
+        let app = XCUIApplication()
+        app.launchArguments = coreJourneyLaunchArguments(state: "itinerary")
+        app.launch()
+
+        XCTAssertTrue(app.tabBars.buttons["行程"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["行程"].tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["itinerary.screen"]
+                .waitForExistence(timeout: 5)
+        )
+
+        let openButton = app.descendants(matching: .any)[
+            "itinerary.item.\(registrationID).open"
+        ]
+        XCTAssertTrue(openButton.waitForExistence(timeout: 3))
+        openButton.tap()
+
+        let detailTitle = app.staticTexts["event.detail.title"]
+        XCTAssertTrue(detailTitle.waitForExistence(timeout: 5))
+        XCTAssertEqual(detailTitle.label, "Tokyo Makers Night")
+        try tapNativeBackButton(in: app)
+
+        let moreButton = app.descendants(matching: .any)[
+            "itinerary.item.\(registrationID).more"
+        ]
+        XCTAssertTrue(moreButton.waitForExistence(timeout: 3))
+        moreButton.tap()
+        let cancelAction = app.descendants(matching: .any)[
+            "itinerary.item.\(registrationID).cancel"
+        ]
+        XCTAssertTrue(cancelAction.waitForExistence(timeout: 3))
+        cancelAction.tap()
+
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 3))
+        _ = nativeAlertAction(
+            identifier: "itinerary.cancel.confirm",
+            label: "取消报名",
+            in: alert
+        )
+        let dismissButton = nativeAlertAction(
+            identifier: "itinerary.cancel.dismiss",
+            label: "取消",
+            in: alert
+        )
+        dismissButton.tap()
+        XCTAssertTrue(alert.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(openButton.exists, "放弃取消后行程卡必须仍然存在")
+    }
+
+    private func coreJourneyLaunchArguments(
+        state: String,
+        routeTab: String? = nil,
+        largestAccessibilityText: Bool = false
+    ) -> [String] {
+        var arguments = [
+            "-spott-ui-test-navigation-fixture",
+            "-spott-ui-test-core-journey-state",
+            state,
+        ]
+        if let routeTab {
+            arguments += ["-spott-ui-test-route-tab", routeTab]
+        }
+        if largestAccessibilityText {
+            arguments += [
+                "-UIPreferredContentSizeCategoryName",
+                "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge",
+            ]
+        }
+        return arguments
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {

@@ -54,6 +54,16 @@ protocol SessionRestoring: Actor {
 }
 
 actor SpottAPIClient: SessionEnding, SessionRestoring {
+    private struct AuthenticatedRequestContext: Sendable {
+        let userID: UUID?
+        let sessionID: UUID?
+
+        init(session: UserSession?) {
+            userID = session?.user.id
+            sessionID = session?.sessionId
+        }
+    }
+
     private struct RefreshFlight {
         let sessionID: UUID
         let task: Task<UserSession, Error>
@@ -65,18 +75,24 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private let usesCredentials: Bool
+    private nonisolated let serverTimeAuthority: ServerTimeAuthority
+    private nonisolated let authenticationExpirationBoundary: AuthenticationExpirationBoundary
     private var refreshFlight: RefreshFlight?
 
     init(
         environment: APIEnvironment,
         credentials: any CredentialStoring,
         session: URLSession = .shared,
-        usesCredentials: Bool = true
+        usesCredentials: Bool = true,
+        serverTimeAuthority: ServerTimeAuthority = .init(),
+        authenticationExpirationBoundary: AuthenticationExpirationBoundary = .init()
     ) {
         self.environment = environment
         self.credentials = credentials
         self.session = session
         self.usesCredentials = usesCredentials
+        self.serverTimeAuthority = serverTimeAuthority
+        self.authenticationExpirationBoundary = authenticationExpirationBoundary
         encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         decoder = JSONDecoder()
@@ -89,7 +105,9 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
             resolvingAgainstBaseURL: false
         )!
         components.queryItems = query.queryItems
-        return try await send(URLRequest(url: components.url!))
+        let page: DiscoveryPage = try await send(URLRequest(url: components.url!))
+        serverTimeAuthority.calibrate(serverTime: page.serverTime)
+        return page
     }
 
     func discovery(region: String, query: String? = nil) async throws -> DiscoveryPage {
@@ -98,6 +116,16 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
 
     func event(identifier: String) async throws -> EventSummary {
         try await send(URLRequest(url: environment.baseURL.appending(path: "events/\(identifier)")))
+    }
+
+    nonisolated func authoritativeNow() -> Date {
+        serverTimeAuthority.now()
+    }
+
+    nonisolated func setAuthenticationExpirationHandler(
+        _ handler: @escaping AuthenticationExpirationBoundary.Handler
+    ) {
+        authenticationExpirationBoundary.setHandler(handler)
     }
 
     func wallet() async throws -> WalletSnapshot {
@@ -158,7 +186,11 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         if let cursor, !cursor.isEmpty {
             components.queryItems?.append(URLQueryItem(name: "cursor", value: cursor))
         }
-        return try await send(URLRequest(url: components.url!))
+        let page: RegistrationItineraryPage = try await send(
+            URLRequest(url: components.url!)
+        )
+        serverTimeAuthority.calibrate(serverTime: page.serverTime)
+        return page
     }
 
     func registrations(limit: Int = 50) async throws -> CursorPage<Registration> {
@@ -170,11 +202,21 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         )
     }
 
-    func acceptWaitlist(registrationID: UUID) async throws -> Registration {
+    func acceptWaitlist(
+        registrationID: UUID,
+        quoteID: UUID,
+        expectedRegistrationVersion: Int,
+        expectedEventVersion: Int,
+        idempotencyKey: UUID
+    ) async throws -> Registration {
         try await post(
             "registrations/\(registrationID.uuidString.lowercased())/waitlist-acceptance",
-            body: EmptyRequest(),
-            idempotencyKey: UUID()
+            body: WaitlistAcceptancePayload(
+                quoteID: quoteID,
+                expectedRegistrationVersion: expectedRegistrationVersion,
+                expectedEventVersion: expectedEventVersion
+            ),
+            idempotencyKey: idempotencyKey
         )
     }
 
@@ -264,11 +306,23 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
 
     func submitFeedback(
         registrationID: UUID,
-        payload: FeedbackSubmissionPayload
+        payload: FeedbackSubmissionPayload,
+        idempotencyKey: UUID
     ) async throws -> FeedbackReceipt {
         try await post(
             "registrations/\(registrationID.uuidString.lowercased())/feedback",
-            body: payload
+            body: payload,
+            idempotencyKey: idempotencyKey
+        )
+    }
+
+    func ownFeedback(registrationID: UUID) async throws -> OwnFeedbackState {
+        try await send(
+            URLRequest(
+                url: environment.baseURL.appending(
+                    path: "registrations/\(registrationID.uuidString.lowercased())/feedback"
+                )
+            )
         )
     }
 
@@ -667,8 +721,11 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         try await send(URLRequest(url: environment.baseURL.appending(path: "me/achievements")))
     }
 
-    func submitSafetyReport(_ report: SafetyReportPayload) async throws -> SafetyReportReceipt {
-        try await post("reports", body: report, idempotencyKey: UUID())
+    func submitSafetyReport(
+        _ report: SafetyReportPayload,
+        idempotencyKey: UUID
+    ) async throws -> SafetyReportReceipt {
+        try await post("reports", body: report, idempotencyKey: idempotencyKey)
     }
 
     func safetyCases() async throws -> SafetyCasePage {
@@ -900,6 +957,7 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         eventID: UUID,
         partySize: Int,
         quoteID: UUID,
+        expectedEventVersion: Int,
         joinWaitlist: Bool,
         answers: [UUID: RegistrationAnswer] = [:],
         attendeeNote: String? = nil,
@@ -908,6 +966,7 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         let payload = RegistrationRequestPayload(
             partySize: partySize,
             quoteID: quoteID,
+            expectedEventVersion: expectedEventVersion,
             joinWaitlistIfFull: joinWaitlist,
             answers: answers,
             attendeeNote: attendeeNote
@@ -950,11 +1009,23 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
     func pull(cursor: Int64, topics: [String]) async throws -> SyncPullPage {
         var components = URLComponents(url: environment.baseURL.appending(path: "sync/pull"), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "cursor", value: String(cursor)), URLQueryItem(name: "topics", value: topics.joined(separator: ","))]
-        return try await send(URLRequest(url: components.url!))
+        let page: SyncPullPage = try await send(URLRequest(url: components.url!))
+        serverTimeAuthority.calibrate(serverTime: page.serverTime)
+        return page
     }
 
     func push(operations: [SyncPushOperation]) async throws -> SyncPushResponse {
-        try await post("sync/push", body: ["operations": operations])
+        struct Body: Encodable, Sendable {
+            let deviceId: String
+            let operations: [SyncPushOperation]
+        }
+        return try await post(
+            "sync/push",
+            body: Body(
+                deviceId: DeviceIdentity.current.uuidString.lowercased(),
+                operations: operations
+            )
+        )
     }
 
     func currentSession() async throws -> UserSession? { try await credentials.session() }
@@ -973,23 +1044,50 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         return try await send(request, authenticated: authenticated)
     }
 
-    private func send<Response: Decodable & Sendable>(_ source: URLRequest, authenticated: Bool = true, canRefresh: Bool = true) async throws -> Response {
+    private func send<Response: Decodable & Sendable>(
+        _ source: URLRequest,
+        authenticated: Bool = true,
+        canRefresh: Bool = true,
+        requestContext: AuthenticatedRequestContext? = nil
+    ) async throws -> Response {
         var request = source
+        var context = requestContext
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(UUID().uuidString.lowercased(), forHTTPHeaderField: "X-Request-Id")
-        if authenticated, usesCredentials, let stored = try await credentials.session() {
-            request.setValue("Bearer \(stored.accessToken)", forHTTPHeaderField: "Authorization")
+        if context == nil, authenticated, usesCredentials {
+            let stored = try await credentials.session()
+            context = .init(session: stored)
+            if let stored {
+                request.setValue("Bearer \(stored.accessToken)", forHTTPHeaderField: "Authorization")
+            }
         }
         var attempt = 0
         while true {
             try Task.checkCancellation()
+            try await ensureActiveAuthentication(context)
             do {
                 let (data, response) = try await session.data(for: request)
                 guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-                if http.statusCode == 401, authenticated, canRefresh {
-                    let refreshed = try await refresh()
+                serverTimeAuthority.calibrate(
+                    httpDate: http.value(forHTTPHeaderField: "Date")
+                )
+                try await ensureActiveAuthentication(context)
+                if http.statusCode == 401,
+                   authenticated,
+                   canRefresh,
+                   let sessionID = context?.sessionID,
+                   let userID = context?.userID {
+                    let refreshed = try await refresh(
+                        expectedSessionID: sessionID,
+                        expectedUserID: userID
+                    )
                     request.setValue("Bearer \(refreshed.accessToken)", forHTTPHeaderField: "Authorization")
-                    return try await send(request, authenticated: false, canRefresh: false)
+                    return try await send(
+                        request,
+                        authenticated: false,
+                        canRefresh: false,
+                        requestContext: .init(session: refreshed)
+                    )
                 }
                 guard (200..<300).contains(http.statusCode) else { throw decodeError(data: data, status: http.statusCode) }
                 if Response.self == EmptyResponse.self { return EmptyResponse() as! Response }
@@ -999,8 +1097,10 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
             catch let error as APIError { throw error }
             catch {
                 guard attempt < 2, request.httpMethod == "GET" || request.value(forHTTPHeaderField: "Idempotency-Key") != nil else { throw error }
+                try await ensureActiveAuthentication(context)
                 attempt += 1
                 try await Task.sleep(for: .milliseconds(250 * (1 << attempt)))
+                try await ensureActiveAuthentication(context)
             }
         }
     }
@@ -1009,24 +1109,94 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         guard let current = try await credentials.session() else {
             throw APIError(status: 401, code: "AUTH_REQUIRED", message: "请重新登录。", retryable: false)
         }
+        return try await refresh(
+            expectedSessionID: current.sessionId,
+            expectedUserID: current.user.id
+        )
+    }
+
+    private func refresh(expectedSessionID: UUID, expectedUserID: UUID) async throws -> UserSession {
+        guard let current = try await credentials.session(),
+              current.sessionId == expectedSessionID,
+              current.user.id == expectedUserID else { throw CancellationError() }
         if let refreshFlight, refreshFlight.sessionID == current.sessionId {
             return try await refreshFlight.task.value
         }
-        let task = Task { [credentials, environment, session, encoder, decoder] in
+        let task = Task {
+            [
+                credentials,
+                environment,
+                session,
+                encoder,
+                decoder,
+                serverTimeAuthority,
+                authenticationExpirationBoundary,
+            ] in
             var request = URLRequest(url: environment.baseURL.appending(path: "auth/refresh"))
             request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try encoder.encode(["refreshToken": current.refreshToken, "deviceId": DeviceIdentity.current.uuidString.lowercased()])
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                _ = try await credentials.clear(expectedSessionID: current.sessionId)
-                throw APIError(status: 401, code: "TOKEN_EXPIRED", message: "登录已过期。", retryable: false)
+            var attempt = 0
+            while true {
+                do {
+                    let (data, response) = try await session.data(for: request)
+                    guard let http = response as? HTTPURLResponse else {
+                        throw URLError(.badServerResponse)
+                    }
+                    serverTimeAuthority.calibrate(
+                        httpDate: http.value(forHTTPHeaderField: "Date")
+                    )
+                    if (http.statusCode == 429 || http.statusCode >= 500), attempt < 2 {
+                        let retryAfter = http.value(forHTTPHeaderField: "Retry-After")
+                            .flatMap(Double.init)
+                        let fallback = 0.25 * Double(1 << attempt)
+                        attempt += 1
+                        try await Task.sleep(
+                            for: .seconds(min(max(retryAfter ?? fallback, 0), 5))
+                        )
+                        continue
+                    }
+                    guard (200..<300).contains(http.statusCode) else {
+                        let problem = try? decoder.decode(APIProblem.self, from: data)
+                        let apiError = APIError(
+                            status: http.statusCode,
+                            code: problem?.error.code ?? "HTTP_\(http.statusCode)",
+                            message: problem?.error.message ?? "请求暂时无法完成。",
+                            retryable: problem?.error.retryable
+                                ?? (http.statusCode == 429 || http.statusCode >= 500),
+                            fieldErrors: problem?.error.fieldErrors?.map {
+                                APIFieldError(field: $0.field, message: $0.message)
+                            } ?? []
+                        )
+                        if http.statusCode == 401 {
+                            guard try await credentials.clear(
+                                expectedSessionID: current.sessionId
+                            ) else { throw CancellationError() }
+                            await authenticationExpirationBoundary.expire(
+                                sessionID: current.sessionId
+                            )
+                        }
+                        throw apiError
+                    }
+                    let updated = try decoder.decode(UserSession.self, from: data)
+                    guard updated.user.id == current.user.id else { throw CancellationError() }
+                    guard try await credentials.replace(
+                        session: updated,
+                        expectedSessionID: current.sessionId
+                    ) else { throw CancellationError() }
+                    return updated
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch let error as APIError {
+                    throw error
+                } catch let error as URLError where attempt < 2 {
+                    guard error.code != .cancelled else { throw CancellationError() }
+                    let fallback = 0.25 * Double(1 << attempt)
+                    attempt += 1
+                    try await Task.sleep(for: .seconds(fallback))
+                } catch {
+                    throw error
+                }
             }
-            let updated = try decoder.decode(UserSession.self, from: data)
-            guard try await credentials.replace(
-                session: updated,
-                expectedSessionID: current.sessionId
-            ) else { throw CancellationError() }
-            return updated
         }
         refreshFlight = .init(sessionID: current.sessionId, task: task)
         defer {
@@ -1035,6 +1205,15 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
             }
         }
         return try await task.value
+    }
+
+    private func ensureActiveAuthentication(
+        _ context: AuthenticatedRequestContext?
+    ) async throws {
+        guard let context else { return }
+        let active = try await credentials.session()
+        guard active?.user.id == context.userID,
+              active?.sessionId == context.sessionID else { throw CancellationError() }
     }
 
     private func decodeError(data: Data, status: Int) -> APIError {

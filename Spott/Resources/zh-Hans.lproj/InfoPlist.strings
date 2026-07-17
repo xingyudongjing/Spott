@@ -1,0 +1,4 @@
+"NSCalendarsWriteOnlyAccessUsageDescription" = "用于把你选择的活动添加到系统日历；Spott 无法读取或修改其他日程。";
+"NSCameraUsageDescription" = "仅在你扫描活动现场签到二维码时使用相机。";
+"NSLocationWhenInUseUsageDescription" = "用于展示附近活动和地图距离；你也可以手动选择地区。";
+"NSPhotoLibraryUsageDescription" = "用于选择活动封面和社区内容图片。";

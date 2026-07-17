@@ -56,14 +56,14 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>用于将你确认参加的活动添加到系统日历。</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>Spott adds events you choose to your calendar and cannot read your other events.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>用于扫描活动签到二维码；相机仅在扫码页面开启。</string>
+	<string>Spott uses the camera only while you scan an on-site event check-in code.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>用于展示附近活动与地图距离，你也可以手动选择地区。</string>
+	<string>Spott uses your location to show nearby events and map distance. You can also choose a region manually.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>用于选择活动封面与社区内容图片。</string>
+	<string>Spott lets you choose photos for event covers and community posts.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

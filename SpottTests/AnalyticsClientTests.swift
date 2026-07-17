@@ -173,6 +173,137 @@ struct AnalyticsClientTests {
         #expect(Set(submission.properties.keys) == Set(["eventId", "status", "category", "posterEnabled"]))
     }
 
+    @Test @MainActor func bootstrapAttributesDiscoveryOnlyAfterAResponseIsApplied() async throws {
+        let recorder = AnalyticsRequestRecorder()
+        let model = makeAttributionModel(
+            discoveryService: AttributionDiscoveryService(outcomes: [
+                .success(Array(EventSummary.samples.prefix(2))),
+            ]),
+            discoveryCache: AttributionDiscoveryCache(),
+            recorder: recorder
+        )
+
+        await model.bootstrap()
+
+        let request = try #require(await waitForRequest(recorder))
+        let event = try eventObject(from: request)
+        let properties = try #require(event["properties"] as? [String: Any])
+        #expect(properties["region"] as? String == "tokyo")
+        #expect(properties["itemCount"] as? Int == 2)
+        #expect(properties["reason"] as? String == "initial")
+    }
+
+    @Test @MainActor func bootstrapDoesNotAttributeAFailedDiscoveryRequest() async throws {
+        let recorder = AnalyticsRequestRecorder()
+        let model = makeAttributionModel(
+            discoveryService: AttributionDiscoveryService(outcomes: [.offline]),
+            discoveryCache: AttributionDiscoveryCache(),
+            recorder: recorder
+        )
+
+        await model.bootstrap()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(await recorder.count == 0)
+        #expect(model.discovery.phase == .error)
+    }
+
+    @Test @MainActor func bootstrapDoesNotAttributeOfflineCacheAsANetworkSuccess() async throws {
+        let recorder = AnalyticsRequestRecorder()
+        let cached = Array(EventSummary.samples.prefix(1))
+        let model = makeAttributionModel(
+            discoveryService: AttributionDiscoveryService(outcomes: [.offline]),
+            discoveryCache: AttributionDiscoveryCache(events: cached),
+            recorder: recorder
+        )
+
+        await model.bootstrap()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(await recorder.count == 0)
+        #expect(model.discovery.items.count == 1)
+        #expect(model.discovery.phase == .offline)
+    }
+
+    @Test @MainActor func manualRefreshAttributesOnlyTheSuccessfulAppliedResponse() async throws {
+        let recorder = AnalyticsRequestRecorder()
+        let service = AttributionDiscoveryService(outcomes: [
+            .success(Array(EventSummary.samples.prefix(1))),
+            .success(Array(EventSummary.samples.prefix(3))),
+        ])
+        let model = makeAttributionModel(
+            discoveryService: service,
+            discoveryCache: AttributionDiscoveryCache(),
+            recorder: recorder
+        )
+        _ = await model.discovery.loadInitial()
+
+        await model.refresh(reason: .manual)
+
+        let request = try #require(await waitForRequest(recorder))
+        let event = try eventObject(from: request)
+        let properties = try #require(event["properties"] as? [String: Any])
+        #expect(properties["itemCount"] as? Int == Array(EventSummary.samples.prefix(3)).count)
+        #expect(properties["reason"] as? String == "manual")
+    }
+
+    @Test @MainActor func manualRefreshDoesNotAttributeFailureOrShowFalseSuccess() async throws {
+        let recorder = AnalyticsRequestRecorder()
+        let service = AttributionDiscoveryService(outcomes: [
+            .success(Array(EventSummary.samples.prefix(1))),
+            .offline,
+        ])
+        let model = makeAttributionModel(
+            discoveryService: service,
+            discoveryCache: AttributionDiscoveryCache(),
+            recorder: recorder
+        )
+        _ = await model.discovery.loadInitial()
+
+        let refresh = Task { await model.refresh(reason: .manual) }
+        for _ in 0..<50 where model.discovery.refreshError == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(await recorder.count == 0)
+        #expect(model.banner?.tone == .warning)
+        refresh.cancel()
+        await refresh.value
+    }
+
+    @MainActor
+    private func makeAttributionModel(
+        discoveryService: any DiscoveryServing,
+        discoveryCache: any DiscoveryCaching,
+        recorder: AnalyticsRequestRecorder
+    ) -> AppModel {
+        let persistence = PersistenceStore.makeInMemory()
+        let vault = CredentialVault(service: "jp.spott.analytics-tests.\(UUID().uuidString)")
+        let api = SpottAPIClient(
+            environment: APIEnvironment(baseURL: URL(string: "https://api.spott.test/v1")!),
+            credentials: vault
+        )
+        let analytics = makeClient(defaults: makeDefaults(consent: true), recorder: recorder)
+        return AppModel(
+            api: api,
+            analytics: analytics,
+            persistence: discoveryCache,
+            sync: SyncEngine(api: api, persistence: persistence),
+            router: AppRouter(),
+            sessionRestorer: AttributionSessionRestorer(),
+            syncPuller: AttributionSyncPuller(),
+            discovery: DiscoveryStore(service: discoveryService, cache: discoveryCache)
+        )
+    }
+
+    private func waitForRequest(_ recorder: AnalyticsRequestRecorder) async -> URLRequest? {
+        for _ in 0..<50 {
+            if let request = await recorder.firstRequest() { return request }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return await recorder.firstRequest()
+    }
+
     private func makeClient(
         defaults: UserDefaults,
         recorder: AnalyticsRequestRecorder
@@ -226,4 +357,56 @@ private actor AnalyticsRequestRecorder {
 
 private enum AnalyticsTransportFailure: Error {
     case offline
+}
+
+private actor AttributionSessionRestorer: SessionRestoring {
+    func currentSession() async throws -> UserSession? { nil }
+}
+
+private actor AttributionSyncPuller: SyncPulling {
+    func pull(reason: SyncReason) async throws -> SyncResult {
+        _ = reason
+        return SyncResult(applied: 0, nextCursor: 0, hasMore: false)
+    }
+}
+
+private actor AttributionDiscoveryService: DiscoveryServing {
+    enum Outcome: Sendable {
+        case success([EventSummary])
+        case offline
+    }
+
+    private var outcomes: [Outcome]
+
+    init(outcomes: [Outcome]) {
+        self.outcomes = outcomes
+    }
+
+    func discovery(_ query: EventDiscoveryQuery) async throws -> DiscoveryPage {
+        _ = query
+        let outcome = outcomes.isEmpty ? .offline : outcomes.removeFirst()
+        switch outcome {
+        case .success(let events):
+            return DiscoveryPage(
+                items: events,
+                nextCursor: nil,
+                hasMore: false,
+                serverTime: Date(timeIntervalSince1970: 1_773_792_000),
+                queryExplanationId: "analytics-attribution-test"
+            )
+        case .offline:
+            throw URLError(.notConnectedToInternet)
+        }
+    }
+}
+
+private actor AttributionDiscoveryCache: DiscoveryCaching {
+    private var events: [EventSummary]
+
+    init(events: [EventSummary] = []) {
+        self.events = events
+    }
+
+    func cachedEvents() async throws -> [EventSummary] { events }
+    func replaceEvents(_ events: [EventSummary]) async throws { self.events = events }
 }

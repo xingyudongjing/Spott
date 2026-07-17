@@ -56,12 +56,95 @@ final class SpottAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificatio
     }
 }
 
-actor CalendarIntegration {
+enum CalendarIntegrationError: Error, Equatable, Sendable {
+    case permissionDenied
+    case authorizationFailed
+    case writeFailed
+
+    func localizedMessage(locale: Locale) -> String {
+        switch self {
+        case .permissionDenied:
+            CoreJourneyLocalization.text(
+                "journey.calendar.permission_denied",
+                locale: locale
+            )
+        case .authorizationFailed:
+            CoreJourneyLocalization.text(
+                "journey.calendar.authorization_failed",
+                locale: locale
+            )
+        case .writeFailed:
+            CoreJourneyLocalization.text(
+                "journey.calendar.write_failed",
+                locale: locale
+            )
+        }
+    }
+}
+
+struct CalendarEventDraft: Equatable, Sendable {
+    let title: String
+    let start: Date
+    let end: Date
+    let notes: String
+}
+
+protocol CalendarEventWriting: Sendable {
+    func requestWriteOnlyAccess() async throws -> Bool
+    func save(_ draft: CalendarEventDraft) async throws
+}
+
+private actor EventKitCalendarEventWriter: CalendarEventWriting {
     private let store = EKEventStore()
-    func add(title: String, start: Date, end: Date, notes: String) async throws {
-        guard try await store.requestFullAccessToEvents() else { return }
-        let event = EKEvent(eventStore: store); event.title = title; event.startDate = start; event.endDate = end; event.notes = notes; event.calendar = store.defaultCalendarForNewEvents
+
+    func requestWriteOnlyAccess() async throws -> Bool {
+        try await store.requestWriteOnlyAccessToEvents()
+    }
+
+    func save(_ draft: CalendarEventDraft) async throws {
+        guard let calendar = store.defaultCalendarForNewEvents else {
+            throw CalendarIntegrationError.writeFailed
+        }
+        let event = EKEvent(eventStore: store)
+        event.title = draft.title
+        event.startDate = draft.start
+        event.endDate = draft.end
+        event.notes = draft.notes
+        event.calendar = calendar
         try store.save(event, span: .thisEvent)
+    }
+}
+
+actor CalendarIntegration {
+    private let writer: any CalendarEventWriting
+
+    init(writer: any CalendarEventWriting = EventKitCalendarEventWriter()) {
+        self.writer = writer
+    }
+
+    func add(title: String, start: Date, end: Date, notes: String) async throws {
+        let granted: Bool
+        do {
+            granted = try await writer.requestWriteOnlyAccess()
+        } catch {
+            throw CalendarIntegrationError.authorizationFailed
+        }
+        guard granted else {
+            throw CalendarIntegrationError.permissionDenied
+        }
+
+        do {
+            try await writer.save(
+                CalendarEventDraft(
+                    title: title,
+                    start: start,
+                    end: end,
+                    notes: notes
+                )
+            )
+        } catch {
+            throw CalendarIntegrationError.writeFailed
+        }
     }
 }
 

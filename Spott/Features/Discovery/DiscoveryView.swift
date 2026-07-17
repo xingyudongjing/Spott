@@ -133,9 +133,7 @@ struct DiscoveryView: View {
     }
 
     private func selectRegion(_ value: String) {
-        guard store.region != value else { return }
-        store.region = value
-        store.filtersDidChange()
+        store.selectRegion(value)
     }
 
     private func openNotifications() {

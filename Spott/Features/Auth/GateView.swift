@@ -27,13 +27,18 @@ struct GateView: View {
 private struct LoginView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focusedField: Field?
     @State private var email = ""
     @State private var code = ""
     @State private var challenge: EmailChallenge?
+    @State private var challengeTarget = AuthenticationChallengeTarget()
     @State private var currentAppleNonce: String?
     @State private var busy = false
     @State private var error: UserFacingError?
+    @State private var operationAuthority = AuthenticationGateOperationAuthority()
+    @State private var authenticationTask: Task<Void, Never>?
+    @State private var gateIsActive = true
 
     private enum Field { case email, code }
 
@@ -69,10 +74,17 @@ private struct LoginView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("关闭") {
+                        gateIsActive = false
+                        cancelPendingOperation()
                         model.cancelPresentedGate()
                         dismiss()
                     }
                 }
+            }
+            .onAppear { gateIsActive = true }
+            .onDisappear {
+                gateIsActive = false
+                cancelPendingOperation()
             }
         }
     }
@@ -149,16 +161,43 @@ private struct LoginView: View {
 
     private var emailSignIn: some View {
         VStack(alignment: .leading, spacing: 13) {
-            field(icon: "envelope", placeholder: "you@example.jp", text: $email, field: .email)
+            field(
+                icon: "envelope",
+                placeholder: "you@example.jp",
+                text: $email,
+                field: .email,
+                disabled: challenge != nil
+            )
                 .textContentType(.emailAddress)
                 .keyboardType(.emailAddress)
                 .textInputAutocapitalization(.never)
+
+            if let lockedEmail = challengeTarget.lockedValue {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("验证码已发送至")
+                            .font(.caption)
+                            .foregroundStyle(SpottColor.muted)
+                        Text(lockedEmail)
+                            .font(.subheadline.weight(.semibold))
+                            .textSelection(.enabled)
+                    }
+                    Spacer()
+                    Button("更换邮箱", action: changeEmail)
+                        .font(.caption.weight(.semibold))
+                        .disabled(busy)
+                }
+            }
 
             if challenge != nil {
                 field(icon: "number", placeholder: "6 位验证码", text: $code, field: .code)
                     .keyboardType(.numberPad)
                     .textContentType(.oneTimeCode)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .transition(
+                        reduceMotion
+                            ? .opacity
+                            : .move(edge: .top).combined(with: .opacity)
+                    )
             }
 
             Button(action: authenticateByEmail) {
@@ -167,7 +206,7 @@ private struct LoginView: View {
                     Text(emailActionTitle)
                 }
             }
-            .buttonStyle(PrimaryButtonStyle())
+            .spottProminentActionStyle()
             .disabled(busy || !emailIsValid || (challenge != nil && code.count != 6))
 
 #if DEBUG
@@ -188,14 +227,15 @@ private struct LoginView: View {
                     .accessibilityIdentifier("auth.error.\(error.id)")
             }
         }
-        .animation(.snappy, value: challenge != nil)
+        .animation(reduceMotion ? nil : .snappy, value: challenge != nil)
     }
 
     private func field(
         icon: String,
         placeholder: LocalizedStringKey,
         text: Binding<String>,
-        field: Field
+        field: Field,
+        disabled: Bool = false
     ) -> some View {
         HStack(spacing: 11) {
             Image(systemName: icon)
@@ -205,6 +245,7 @@ private struct LoginView: View {
             TextField(placeholder, text: text)
                 .font(.system(size: 15, weight: .medium, design: .rounded))
                 .focused($focusedField, equals: field)
+                .disabled(disabled)
         }
         .padding(.horizontal, 16)
         .frame(height: 52)
@@ -241,6 +282,7 @@ private struct LoginView: View {
     }
 
     private func finishAppleSignIn(_ result: Result<ASAuthorization, Error>) {
+        guard gateIsActive else { return }
         switch result {
         case .success(let authorization):
             guard
@@ -253,17 +295,21 @@ private struct LoginView: View {
                 return
             }
 
-            busy = true
-            Task { @MainActor in
-                defer { busy = false; currentAppleNonce = nil }
+            beginAuthenticationOperation { generation in
                 do {
                     let session = try await model.api.authenticateApple(
                         identityToken: identityToken,
                         nonce: nonce,
                         deviceID: DeviceIdentity.current
                     )
+                    guard operationIsCurrent(generation) else { return }
+                    currentAppleNonce = nil
                     model.didAuthenticate(session)
+                } catch is CancellationError {
+                    return
                 } catch {
+                    guard operationIsCurrent(generation) else { return }
+                    currentAppleNonce = nil
                     self.error = AppModel.map(error)
                 }
             }
@@ -278,24 +324,28 @@ private struct LoginView: View {
 
     private func authenticateByEmail() {
         focusedField = nil
-        busy = true
         error = nil
-        Task { @MainActor in
-            defer { busy = false }
+        let requestedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expectedChallenge = challenge
+        guard challengeTarget.accepts(requestedEmail) else { return }
+        beginAuthenticationOperation { generation in
             do {
-                if let challenge {
+                if let expectedChallenge {
                     let session = try await model.api.verifyEmail(
-                        challengeID: challenge.challengeId,
+                        challengeID: expectedChallenge.challengeId,
                         code: code,
                         deviceID: DeviceIdentity.current
                     )
+                    guard operationIsCurrent(generation) else { return }
                     model.didAuthenticate(session)
                 } else {
                     let response = try await model.api.requestEmailCode(
-                        email: email.trimmingCharacters(in: .whitespacesAndNewlines),
+                        email: requestedEmail,
                         deviceID: DeviceIdentity.current
                     )
+                    guard operationIsCurrent(generation) else { return }
                     challenge = response
+                    challengeTarget.lock(requestedEmail)
 #if DEBUG
                     if let developmentCode = response.developmentCode {
                         code = developmentCode
@@ -303,46 +353,97 @@ private struct LoginView: View {
 #endif
                     focusedField = .code
                 }
+            } catch is CancellationError {
+                return
             } catch {
+                guard operationIsCurrent(generation) else { return }
                 self.error = AppModel.map(error)
             }
         }
     }
 
     private func authenticateByGoogle() {
-        busy = true
         error = nil
-        Task { @MainActor in
-            defer { busy = false }
+        beginAuthenticationOperation { generation in
             do {
                 let idToken = try await GoogleSignInManager.shared.signIn()
+                guard operationIsCurrent(generation) else { return }
                 let session = try await model.api.authenticateGoogle(
                     idToken: idToken,
                     deviceID: DeviceIdentity.current
                 )
+                guard operationIsCurrent(generation) else { return }
                 model.didAuthenticate(session)
             } catch GoogleSignInManager.SignInError.cancelled {
                 return
             } catch GoogleSignInManager.SignInError.notConfigured {
+                guard operationIsCurrent(generation) else { return }
                 self.error = .init(
                     id: "GOOGLE_AUTH_NOT_CONFIGURED",
                     message: "Google 登录尚未配置发布凭证，请使用 Apple 或邮箱继续。",
                     retryable: false
                 )
+            } catch is CancellationError {
+                return
             } catch {
+                guard operationIsCurrent(generation) else { return }
                 self.error = AppModel.map(error)
             }
         }
+    }
+
+    private func changeEmail() {
+        cancelPendingOperation()
+        challenge = nil
+        challengeTarget.reset()
+        code = ""
+        error = nil
+        focusedField = .email
+    }
+
+    private func beginAuthenticationOperation(
+        _ operation: @escaping @MainActor (Int) async -> Void
+    ) {
+        guard gateIsActive else { return }
+        authenticationTask?.cancel()
+        let generation = operationAuthority.begin()
+        busy = true
+        authenticationTask = Task { @MainActor in
+            await operation(generation)
+            guard operationIsCurrent(generation) else { return }
+            busy = false
+            authenticationTask = nil
+        }
+    }
+
+    private func operationIsCurrent(_ generation: Int) -> Bool {
+        operationAuthority.isCurrent(generation) && !Task.isCancelled
+    }
+
+    private func cancelPendingOperation() {
+        operationAuthority.cancel()
+        authenticationTask?.cancel()
+        authenticationTask = nil
+        currentAppleNonce = nil
+        busy = false
     }
 }
 
 private struct PhoneVerificationView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var focusedField: Field?
     @State private var phone = "+81"
     @State private var code = ""
     @State private var challenge: PhoneChallenge?
+    @State private var challengeTarget = AuthenticationChallengeTarget()
     @State private var busy = false
     @State private var error: UserFacingError?
+    @State private var operationAuthority = AuthenticationGateOperationAuthority()
+    @State private var verificationTask: Task<Void, Never>?
+    @State private var gateIsActive = true
+
+    private enum Field { case phone, code }
 
     var body: some View {
         NavigationStack {
@@ -365,14 +466,47 @@ private struct PhoneVerificationView: View {
                                 .lineSpacing(4)
                         }
 
-                        glassField(icon: "phone", placeholder: "+81 90 1234 5678", text: $phone)
+                        glassField(
+                            icon: "phone",
+                            placeholder: "+81 90 1234 5678",
+                            text: $phone,
+                            field: .phone,
+                            disabled: challenge != nil
+                        )
                             .keyboardType(.phonePad)
                             .textContentType(.telephoneNumber)
 
+                        if let lockedPhone = challengeTarget.lockedValue {
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("验证码已发送至")
+                                        .font(.caption)
+                                        .foregroundStyle(SpottColor.muted)
+                                    Text(lockedPhone)
+                                        .font(.subheadline.weight(.semibold))
+                                        .textSelection(.enabled)
+                                }
+                                Spacer()
+                                Button("更换手机号", action: changePhone)
+                                    .font(.caption.weight(.semibold))
+                                    .disabled(busy)
+                            }
+                        }
+
                         if challenge != nil {
-                            glassField(icon: "number", placeholder: "6 位验证码", text: $code)
+                            glassField(
+                                icon: "number",
+                                placeholder: "6 位验证码",
+                                text: $code,
+                                field: .code
+                            )
                                 .keyboardType(.numberPad)
                                 .textContentType(.oneTimeCode)
+                                .transition(
+                                    reduceMotion
+                                        ? .opacity
+                                        : .move(edge: .top).combined(with: .opacity)
+                                )
                         }
 
                         Button(action: verify) {
@@ -381,7 +515,7 @@ private struct PhoneVerificationView: View {
                                 Text(phoneActionTitle)
                             }
                         }
-                        .buttonStyle(PrimaryButtonStyle())
+                        .spottProminentActionStyle()
                         .disabled(busy || normalizedPhone.count < 11 || (challenge != nil && code.count != 6))
 
                         Label("首次验证奖励 500 免费积分", systemImage: "sparkles")
@@ -408,8 +542,18 @@ private struct PhoneVerificationView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { model.cancelPresentedGate() }
+                    Button("取消") {
+                        gateIsActive = false
+                        cancelPendingOperation()
+                        model.cancelPresentedGate()
+                    }
                 }
+            }
+            .animation(reduceMotion ? nil : .snappy, value: challenge != nil)
+            .onAppear { gateIsActive = true }
+            .onDisappear {
+                gateIsActive = false
+                cancelPendingOperation()
             }
         }
     }
@@ -417,7 +561,9 @@ private struct PhoneVerificationView: View {
     private func glassField(
         icon: String,
         placeholder: LocalizedStringKey,
-        text: Binding<String>
+        text: Binding<String>,
+        field: Field,
+        disabled: Bool = false
     ) -> some View {
         HStack(spacing: 11) {
             Image(systemName: icon)
@@ -425,6 +571,8 @@ private struct PhoneVerificationView: View {
                 .frame(width: 20)
             TextField(placeholder, text: text)
                 .font(.system(size: 15, weight: .medium, design: .rounded))
+                .focused($focusedField, equals: field)
+                .disabled(disabled)
         }
         .padding(.horizontal, 16)
         .frame(height: 54)
@@ -436,34 +584,82 @@ private struct PhoneVerificationView: View {
     }
 
     private func verify() {
-        busy = true
+        focusedField = nil
         error = nil
-        Task { @MainActor in
-            defer { busy = false }
+        let requestedPhone = normalizedPhone
+        let expectedChallenge = challenge
+        guard challengeTarget.accepts(requestedPhone) else { return }
+        beginVerificationOperation { generation in
             do {
-                if let challenge {
-                    _ = try await model.api.verifyPhone(challengeID: challenge.challengeId, code: code)
+                if let expectedChallenge {
+                    _ = try await model.api.verifyPhone(
+                        challengeID: expectedChallenge.challengeId,
+                        code: code
+                    )
+                    guard operationIsCurrent(generation) else { return }
                     if let session = try await model.api.currentSession() {
+                        guard operationIsCurrent(generation) else { return }
                         model.didAuthenticate(session)
                     } else {
                         model.markPhoneVerified()
                     }
                 } else {
                     let response = try await model.api.requestPhoneCode(
-                        phone: normalizedPhone,
+                        phone: requestedPhone,
                         deviceID: DeviceIdentity.current
                     )
+                    guard operationIsCurrent(generation) else { return }
                     challenge = response
+                    challengeTarget.lock(requestedPhone)
 #if DEBUG
                     if let developmentCode = response.developmentCode {
                         code = developmentCode
                     }
 #endif
+                    focusedField = .code
                 }
+            } catch is CancellationError {
+                return
             } catch {
+                guard operationIsCurrent(generation) else { return }
                 self.error = AppModel.map(error)
             }
         }
+    }
+
+    private func changePhone() {
+        cancelPendingOperation()
+        challenge = nil
+        challengeTarget.reset()
+        code = ""
+        error = nil
+        focusedField = .phone
+    }
+
+    private func beginVerificationOperation(
+        _ operation: @escaping @MainActor (Int) async -> Void
+    ) {
+        guard gateIsActive else { return }
+        verificationTask?.cancel()
+        let generation = operationAuthority.begin()
+        busy = true
+        verificationTask = Task { @MainActor in
+            await operation(generation)
+            guard operationIsCurrent(generation) else { return }
+            busy = false
+            verificationTask = nil
+        }
+    }
+
+    private func operationIsCurrent(_ generation: Int) -> Bool {
+        operationAuthority.isCurrent(generation) && !Task.isCancelled
+    }
+
+    private func cancelPendingOperation() {
+        operationAuthority.cancel()
+        verificationTask?.cancel()
+        verificationTask = nil
+        busy = false
     }
 
     private var normalizedPhone: String {
@@ -497,7 +693,7 @@ struct PermissionExplanationView: View {
                     .foregroundStyle(SpottColor.muted)
                     .lineSpacing(4)
                 Button(action: completion) { Text(action) }
-                    .buttonStyle(PrimaryButtonStyle())
+                    .spottProminentActionStyle()
                 Spacer()
             }
             .padding(28)

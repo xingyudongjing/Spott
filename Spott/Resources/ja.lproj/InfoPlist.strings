@@ -1,0 +1,4 @@
+"NSCalendarsWriteOnlyAccessUsageDescription" = "選択したイベントをカレンダーに追加します。ほかの予定を読み取ったり変更したりすることはありません。";
+"NSCameraUsageDescription" = "現地チェックイン用 QR コードを読み取る間だけカメラを使用します。";
+"NSLocationWhenInUseUsageDescription" = "近くのイベントと地図上の距離を表示するために位置情報を使用します。地域は手動でも選べます。";
+"NSPhotoLibraryUsageDescription" = "イベントのカバーやコミュニティ投稿に使う写真を選択できます。";

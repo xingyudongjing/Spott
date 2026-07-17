@@ -16,11 +16,24 @@ import { FieldCrypto } from '../../platform/crypto.js';
 import { IdempotencyService } from '../../platform/idempotency.js';
 import type { AuthenticatedUser } from '../../platform/request-context.js';
 import { PointsService } from '../points/points.service.js';
-import type { DiscoveryQuery, EventFormat, EventLocale } from './events.discovery-query.js';
-import { buildDiscoveryStatement } from './events.discovery-sql.js';
+import type { DiscoveryQuery, DiscoverySort, EventFormat, EventLocale } from './events.discovery-query.js';
+import {
+  buildDiscoveryStatement,
+  resolveDiscoverySort,
+  DEFAULT_DISCOVERY_TUNING,
+  type DiscoveryCursor,
+  type DiscoveryTuning,
+} from './events.discovery-sql.js';
+import { buildZeroResultSuggestions } from './events.discovery-suggestions.js';
 
-const discoveryCursorSchema = z.object({
+const timeCursorSchema = z.object({
   date: z.iso.datetime({ offset: true }),
+  id: z.uuid(),
+}).strict();
+
+const rankCursorSchema = z.object({
+  rank: z.string().min(1),
+  ref: z.iso.datetime({ offset: true }).optional(),
   id: z.uuid(),
 }).strict();
 
@@ -88,6 +101,7 @@ interface EventRow {
   version: string;
   created_at: Date;
   updated_at: Date;
+  sort_rank?: Date | string | number | null;
   format: EventFormat;
   primary_locale: EventLocale;
   supported_locales: EventLocale[];
@@ -165,18 +179,77 @@ export class EventsService {
     options: DiscoveryQuery,
   ): Promise<unknown> {
     const limit = Math.min(Math.max(options.limit ?? 20, 1), 100);
-    const cursor = this.decodeCursor(options.cursor);
-    const statement = buildDiscoveryStatement(viewer?.id ?? null, options, cursor);
+    const sort = resolveDiscoverySort(options);
+    const decoded = this.decodeCursor(options.cursor, sort);
+    // The recommendation freshness anchor must stay stable across paginated
+    // requests, so it travels inside the rank cursor once the first page is
+    // served and is regenerated only when a new search starts.
+    const referenceTime = decoded?.referenceTime ?? new Date();
+    const tuning = await this.discoveryTuning();
+    const statement = buildDiscoveryStatement(viewer?.id ?? null, options, decoded?.cursor ?? null, {
+      tuning,
+      referenceTime,
+    });
     const result = await this.database.query<EventRow>(statement.text, statement.values);
     const hasMore = result.rows.length > limit;
     const page = result.rows.slice(0, limit);
     const last = page.at(-1);
     return {
       items: page.map((row) => this.toView(row, viewer, false)),
-      nextCursor: hasMore && last?.starts_at ? this.encodeCursor(last.starts_at, last.id) : null,
+      nextCursor: hasMore && last ? this.encodeNextCursor(sort, last, referenceTime) : null,
       hasMore,
+      sort,
       serverTime: new Date().toISOString(),
       queryExplanationId: `q_${randomBytes(8).toString('hex')}`,
+      ...(page.length === 0 ? { suggestions: buildZeroResultSuggestions(options) } : {}),
+    };
+  }
+
+  /** Resolve explainable discovery tuning from admin.config_revisions. */
+  private async discoveryTuning(): Promise<DiscoveryTuning> {
+    const result = await this.database.query<{ key: string; value_json: unknown }>(
+      `SELECT DISTINCT ON (key) key, value_json
+       FROM admin.config_revisions
+       WHERE key = ANY($1::text[]) AND state = 'active'
+         AND (effective_from IS NULL OR effective_from <= clock_timestamp())
+         AND (effective_to IS NULL OR effective_to > clock_timestamp())
+       ORDER BY key, version DESC`,
+      [[
+        'discovery.capacity_scale.small_max',
+        'discovery.capacity_scale.large_min',
+        'discovery.distance.max_radius_km',
+        'discovery.search.trigram_threshold',
+        'discovery.recommend.weights',
+      ]],
+    );
+    const byKey = new Map(result.rows.map((row) => [row.key, row.value_json]));
+    const number = (key: string, fallback: number): number => {
+      const value = byKey.get(key);
+      return typeof value === 'number' || typeof value === 'string' ? Number(value) : fallback;
+    };
+    const weights = byKey.get('discovery.recommend.weights');
+    const weightValue = (name: keyof DiscoveryTuning['recommend']): number => {
+      if (weights && typeof weights === 'object' && name in (weights as Record<string, unknown>)) {
+        const raw = (weights as Record<string, unknown>)[name];
+        if (typeof raw === 'number') return raw;
+      }
+      return DEFAULT_DISCOVERY_TUNING.recommend[name];
+    };
+    return {
+      capacityScaleSmallMax: number('discovery.capacity_scale.small_max', DEFAULT_DISCOVERY_TUNING.capacityScaleSmallMax),
+      capacityScaleLargeMin: number('discovery.capacity_scale.large_min', DEFAULT_DISCOVERY_TUNING.capacityScaleLargeMin),
+      maxRadiusKm: number('discovery.distance.max_radius_km', DEFAULT_DISCOVERY_TUNING.maxRadiusKm),
+      trigramThreshold: number('discovery.search.trigram_threshold', DEFAULT_DISCOVERY_TUNING.trigramThreshold),
+      recommend: {
+        freshness: weightValue('freshness'),
+        availability: weightValue('availability'),
+        trust: weightValue('trust'),
+        follow: weightValue('follow'),
+        distance: weightValue('distance'),
+        relevance: weightValue('relevance'),
+        trustCap: weightValue('trustCap'),
+        freshnessHalfLifeDays: weightValue('freshnessHalfLifeDays'),
+      },
     };
   }
 
@@ -1074,18 +1147,46 @@ export class EventsService {
     );
   }
 
-  private encodeCursor(date: Date, id: string): string {
-    return Buffer.from(JSON.stringify({ date: date.toISOString(), id })).toString('base64url');
+  private encodeNextCursor(sort: DiscoverySort, row: EventRow, referenceTime: Date): string | null {
+    if (sort === 'time') {
+      return row.starts_at
+        ? Buffer.from(JSON.stringify({ date: row.starts_at.toISOString(), id: row.id })).toString('base64url')
+        : null;
+    }
+    const rank = this.serializeRank(row.sort_rank);
+    if (rank === null) return null;
+    return Buffer.from(JSON.stringify({
+      rank,
+      ref: referenceTime.toISOString(),
+      id: row.id,
+    })).toString('base64url');
   }
 
-  private decodeCursor(cursor?: string): { date: string; id: string } | null {
+  private serializeRank(value: EventRow['sort_rank']): string | null {
+    if (value === null || value === undefined) return null;
+    if (value instanceof Date) return value.toISOString();
+    return String(value);
+  }
+
+  private decodeCursor(
+    cursor: string | undefined,
+    sort: DiscoverySort,
+  ): { cursor: DiscoveryCursor; referenceTime?: Date } | null {
     if (!cursor) return null;
     try {
       const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown;
-      const candidate = discoveryCursorSchema.parse(parsed);
-      const canonicalDate = new Date(candidate.date).toISOString();
-      if (candidate.date !== canonicalDate) throw new Error('invalid');
-      return { date: canonicalDate, id: candidate.id };
+      if (sort === 'time') {
+        const candidate = timeCursorSchema.parse(parsed);
+        const canonicalDate = new Date(candidate.date).toISOString();
+        if (candidate.date !== canonicalDate) throw new Error('invalid');
+        return { cursor: { date: canonicalDate, id: candidate.id } };
+      }
+      const candidate = rankCursorSchema.parse(parsed);
+      const referenceTime = candidate.ref ? new Date(candidate.ref) : undefined;
+      return {
+        cursor: { rank: candidate.rank, id: candidate.id },
+        ...(referenceTime ? { referenceTime } : {}),
+      };
     } catch {
       throw new DomainError('CURSOR_INVALID', '分页游标无效。', 400);
     }

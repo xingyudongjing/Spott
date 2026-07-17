@@ -67,6 +67,53 @@ describe('parseDiscoveryQuery', () => {
   it.each(['0', '101', '1.5', 'not-a-number'])('rejects invalid limit %s', (limit) => {
     expect(() => parseDiscoveryQuery({ limit })).toThrow();
   });
+
+  it('parses the D3 distance, capacity-scale, city, certified and sort filters', () => {
+    const parsed = parseDiscoveryQuery({
+      q: 'coffee',
+      near: '35.6812,139.7671',
+      radiusKm: '5',
+      capacityScale: 'small',
+      city: '渋谷区',
+      certified: 'true',
+      sort: 'almost_full',
+    });
+
+    expect(parsed.near).toEqual({ lat: 35.6812, lng: 139.7671 });
+    expect(parsed.radiusKm).toBe(5);
+    expect(parsed.capacityScale).toBe('small');
+    expect(parsed.city).toBe('渋谷区');
+    expect(parsed.certifiedOnly).toBe(true);
+    expect(parsed.sort).toBe('almost_full');
+  });
+
+  it.each([
+    'recommended', 'distance', 'time', 'newest', 'almost_full',
+  ] as const)('accepts sort mode %s', (sort) => {
+    expect(parseDiscoveryQuery({ sort }).sort).toBe(sort);
+  });
+
+  it('rejects an unknown sort mode', () => {
+    expect(() => parseDiscoveryQuery({ sort: 'popularity' })).toThrow();
+  });
+
+  it('rejects an unknown capacity scale', () => {
+    expect(() => parseDiscoveryQuery({ capacityScale: 'huge' })).toThrow();
+  });
+
+  it.each([
+    '91,139',       // lat out of range
+    '35.6,181',     // lng out of range
+    '35.6',         // missing lng
+    '35.6,,',       // empty
+    'a,b',          // non-numeric
+  ])('rejects invalid near coordinate %s', (near) => {
+    expect(() => parseDiscoveryQuery({ near })).toThrow();
+  });
+
+  it.each(['0', '-3', 'far'])('rejects invalid radiusKm %s', (radiusKm) => {
+    expect(() => parseDiscoveryQuery({ radiusKm })).toThrow();
+  });
 });
 
 describe('EventsController discovery query handling', () => {

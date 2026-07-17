@@ -136,6 +136,11 @@
       "sequence": 27,
       "filename": "0027_ticketing_shell.sql",
       "sha256": "a1424a0ccf9479023c6d9a4e8975ff0e94c0f456af9f4fd7e75e00c5a7d1fdc0"
+    },
+    {
+      "sequence": 28,
+      "filename": "0028_achievement_definitions.sql",
+      "sha256": "ab7a4279eaf7b46d5a0009bea98cfe0e0b597d317d7c07ea5747e0deb0b903b2"
     }
   ]
 }

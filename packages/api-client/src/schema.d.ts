@@ -753,6 +753,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/events/{id}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ResourceId"];
+            };
+            cookie?: never;
+        };
+        /** List visible controlled comments for an event */
+        get: operations["getEventComments"];
+        put?: never;
+        /** Add a controlled comment as an eligible participant or group member */
+        post: operations["createEventComment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/achievements": {
         parameters: {
             query?: never;
@@ -2885,6 +2905,24 @@ export interface components {
         Comment: {
             id: components["schemas"]["UUID"];
             announcementId: components["schemas"]["UUID"];
+            author: {
+                id: components["schemas"]["UUID"];
+                name: string;
+            };
+            body: string;
+            /** Format: uuid */
+            parentId?: string | null;
+            locale: components["schemas"]["Locale"];
+            /** Format: int64 */
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        EventComment: {
+            id: components["schemas"]["UUID"];
+            eventId: components["schemas"]["UUID"];
             author: {
                 id: components["schemas"]["UUID"];
                 name: string;
@@ -5083,6 +5121,68 @@ export interface operations {
                 content?: never;
             };
             403: components["responses"]["Error"];
+        };
+    };
+    getEventComments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ResourceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Comment list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        eventId: components["schemas"]["UUID"];
+                        /** @enum {string} */
+                        commentPermission: "disabled" | "participants" | "group_members";
+                        items: components["schemas"]["EventComment"][];
+                    };
+                };
+            };
+            404: components["responses"]["Error"];
+        };
+    };
+    createEventComment: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["ResourceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    body: string;
+                    parentId?: components["schemas"]["UUID"];
+                    locale?: components["schemas"]["Locale"];
+                };
+            };
+        };
+        responses: {
+            /** @description Comment */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventComment"];
+                };
+            };
+            403: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     getMyAchievements: {

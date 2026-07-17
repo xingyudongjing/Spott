@@ -121,6 +121,27 @@ export class EventsController {
     return this.events.get(id, request.user);
   }
 
+  @Public()
+  @Get('events/:id/comments')
+  comments(@Req() request: SpottRequest, @Param('id') id: string) {
+    return this.events.comments(id, request.user?.id);
+  }
+
+  @Post('events/:id/comments')
+  createComment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Headers('idempotency-key') key: string,
+    @Body() body: unknown,
+  ) {
+    const input = z.object({
+      body: z.string().trim().min(1).max(2000),
+      parentId: z.string().uuid().optional(),
+      locale: z.enum(['zh-Hans', 'ja', 'en']).default('zh-Hans'),
+    }).parse(body);
+    return this.events.createComment(user, id, this.requiredKey(key), input);
+  }
+
   @Get('me/hosted-events')
   hosted(@CurrentUser() user: AuthenticatedUser) {
     return this.events.hosted(user);

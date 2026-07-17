@@ -557,3 +557,209 @@ describe('EventsService event contract', () => {
     expect(formatOnlyUpdate?.[0]).not.toContain('locale_confirmed_at =');
   });
 });
+
+const commenter = {
+  id: '019b0000-0000-7000-8000-000000000055',
+  sessionId: 'session',
+  phoneVerified: true,
+  restrictions: [] as string[],
+  roles: ['member'],
+};
+
+function eventCommentRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: '019b0000-0000-7000-8400-000000000001',
+    target_id: '019b0000-0000-7000-8100-000000000001',
+    author_id: commenter.id,
+    author_name: '参加者',
+    body: '很期待这次活动，谢谢组织！',
+    parent_id: null,
+    source_language: 'zh-Hans',
+    version: '1',
+    created_at: new Date('2026-07-16T00:00:00.000Z'),
+    updated_at: new Date('2026-07-16T00:00:00.000Z'),
+    ...overrides,
+  };
+}
+
+function commentClient(handlers: (sql: string, values: readonly unknown[]) => unknown) {
+  const calls: Array<{ sql: string; values: readonly unknown[] }> = [];
+  const query = vi.fn(async (sql: string, values: readonly unknown[] = []) => {
+    calls.push({ sql, values });
+    const result = handlers(sql, values);
+    return result ?? { rows: [], rowCount: 0 };
+  });
+  return { client: { query }, calls };
+}
+
+function commentService(client: { query: ReturnType<typeof vi.fn> }, event: Record<string, unknown>) {
+  const database = {
+    transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) => work(client)),
+  };
+  const idempotency = {
+    requestHash: vi.fn().mockReturnValue(Buffer.alloc(32)),
+    claim: vi.fn().mockResolvedValue(null),
+    complete: vi.fn().mockResolvedValue(undefined),
+  };
+  const service = new EventsService(database as never, {} as never, idempotency as never, {} as never);
+  Object.assign(service, {
+    loadEvent: vi.fn().mockResolvedValue(event),
+    recordChange: vi.fn(),
+  });
+  return { service, idempotency };
+}
+
+describe('EventsService controlled event comments', () => {
+  it('persists a comment with target_type event when a confirmed participant comments', async () => {
+    const event = eventRow({
+      organizer_id: publisher.id,
+      comment_permission: 'participants',
+      registration_status: 'confirmed',
+    });
+    const { client, calls } = commentClient((sql) => {
+      if (sql.includes('INSERT INTO community.comments')) {
+        return { rows: [eventCommentRow()], rowCount: 1 };
+      }
+      if (sql.includes('identity.blocks')) return { rows: [], rowCount: 0 };
+      if (sql.includes('admin.config_revisions')) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 1 };
+    });
+    const { service } = commentService(client, event);
+
+    const created = await (service as unknown as {
+      createComment: (
+        actor: typeof commenter,
+        eventId: string,
+        key: string,
+        input: { body: string; parentId?: string; locale: 'zh-Hans' | 'ja' | 'en' },
+      ) => Promise<{ eventId: string; body: string }>;
+    }).createComment(commenter, event.id, '019b0000-0000-7000-9000-000000000010', {
+      body: '很期待这次活动，谢谢组织！',
+      locale: 'zh-Hans',
+    });
+
+    const insert = calls.find((call) => call.sql.includes('INSERT INTO community.comments'));
+    expect(insert?.sql).toContain("'event'");
+    expect(insert?.values).toEqual(expect.arrayContaining([event.id, commenter.id]));
+    expect(created).toMatchObject({ eventId: event.id, body: '很期待这次活动，谢谢组织！' });
+  });
+
+  it('rejects a comment when the organizer disabled the comment section', async () => {
+    const event = eventRow({ comment_permission: 'disabled', registration_status: 'confirmed' });
+    const { client } = commentClient(() => ({ rows: [], rowCount: 1 }));
+    const { service } = commentService(client, event);
+
+    await expect((service as unknown as {
+      createComment: (a: typeof commenter, id: string, k: string, i: unknown) => Promise<unknown>;
+    }).createComment(commenter, event.id, '019b0000-0000-7000-9000-000000000011', {
+      body: '你好',
+      locale: 'zh-Hans',
+    })).rejects.toMatchObject({ code: 'EVENT_COMMENTS_DISABLED', status: 422 });
+  });
+
+  it('refuses a stranger who is neither the organizer nor a confirmed participant', async () => {
+    const event = eventRow({
+      organizer_id: publisher.id,
+      comment_permission: 'participants',
+      registration_status: null,
+    });
+    const { client } = commentClient((sql) => {
+      if (sql.includes('identity.blocks')) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 1 };
+    });
+    const { service } = commentService(client, event);
+
+    await expect((service as unknown as {
+      createComment: (a: typeof commenter, id: string, k: string, i: unknown) => Promise<unknown>;
+    }).createComment(commenter, event.id, '019b0000-0000-7000-9000-000000000012', {
+      body: '让我进来评论',
+      locale: 'zh-Hans',
+    })).rejects.toMatchObject({ code: 'EVENT_COMMENT_FORBIDDEN', status: 403 });
+  });
+
+  it('only lets active members comment when permission is limited to the linked group', async () => {
+    const event = eventRow({
+      organizer_id: publisher.id,
+      comment_permission: 'group_members',
+      group_id: '019b0000-0000-7000-8300-000000000001',
+      registration_status: null,
+    });
+    const { client } = commentClient((sql) => {
+      if (sql.includes('identity.blocks')) return { rows: [], rowCount: 0 };
+      if (sql.includes('community.group_memberships')) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 1 };
+    });
+    const { service } = commentService(client, event);
+
+    await expect((service as unknown as {
+      createComment: (a: typeof commenter, id: string, k: string, i: unknown) => Promise<unknown>;
+    }).createComment(commenter, event.id, '019b0000-0000-7000-9000-000000000013', {
+      body: '群成员评论',
+      locale: 'zh-Hans',
+    })).rejects.toMatchObject({ code: 'EVENT_COMMENT_FORBIDDEN', status: 403 });
+  });
+
+  it('blocks offensive content using the configurable blocklist', async () => {
+    const event = eventRow({
+      organizer_id: publisher.id,
+      comment_permission: 'participants',
+      registration_status: 'checked_in',
+    });
+    const { client } = commentClient((sql) => {
+      if (sql.includes('identity.blocks')) return { rows: [], rowCount: 0 };
+      if (sql.includes('admin.config_revisions')) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 1 };
+    });
+    const { service } = commentService(client, event);
+
+    await expect((service as unknown as {
+      createComment: (a: typeof commenter, id: string, k: string, i: unknown) => Promise<unknown>;
+    }).createComment(commenter, event.id, '019b0000-0000-7000-9000-000000000014', {
+      body: '你这个傻逼组织者',
+      locale: 'zh-Hans',
+    })).rejects.toMatchObject({ code: 'COMMENT_CONTENT_BLOCKED', status: 422 });
+  });
+
+  it('rejects a comment from an account with the commentBlocked restriction', async () => {
+    const event = eventRow({
+      organizer_id: publisher.id,
+      comment_permission: 'participants',
+      registration_status: 'confirmed',
+    });
+    const { client } = commentClient(() => ({ rows: [], rowCount: 1 }));
+    const { service } = commentService(client, event);
+
+    await expect((service as unknown as {
+      createComment: (a: typeof commenter, id: string, k: string, i: unknown) => Promise<unknown>;
+    }).createComment(
+      { ...commenter, restrictions: ['commentBlocked'] },
+      event.id,
+      '019b0000-0000-7000-9000-000000000015',
+      { body: '被限制的评论', locale: 'zh-Hans' },
+    )).rejects.toMatchObject({ code: 'ACCOUNT_RESTRICTED', status: 403 });
+  });
+
+  it('lists only visible event comments for the event page', async () => {
+    const event = eventRow({ id: '019b0000-0000-7000-8100-000000000001' });
+    const release = vi.fn();
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('community.comments')) {
+        return { rows: [eventCommentRow()], rowCount: 1 };
+      }
+      return { rows: [event], rowCount: 1 };
+    });
+    const database = { pool: { connect: vi.fn().mockResolvedValue({ query, release }) } };
+    const service = new EventsService(database as never, {} as never, {} as never, {} as never);
+    Object.assign(service, { loadEvent: vi.fn().mockResolvedValue(event) });
+
+    const listed = await (service as unknown as {
+      comments: (eventId: string, viewerId?: string) => Promise<{ items: Array<{ eventId: string }> }>;
+    }).comments(event.id, commenter.id);
+
+    const commentQuery = query.mock.calls.find(([sql]) => sql.includes('community.comments'));
+    expect(commentQuery?.[0]).toContain("target_type = 'event'");
+    expect(commentQuery?.[0]).toContain("status = 'visible'");
+    expect(listed.items[0]).toMatchObject({ eventId: event.id });
+    expect(release).toHaveBeenCalledOnce();
+  });
+});

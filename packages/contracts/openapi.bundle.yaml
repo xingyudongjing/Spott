@@ -1413,6 +1413,76 @@ paths:
           description: Private feedback items
         '403':
           $ref: '#/components/responses/Error'
+  /events/{id}/comments:
+    parameters:
+      - $ref: '#/components/parameters/ResourceId'
+    get:
+      operationId: getEventComments
+      summary: List visible controlled comments for an event
+      tags:
+        - Events
+      security: []
+      responses:
+        '200':
+          description: Comment list
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - eventId
+                  - commentPermission
+                  - items
+                properties:
+                  eventId:
+                    $ref: '#/components/schemas/UUID'
+                  commentPermission:
+                    type: string
+                    enum:
+                      - disabled
+                      - participants
+                      - group_members
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EventComment'
+        '404':
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: createEventComment
+      summary: Add a controlled comment as an eligible participant or group member
+      tags:
+        - Events
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - body
+              properties:
+                body:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+                parentId:
+                  $ref: '#/components/schemas/UUID'
+                locale:
+                  $ref: '#/components/schemas/Locale'
+      responses:
+        '201':
+          description: Comment
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventComment'
+        '403':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /me/achievements:
     get:
       operationId: getMyAchievements
@@ -5999,6 +6069,50 @@ components:
         id:
           $ref: '#/components/schemas/UUID'
         announcementId:
+          $ref: '#/components/schemas/UUID'
+        author:
+          type: object
+          required:
+            - id
+            - name
+          properties:
+            id:
+              $ref: '#/components/schemas/UUID'
+            name:
+              type: string
+        body:
+          type: string
+        parentId:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        locale:
+          $ref: '#/components/schemas/Locale'
+        version:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    EventComment:
+      type: object
+      required:
+        - id
+        - eventId
+        - author
+        - body
+        - locale
+        - version
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          $ref: '#/components/schemas/UUID'
+        eventId:
           $ref: '#/components/schemas/UUID'
         author:
           type: object

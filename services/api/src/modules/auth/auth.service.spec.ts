@@ -49,6 +49,7 @@ function phoneVerificationHarness(initialBinding?: PhoneBindingState) {
   };
   let binding = initialBinding;
   let rewardCredited = Boolean(initialBinding);
+  let rewardGranted = Boolean(initialBinding);
   let freeBalance = initialBinding ? 600 : 100;
   const client = {
     query: vi.fn(async (sql: string) => {
@@ -75,6 +76,14 @@ function phoneVerificationHarness(initialBinding?: PhoneBindingState) {
         return { rows: [{ verified_at: challenge.verified_at }], rowCount: 1 };
       }
       if (sql.includes('UPDATE identity.users SET phone_verified_at')) {
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes('INSERT INTO commerce.phone_verification_reward_grants')) {
+        if (rewardGranted) return { rows: [], rowCount: 0 };
+        rewardGranted = true;
+        return { rows: [{ phone_hash: challenge.phone_hash }], rowCount: 1 };
+      }
+      if (sql.includes('UPDATE commerce.phone_verification_reward_grants')) {
         return { rows: [], rowCount: 1 };
       }
       if (sql.includes('INSERT INTO commerce.point_transactions')) {
@@ -1152,5 +1161,218 @@ describe('AuthService phone verification idempotency', () => {
     await expect(
       service.verifyPhoneChallenge(currentUserId, phoneChallengeId, '123456'),
     ).rejects.toMatchObject({ code: 'PHONE_ALREADY_BOUND', status: 409 });
+  });
+});
+
+interface RewardBindingRow {
+  id: string;
+  user_id: string;
+  phone_hash: Buffer;
+  verified_at: Date;
+  unbound_at: Date | null;
+}
+
+/**
+ * Models the reward-relevant database invariants that actually exist in the schema:
+ * - identity.phone_bindings: UNIQUE(phone_hash) WHERE unbound_at IS NULL
+ * - commerce.point_transactions: UNIQUE(user_id, business_key)
+ * so that any idempotency key the service picks is judged against the real constraints.
+ */
+function phoneRewardLedgerHarness() {
+  const bindings: RewardBindingRow[] = [];
+  const pointTransactions = new Map<string, string>();
+  const rewardGrants = new Map<string, { user_id: string; transaction_id: string | null }>();
+  const freeBalances = new Map<string, number>();
+  const challenges = new Map<
+    string,
+    { id: string; phone_hash: Buffer; phone_cipher: Buffer; verified_at: Date | null }
+  >();
+  const verifiedAt = new Date('2026-07-16T01:02:03.000Z');
+  let sequence = 0;
+  const nextId = (prefix: string): string => `${prefix}-${++sequence}`;
+
+  const client = {
+    query: vi.fn(async (sql: string, parameters: unknown[] = []) => {
+      if (sql.includes('FROM identity.phone_challenges')) {
+        const challenge = challenges.get(parameters[0] as string);
+        if (!challenge) throw new Error(`missing challenge ${String(parameters[0])}`);
+        return {
+          rows: [
+            {
+              ...challenge,
+              otp_hash: Buffer.alloc(32, 9),
+              attempts: 0,
+              expires_at: new Date('2099-07-16T01:12:03.000Z'),
+              suspended_until: null,
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes('INSERT INTO identity.phone_bindings')) {
+        const [userId, phoneHash, phoneCipher] = parameters as [string, Buffer, Buffer];
+        const active = bindings.find(
+          (row) => row.phone_hash.equals(phoneHash) && row.unbound_at === null,
+        );
+        if (active) return { rows: [], rowCount: 0 };
+        const row: RewardBindingRow = {
+          id: nextId('binding'),
+          user_id: userId,
+          phone_hash: phoneHash,
+          verified_at: verifiedAt,
+          unbound_at: null,
+        };
+        void phoneCipher;
+        bindings.push(row);
+        return {
+          rows: [{ id: row.id, user_id: row.user_id, verified_at: row.verified_at }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes('FROM identity.phone_bindings')) {
+        const phoneHash = parameters[0] as Buffer;
+        const active = bindings.find(
+          (row) => row.phone_hash.equals(phoneHash) && row.unbound_at === null,
+        );
+        return active
+          ? {
+              rows: [{ id: active.id, user_id: active.user_id, verified_at: active.verified_at }],
+              rowCount: 1,
+            }
+          : { rows: [], rowCount: 0 };
+      }
+      if (sql.includes('UPDATE identity.phone_challenges') && sql.includes('SET verified_at')) {
+        const challenge = challenges.get(parameters[0] as string);
+        if (!challenge) throw new Error('missing challenge');
+        challenge.verified_at ??= verifiedAt;
+        return { rows: [{ verified_at: challenge.verified_at }], rowCount: 1 };
+      }
+      if (sql.includes('UPDATE identity.users SET phone_verified_at')) {
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes('INSERT INTO commerce.phone_verification_reward_grants')) {
+        const [phoneHash, userId] = parameters as [Buffer, string];
+        const key = phoneHash.toString('hex');
+        if (rewardGrants.has(key)) return { rows: [], rowCount: 0 };
+        rewardGrants.set(key, { user_id: userId, transaction_id: null });
+        return { rows: [{ phone_hash: phoneHash }], rowCount: 1 };
+      }
+      if (sql.includes('DELETE FROM commerce.phone_verification_reward_grants')) {
+        const key = (parameters[0] as Buffer).toString('hex');
+        const grant = rewardGrants.get(key);
+        if (grant && grant.transaction_id === null) rewardGrants.delete(key);
+        return { rows: [], rowCount: grant ? 1 : 0 };
+      }
+      if (sql.includes('UPDATE commerce.phone_verification_reward_grants')) {
+        const [phoneHash, transactionId] = parameters as [Buffer, string];
+        const grant = rewardGrants.get(phoneHash.toString('hex'));
+        if (grant) grant.transaction_id = transactionId;
+        return { rows: [], rowCount: grant ? 1 : 0 };
+      }
+      if (sql.includes('INSERT INTO commerce.point_transactions')) {
+        const userId = parameters[0] as string;
+        const businessKey =
+          (parameters[1] as string | undefined) ??
+          /'phone_verified_reward',\s*'([^']+)'/u.exec(sql)?.[1] ??
+          'unparsed_business_key';
+        const uniqueKey = `${userId}|${businessKey}`;
+        if (pointTransactions.has(uniqueKey)) return { rows: [], rowCount: 0 };
+        const id = nextId('transaction');
+        pointTransactions.set(uniqueKey, id);
+        return { rows: [{ id }], rowCount: 1 };
+      }
+      if (sql.includes('FROM admin.config_revisions')) return { rows: [], rowCount: 0 };
+      if (sql.includes('FROM commerce.point_rule_catalog')) {
+        const configured =
+          parameters[0] === 'points.expiry.free_days' ? { configured_value: '180' } : { configured_value: '500' };
+        return { rows: [configured], rowCount: 1 };
+      }
+      if (sql.includes('INSERT INTO commerce.point_entries')) return { rows: [], rowCount: 2 };
+      if (sql.includes('UPDATE commerce.wallets SET free_balance')) {
+        const [userId, amount] = parameters as [string, string];
+        freeBalances.set(userId, (freeBalances.get(userId) ?? 0) + Number(amount));
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes('FROM commerce.wallets')) {
+        const userId = parameters[0] as string;
+        return {
+          rows: [
+            {
+              paid_balance: '0',
+              free_balance: String(freeBalances.get(userId) ?? 0),
+              version: '2',
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes('sync.record_change') || sql.includes('INSERT INTO sync.outbox_events')) {
+        return { rows: [], rowCount: 1 };
+      }
+      throw new Error(`Unexpected reward ledger query: ${sql}`);
+    }),
+  };
+  const database = {
+    transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) =>
+      work(client),
+    ),
+  };
+  const service = new AuthService(database as never, {} as never, {} as never, {} as never);
+  (service as unknown as { matchesCode: () => boolean }).matchesCode = () => true;
+
+  return {
+    service,
+    freeBalance: (userId: string): number => freeBalances.get(userId) ?? 0,
+    unbind: (phoneByte: number): void => {
+      for (const row of bindings) {
+        if (row.phone_hash[0] === phoneByte) row.unbound_at = new Date();
+      }
+    },
+    verify: async (userId: string, phoneByte: number): Promise<unknown> => {
+      const challengeId = `019b0000-0000-7000-8000-0000000000${(40 + phoneByte).toString(16).padStart(2, '0')}`;
+      challenges.set(challengeId, {
+        id: challengeId,
+        phone_hash: Buffer.alloc(32, phoneByte),
+        phone_cipher: Buffer.alloc(48, phoneByte),
+        verified_at: null,
+      });
+      return service.verifyPhoneChallenge(userId, challengeId, '123456');
+    },
+  };
+}
+
+describe('AuthService phone verification reward farming', () => {
+  it('pays the 500 point welcome reward at most once per account, however many numbers are bound', async () => {
+    const harness = phoneRewardLedgerHarness();
+
+    await harness.verify(currentUserId, 0x11);
+    expect(harness.freeBalance(currentUserId)).toBe(500);
+
+    await harness.verify(currentUserId, 0x22);
+    await harness.verify(currentUserId, 0x33);
+
+    expect(harness.freeBalance(currentUserId)).toBe(500);
+  });
+
+  it('pays the 500 point welcome reward at most once per phone number, across accounts', async () => {
+    const harness = phoneRewardLedgerHarness();
+
+    await harness.verify(currentUserId, 0x44);
+    expect(harness.freeBalance(currentUserId)).toBe(500);
+
+    harness.unbind(0x44);
+    await harness.verify(secondUserId, 0x44);
+
+    expect(harness.freeBalance(secondUserId)).toBe(0);
+  });
+
+  it('does not re-pay when the same account unbinds and re-binds the same number', async () => {
+    const harness = phoneRewardLedgerHarness();
+
+    await harness.verify(currentUserId, 0x55);
+    harness.unbind(0x55);
+    await harness.verify(currentUserId, 0x55);
+
+    expect(harness.freeBalance(currentUserId)).toBe(500);
   });
 });

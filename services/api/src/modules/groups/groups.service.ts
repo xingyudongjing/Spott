@@ -1,12 +1,28 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
-import { DomainError } from '@spott/domain';
+import { DomainError, findBannedTerm } from '@spott/domain';
 import type { PoolClient } from 'pg';
 import { configuration } from '../../config.js';
 import { Database } from '../../platform/database.js';
 import { IdempotencyService } from '../../platform/idempotency.js';
 import type { AuthenticatedUser } from '../../platform/request-context.js';
 import { PointsService } from '../points/points.service.js';
+
+/**
+ * Fallback offensive-term list used only when operators have not published a
+ * `community.discussion.banned_words` config revision. The live list is always
+ * read from admin.config_revisions first so the filter is backend-configurable
+ * without a deploy; this constant just keeps the filter from being a no-op on a
+ * fresh environment.
+ */
+const DEFAULT_DISCUSSION_BANNED_WORDS: readonly string[] = [
+  '傻逼',
+  '去死',
+  '滚蛋',
+  'fuck',
+  'idiot',
+  'asshole',
+];
 
 interface GroupRow {
   id: string;
@@ -65,6 +81,13 @@ interface CommentRow {
   version: string;
   created_at: Date;
   updated_at: Date;
+}
+
+interface DiscussionRow extends CommentRow {
+  status?: string;
+  like_count?: string;
+  viewer_liked?: boolean;
+  reply_count?: string;
 }
 
 @Injectable()
@@ -725,6 +748,312 @@ export class GroupsService {
       }
       return { announcementId, liked };
     });
+  }
+
+  // --- Group discussion board (controlled messaging) ---------------------------
+  //
+  // Members author top-level posts and threaded replies directly on the group.
+  // These reuse community.comments with target_type = 'group' (posts have
+  // parent_id NULL, replies point at their post). Every entry point below first
+  // loads the group and asserts the caller's membership, so a discussion thread
+  // is strictly bound to group membership — there is no way to open a message
+  // surface against an arbitrary user. That binding is the whole difference
+  // between this feature and open stranger DMs, which V1 deliberately omits.
+
+  async discussion(
+    groupId: string,
+    viewerId: string | undefined,
+    cursor?: string,
+    limit = 20,
+  ): Promise<unknown> {
+    const client = await this.database.pool.connect();
+    try {
+      const group = await this.load(client, groupId, viewerId, false);
+      this.assertDiscussionAudience(group);
+      const safeLimit = Math.min(Math.max(limit, 1), 100);
+      const date = this.decodeDateCursor(cursor);
+      const result = await client.query<DiscussionRow>(
+        `SELECT post.*, profile.nickname AS author_name,
+           (SELECT count(*) FROM community.comment_reactions reaction
+            WHERE reaction.comment_id = post.id)::text AS like_count,
+           EXISTS(SELECT 1 FROM community.comment_reactions reaction
+            WHERE reaction.comment_id = post.id AND reaction.user_id = $2) AS viewer_liked,
+           (SELECT count(*) FROM community.comments reply
+            WHERE reply.parent_id = post.id AND reply.status = 'visible'
+              AND reply.deleted_at IS NULL)::text AS reply_count
+         FROM community.comments post
+         LEFT JOIN identity.profiles profile ON profile.user_id = post.author_id
+         WHERE post.target_type = 'group' AND post.target_id = $1
+           AND post.parent_id IS NULL AND post.status = 'visible' AND post.deleted_at IS NULL
+           AND ($3::timestamptz IS NULL OR post.created_at < $3)
+         ORDER BY post.created_at DESC, post.id DESC
+         LIMIT $4`,
+        [group.id, viewerId ?? null, date?.toISOString() ?? null, safeLimit + 1],
+      );
+      const hasMore = result.rows.length > safeLimit;
+      const rows = result.rows.slice(0, safeLimit);
+      return {
+        items: rows.map((row) => this.discussionView(row)),
+        hasMore,
+        nextCursor: hasMore && rows.at(-1) ? this.encodeDateCursor(rows.at(-1)!.created_at) : null,
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  async discussionReplies(groupId: string, postId: string, viewerId: string | undefined): Promise<unknown> {
+    const client = await this.database.pool.connect();
+    try {
+      const group = await this.load(client, groupId, viewerId, false);
+      this.assertDiscussionAudience(group);
+      const result = await client.query<DiscussionRow>(
+        `SELECT reply.*, profile.nickname AS author_name,
+           (SELECT count(*) FROM community.comment_reactions reaction
+            WHERE reaction.comment_id = reply.id)::text AS like_count,
+           EXISTS(SELECT 1 FROM community.comment_reactions reaction
+            WHERE reaction.comment_id = reply.id AND reaction.user_id = $3) AS viewer_liked,
+           '0'::text AS reply_count
+         FROM community.comments reply
+         LEFT JOIN identity.profiles profile ON profile.user_id = reply.author_id
+         WHERE reply.parent_id = $1 AND reply.target_type = 'group' AND reply.target_id = $2
+           AND reply.status = 'visible' AND reply.deleted_at IS NULL
+         ORDER BY reply.created_at, reply.id`,
+        [postId, group.id, viewerId ?? null],
+      );
+      return { items: result.rows.map((row) => this.discussionView(row)) };
+    } finally {
+      client.release();
+    }
+  }
+
+  async createDiscussionPost(
+    actor: AuthenticatedUser,
+    groupId: string,
+    key: string,
+    input: { body: string; locale: 'zh-Hans' | 'ja' | 'en' },
+  ): Promise<unknown> {
+    return this.database.transaction(async (client) => {
+      const hash = this.idempotency.requestHash('POST', `/groups/${groupId}/discussion`, input);
+      const replay = await this.idempotency.claim<unknown>(client, actor.id, key, hash);
+      if (replay) return replay.body;
+      const group = await this.load(client, groupId, actor.id, false);
+      this.assertCanPost(actor, group);
+      await this.assertCleanContent(client, input.body);
+      await this.assertPostRate(client, group.id, actor.id);
+      const result = await client.query<DiscussionRow>(
+        `INSERT INTO community.comments(target_type, target_id, author_id, body, source_language)
+         VALUES ('group', $1, $2, $3, $4)
+         RETURNING *, NULL::text AS author_name, '0'::text AS like_count,
+           false AS viewer_liked, '0'::text AS reply_count`,
+        [group.id, actor.id, input.body, input.locale],
+      );
+      const row = result.rows[0]!;
+      await this.change(client, actor.id, group.id, Number(group.version), 'group.discussion.posted', {
+        postId: row.id,
+      });
+      const body = this.discussionView(row);
+      await this.idempotency.complete(client, actor.id, key, { status: 201, body }, {
+        type: 'comment', id: row.id,
+      });
+      return body;
+    });
+  }
+
+  async createDiscussionReply(
+    actor: AuthenticatedUser,
+    groupId: string,
+    postId: string,
+    key: string,
+    input: { body: string; locale: 'zh-Hans' | 'ja' | 'en' },
+  ): Promise<unknown> {
+    return this.database.transaction(async (client) => {
+      const hash = this.idempotency.requestHash(
+        'POST',
+        `/groups/${groupId}/discussion/${postId}/replies`,
+        input,
+      );
+      const replay = await this.idempotency.claim<unknown>(client, actor.id, key, hash);
+      if (replay) return replay.body;
+      const group = await this.load(client, groupId, actor.id, false);
+      this.assertCanPost(actor, group);
+      await this.assertCleanContent(client, input.body);
+      const parent = await client.query<{ parent_exists: boolean }>(
+        `SELECT EXISTS(
+           SELECT 1 FROM community.comments
+           WHERE id = $1 AND target_type = 'group' AND target_id = $2
+             AND parent_id IS NULL AND status = 'visible' AND deleted_at IS NULL
+         ) AS parent_exists`,
+        [postId, group.id],
+      );
+      if (!parent.rows[0]?.parent_exists) {
+        throw new DomainError('DISCUSSION_POST_NOT_FOUND', '要回复的帖子不存在或已删除。', 404);
+      }
+      await this.assertPostRate(client, group.id, actor.id);
+      const result = await client.query<DiscussionRow>(
+        `INSERT INTO community.comments(target_type, target_id, author_id, body, parent_id, source_language)
+         VALUES ('group', $1, $2, $3, $4, $5)
+         RETURNING *, NULL::text AS author_name, '0'::text AS like_count,
+           false AS viewer_liked, '0'::text AS reply_count`,
+        [group.id, actor.id, input.body, postId, input.locale],
+      );
+      const row = result.rows[0]!;
+      await this.change(client, actor.id, group.id, Number(group.version), 'group.discussion.replied', {
+        postId,
+        replyId: row.id,
+      });
+      const body = this.discussionView(row);
+      await this.idempotency.complete(client, actor.id, key, { status: 201, body }, {
+        type: 'comment', id: row.id,
+      });
+      return body;
+    });
+  }
+
+  async setDiscussionLike(
+    userId: string,
+    groupId: string,
+    commentId: string,
+    liked: boolean,
+  ): Promise<unknown> {
+    return this.database.transaction(async (client) => {
+      const group = await this.load(client, groupId, userId, false);
+      this.assertDiscussionAudience(group);
+      const target = await client.query(
+        `SELECT 1 FROM community.comments
+         WHERE id = $1 AND target_type = 'group' AND target_id = $2
+           AND status = 'visible' AND deleted_at IS NULL`,
+        [commentId, group.id],
+      );
+      if (!target.rowCount) {
+        throw new DomainError('DISCUSSION_POST_NOT_FOUND', '内容不存在或已删除。', 404);
+      }
+      if (liked) {
+        await client.query(
+          `INSERT INTO community.comment_reactions(comment_id, user_id)
+           VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+          [commentId, userId],
+        );
+      } else {
+        await client.query(
+          'DELETE FROM community.comment_reactions WHERE comment_id = $1 AND user_id = $2',
+          [commentId, userId],
+        );
+      }
+      return { commentId, liked };
+    });
+  }
+
+  async moderateDiscussionComment(
+    actor: AuthenticatedUser,
+    groupId: string,
+    commentId: string,
+    input: { status: 'visible' | 'hidden' | 'removed' },
+  ): Promise<unknown> {
+    return this.database.transaction(async (client) => {
+      const group = await this.load(client, groupId, actor.id, true);
+      await this.assertManager(client, group.id, actor.id);
+      const result = await client.query<CommentRow>(
+        `UPDATE community.comments SET status = $3,
+           deleted_at = CASE WHEN $3 = 'visible' THEN NULL ELSE clock_timestamp() END,
+           deleted_by = CASE WHEN $3 = 'visible' THEN NULL ELSE $4 END
+         WHERE id = $1 AND target_type = 'group' AND target_id = $2
+         RETURNING *, NULL::text AS author_name`,
+        [commentId, group.id, input.status, actor.id],
+      );
+      const row = result.rows[0];
+      if (!row) throw new DomainError('DISCUSSION_POST_NOT_FOUND', '内容不存在。', 404);
+      await this.audit(client, actor.id, 'group.discussion.moderated', 'comment', commentId, {
+        status: input.status,
+      });
+      await this.change(client, actor.id, group.id, Number(group.version), 'group.discussion.moderated', {
+        commentId,
+        status: input.status,
+      });
+      return this.commentView(row);
+    });
+  }
+
+  private assertDiscussionAudience(group: GroupRow): void {
+    if (!group.membership_status || !['active', 'muted'].includes(group.membership_status)) {
+      throw new DomainError('GROUP_DISCUSSION_FORBIDDEN', '只有群成员可以查看群组讨论区。', 403);
+    }
+  }
+
+  private assertCanPost(actor: AuthenticatedUser, group: GroupRow): void {
+    if (!group.membership_status || !['active', 'muted'].includes(group.membership_status)) {
+      throw new DomainError('GROUP_DISCUSSION_FORBIDDEN', '只有群成员可以参与群组讨论区。', 403);
+    }
+    if (group.membership_status === 'muted') {
+      throw new DomainError('GROUP_DISCUSSION_MUTED', '你已被禁言，暂不能在讨论区发言。', 403);
+    }
+    if (!actor.phoneVerified) {
+      throw new DomainError('PHONE_VERIFICATION_REQUIRED', '在讨论区发言前需要验证日本手机号。', 403, {
+        actions: [{ type: 'verifyPhone', label: '继续验证' }],
+      });
+    }
+    if (actor.restrictions.includes('commentBlocked')) {
+      throw new DomainError('DISCUSSION_RESTRICTED', '你的账号当前被限制发布内容。', 403);
+    }
+  }
+
+  private async assertCleanContent(client: PoolClient, body: string): Promise<void> {
+    const words = await this.discussionBannedWords(client);
+    if (findBannedTerm(body, words)) {
+      throw new DomainError(
+        'DISCUSSION_CONTENT_BLOCKED',
+        '内容包含被禁止的攻击性词语，请修改后再发送。',
+        422,
+        { retryable: false },
+      );
+    }
+  }
+
+  private async discussionBannedWords(client: PoolClient): Promise<readonly string[]> {
+    const result = await client.query<{ value_json: unknown }>(
+      `SELECT value_json FROM admin.config_revisions
+       WHERE key = 'community.discussion.banned_words' AND state = 'active'
+         AND (effective_from IS NULL OR effective_from <= clock_timestamp())
+         AND (effective_to IS NULL OR effective_to > clock_timestamp())
+       ORDER BY version DESC LIMIT 1`,
+    );
+    const configured = result.rows[0]?.value_json;
+    if (Array.isArray(configured)) {
+      return configured.filter((entry): entry is string => typeof entry === 'string');
+    }
+    return DEFAULT_DISCUSSION_BANNED_WORDS;
+  }
+
+  private async assertPostRate(client: PoolClient, groupId: string, authorId: string): Promise<void> {
+    const limit = Number(
+      await this.points.configBigInt(client, 'community.discussion.post_rate_per_hour', 20n),
+    );
+    const result = await client.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM community.comments
+       WHERE target_type = 'group' AND target_id = $1 AND author_id = $2
+         AND created_at >= clock_timestamp() - interval '1 hour'`,
+      [groupId, authorId],
+    );
+    if (Number(result.rows[0]?.count ?? 0) >= limit) {
+      throw new DomainError('DISCUSSION_RATE_LIMITED', '发言过于频繁，请稍后再试。', 429);
+    }
+  }
+
+  private discussionView(row: DiscussionRow): Record<string, unknown> {
+    return {
+      id: row.id,
+      groupId: row.target_id,
+      author: { id: row.author_id, name: row.author_name ?? 'Spott 用户' },
+      body: row.body,
+      parentId: row.parent_id,
+      locale: row.source_language,
+      likeCount: Number(row.like_count ?? 0),
+      viewerLiked: row.viewer_liked ?? false,
+      replyCount: Number(row.reply_count ?? 0),
+      version: Number(row.version),
+      createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+      updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+    };
   }
 
   async startTransfer(actor: AuthenticatedUser, groupId: string, targetUserId: string): Promise<unknown> {

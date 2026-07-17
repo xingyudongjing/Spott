@@ -1,6 +1,17 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { APIError, apiRequest, clearSession, readSession, saveSession, type WebSession } from "../app/lib/client-api";
+import {
+  APIError,
+  apiRequest,
+  clearSession,
+  errorMessage,
+  readSession,
+  refreshCurrentSession,
+  saveSession,
+  type WebSession,
+} from "../app/lib/client-api";
+import { fetchViewerEvent } from "../app/lib/events-client";
+import { makeDetail } from "./event-fixtures";
 
 const expiredSession: WebSession = {
   accessToken: "expired-access-token",
@@ -22,6 +33,22 @@ const freshSession: WebSession = {
   refreshToken: "rotated-refresh-token",
 };
 
+const rotatedSession: WebSession = {
+  ...freshSession,
+  sessionId: "019b0000-0000-7000-8100-000000000093",
+  user: {
+    ...freshSession.user,
+    phoneVerified: true,
+  },
+};
+
+const newerSameUserSession: WebSession = {
+  ...rotatedSession,
+  accessToken: "newer-access-token",
+  refreshToken: "newer-refresh-token",
+  sessionId: "019b0000-0000-7000-8100-000000000094",
+};
+
 const otherUserSession: WebSession = {
   accessToken: "other-user-access-token",
   accessTokenExpiresAt: "2026-07-17T00:00:00.000Z",
@@ -41,9 +68,125 @@ beforeEach(() => {
   window.localStorage.clear();
   window.localStorage.setItem("spott.web.device.v1", "019b0000-0000-7000-8100-000000000099");
   vi.unstubAllGlobals();
+  document.documentElement.lang = "zh-Hans";
+});
+
+describe("localized client failure copy", () => {
+  test.each([
+    ["zh-Hans", "操作没有成功，请稍后再试。"],
+    ["ja", "操作を完了できませんでした。しばらくしてからもう一度お試しください。"],
+    ["en", "We could not complete that action. Please try again shortly."],
+  ])("localizes the safe fallback in %s", (locale, expected) => {
+    document.documentElement.lang = locale;
+
+    expect(new APIError(500, {}).message).toBe(expected);
+    expect(errorMessage({ not: "an error" })).toBe(expected);
+  });
+
+  test.each([
+    ["zh-Hans", "请求失败（502）"],
+    ["ja", "リクエストに失敗しました（502）"],
+    ["en", "Request failed (502)"],
+  ])("localizes an unreadable HTTP response in %s", async (locale, expected) => {
+    document.documentElement.lang = locale;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("not-json", { status: 502 })));
+
+    await expect(apiRequest("/events/search?limit=24")).rejects.toMatchObject({
+      status: 502,
+      message: expected,
+    });
+  });
 });
 
 describe("refresh-aware client requests", () => {
+  test("accepts an authoritative same-user refresh that rotates the session id", async () => {
+    saveSession({
+      ...expiredSession,
+      user: { ...expiredSession.user, phoneVerified: false },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(rotatedSession)));
+
+    await expect(refreshCurrentSession()).resolves.toEqual(rotatedSession);
+    expect(readSession()).toEqual(rotatedSession);
+  });
+
+  test("replays an authenticated request after a same-user refresh rotates the session id", async () => {
+    saveSession(expiredSession);
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith("/auth/refresh")) return jsonResponse(rotatedSession);
+      const authorization = new Headers(init?.headers).get("Authorization");
+      return authorization === "Bearer fresh-access-token"
+        ? jsonResponse({ ok: true })
+        : jsonResponse({ error: { message: "expired" } }, 401);
+    }));
+
+    await expect(apiRequest<{ ok: boolean }>("/me/registrations", { authenticated: true }))
+      .resolves.toEqual({ ok: true });
+    expect(readSession()).toEqual(rotatedSession);
+  });
+
+  test("refreshes a viewer event request and strictly parses the rotated-session response", async () => {
+    const viewerEvent = makeDetail({ exactAddress: "东京都江东区平野 1-2-3" });
+    saveSession(expiredSession);
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/auth/refresh")) return jsonResponse(rotatedSession);
+      return new Headers(init?.headers).get("Authorization") === "Bearer fresh-access-token"
+        ? jsonResponse(viewerEvent)
+        : jsonResponse({ error: { message: "expired" } }, 401);
+    }));
+
+    await expect(fetchViewerEvent(viewerEvent.id)).resolves.toMatchObject({
+      id: viewerEvent.id,
+      exactAddress: "东京都江东区平野 1-2-3",
+    });
+    expect(readSession()).toEqual(rotatedSession);
+  });
+
+  test("rejects a refresh response for a different user", async () => {
+    saveSession(expiredSession);
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(otherUserSession)));
+
+    await expect(refreshCurrentSession()).resolves.toBeNull();
+    expect(readSession()).toEqual(expiredSession);
+  });
+
+  test("preserves a different account selected while refresh is in flight", async () => {
+    saveSession(expiredSession);
+    let releaseRefresh!: () => void;
+    const delayedRefresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      await delayedRefresh;
+      return jsonResponse(rotatedSession);
+    }));
+
+    const refresh = refreshCurrentSession();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    saveSession(otherUserSession);
+    releaseRefresh();
+
+    await expect(refresh).resolves.toBeNull();
+    expect(readSession()).toEqual(otherUserSession);
+  });
+
+  test("does not let an old refresh overwrite a newer same-user session", async () => {
+    saveSession(expiredSession);
+    let releaseRefresh!: () => void;
+    const delayedRefresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      await delayedRefresh;
+      return jsonResponse(rotatedSession);
+    }));
+
+    const refresh = refreshCurrentSession();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    saveSession(newerSameUserSession);
+    releaseRefresh();
+
+    await expect(refresh).resolves.toBeNull();
+    expect(readSession()).toEqual(newerSameUserSession);
+  });
+
   test("shares one refresh across concurrent 401 responses and retries both once", async () => {
     saveSession(expiredSession);
     let protectedCalls = 0;
@@ -158,6 +301,80 @@ describe("refresh-aware client requests", () => {
     expect(readSession()).toEqual(otherUserSession);
   });
 
+  test("rejects a late 200 response after the same user starts a new session", async () => {
+    saveSession(expiredSession);
+    let releaseResponse!: () => void;
+    const delayedResponse = new Promise<void>((resolve) => { releaseResponse = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      await delayedResponse;
+      return jsonResponse({ privateEvent: "session-one-only" });
+    }));
+
+    const request = apiRequest("/me/registrations", { authenticated: true });
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    saveSession(newerSameUserSession);
+    releaseResponse();
+
+    await expect(request).rejects.toMatchObject({
+      status: 401,
+      body: { code: "SESSION_CHANGED" },
+    });
+    expect(readSession()).toEqual(newerSameUserSession);
+  });
+
+  test("rejects a late 204 response after the account changes", async () => {
+    saveSession(expiredSession);
+    let releaseResponse!: () => void;
+    const delayedResponse = new Promise<void>((resolve) => { releaseResponse = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      await delayedResponse;
+      return new Response(null, { status: 204 });
+    }));
+
+    const request = apiRequest("/me/favorite-events/event-a", {
+      method: "DELETE",
+      authenticated: true,
+    });
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    saveSession(otherUserSession);
+    releaseResponse();
+
+    await expect(request).rejects.toMatchObject({
+      status: 401,
+      body: { code: "SESSION_CHANGED" },
+    });
+    expect(readSession()).toEqual(otherUserSession);
+  });
+
+  test("never replays a stale 401 POST into a new session for the same user", async () => {
+    saveSession(expiredSession);
+    let releaseResponse!: () => void;
+    const delayedResponse = new Promise<void>((resolve) => { releaseResponse = resolve; });
+    const authorizations: Array<string | null> = [];
+    vi.stubGlobal("fetch", vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      authorizations.push(new Headers(init?.headers).get("Authorization"));
+      await delayedResponse;
+      return jsonResponse({ error: { message: "expired" } }, 401);
+    }));
+
+    const request = apiRequest("/events/event-a/registrations", {
+      method: "POST",
+      authenticated: true,
+      idempotencyKey: "019b0000-0000-7000-8400-000000000001",
+      body: JSON.stringify({ partySize: 1 }),
+    });
+    await vi.waitFor(() => expect(authorizations).toHaveLength(1));
+    saveSession(newerSameUserSession);
+    releaseResponse();
+
+    await expect(request).rejects.toMatchObject({
+      status: 401,
+      body: { code: "SESSION_CHANGED" },
+    });
+    expect(authorizations).toEqual(["Bearer expired-access-token"]);
+    expect(readSession()).toEqual(newerSameUserSession);
+  });
+
   test("reuses a caller-owned idempotency key across an authenticated refresh retry", async () => {
     saveSession(expiredSession);
     const callerKey = "019b0000-0000-7000-8400-000000000001";
@@ -231,7 +448,7 @@ describe("refresh-aware client requests", () => {
     expect(readSession()).toEqual(otherUserSession);
   });
 
-  test("reuses a same-session token rotated elsewhere while an older refresh fails", async () => {
+  test("rejects an externally replaced token while an older refresh is in flight", async () => {
     saveSession(expiredSession);
     let releaseRefresh!: () => void;
     const delayedRefresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
@@ -253,8 +470,11 @@ describe("refresh-aware client requests", () => {
     saveSession(freshSession);
     releaseRefresh();
 
-    await expect(request).resolves.toEqual({ ok: true });
-    expect(authorizations).toEqual(["Bearer expired-access-token", "Bearer fresh-access-token"]);
+    await expect(request).rejects.toMatchObject({
+      status: 401,
+      body: { code: "SESSION_CHANGED" },
+    });
+    expect(authorizations).toEqual(["Bearer expired-access-token"]);
     expect(readSession()).toEqual(freshSession);
   });
 

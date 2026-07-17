@@ -1,8 +1,8 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const baseURL = process.env.SPOTT_WEB_BASE_URL ?? "http://127.0.0.1:3000";
-
-test.use({ channel: "chrome" });
+const e2eMapStyleURL = `${baseURL}/__e2e-map-style.json`;
+const emptyMapStyle = JSON.stringify({ version: 8, sources: {}, layers: [] });
 
 const mobileViewports = [
   { width: 390, height: 844, latestEventTop: 330 },
@@ -10,6 +10,36 @@ const mobileViewports = [
 ] as const;
 
 test.describe("rendered discovery safeguards", () => {
+  test("keeps the Tokyo identity and language switcher usable on mobile and at 200 percent zoom", async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${baseURL}/tokyo`);
+
+    await expect(page.getByRole("heading", { level: 1, name: "东京，遇见真正想参加的活动" })).toBeVisible();
+    const banner = page.getByRole("banner");
+    const language = banner.getByRole("combobox", { name: "语言" });
+    await expect(language).toBeVisible();
+    const languageBox = await language.boundingBox();
+    expect(languageBox?.width).toBeGreaterThanOrEqual(44);
+    expect(languageBox?.height).toBeGreaterThanOrEqual(44);
+    await page.screenshot({ path: testInfo.outputPath("tokyo-mobile-zh-Hans.png") });
+
+    await language.selectOption("ja");
+    await expect(page).toHaveURL(`${baseURL}/ja/tokyo`);
+    await expect(page.getByRole("heading", { level: 1, name: "東京で、本当に参加したいイベントに出会う" })).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("lang", "ja");
+
+    await banner.getByRole("combobox", { name: "言語" }).selectOption("en");
+    await expect(page).toHaveURL(`${baseURL}/en/tokyo`);
+    await expect(page.getByRole("heading", { level: 1, name: "Find Tokyo events you genuinely want to join" })).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("lang", "en");
+
+    // A 1280 CSS-pixel desktop at 200% zoom has an effective layout width of 640px.
+    await page.setViewportSize({ width: 640, height: 500 });
+    await expect(page.getByRole("heading", { level: 1, name: "Find Tokyo events you genuinely want to join" })).toBeVisible();
+    await expect(banner.getByRole("combobox", { name: "Language" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+  });
+
   for (const viewport of mobileViewports) {
     test(`${viewport.width}x${viewport.height} exposes real results without overflow`, async ({ page }) => {
       await page.setViewportSize(viewport);
@@ -65,8 +95,8 @@ test.describe("rendered discovery safeguards", () => {
     await expect(page).toHaveURL(/availableOnly=true/);
     await expect.poll(() => searchRequests.length).toBe(1);
 
-    await page.getByRole("searchbox", { name: "搜索活动", exact: true }).fill("黑胶");
-    await expect(page).toHaveURL(/q=%E9%BB%91%E8%83%B6/);
+    await page.getByRole("searchbox", { name: "搜索活动", exact: true }).fill("Kiyosumi");
+    await expect(page).toHaveURL(/q=Kiyosumi/);
     await expect(page.getByTestId("discovery-event")).toHaveCount(1);
 
     await page.goBack();
@@ -75,11 +105,16 @@ test.describe("rendered discovery safeguards", () => {
     await expect(page.getByTestId("discovery-event")).toHaveCount(3);
 
     await page.goForward();
-    await expect(page).toHaveURL(/q=%E9%BB%91%E8%83%B6.*availableOnly=true/);
+    await expect(page).toHaveURL(/q=Kiyosumi.*availableOnly=true/);
     await expect(page.getByTestId("discovery-event")).toHaveCount(1);
   });
 
   test("mobile filter sheet restores focus and map markers open an actionable preview", async ({ page }, testInfo) => {
+    await page.route(e2eMapStyleURL, (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: emptyMapStyle,
+    }));
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${baseURL}/discover`);
 
@@ -96,17 +131,35 @@ test.describe("rendered discovery safeguards", () => {
     await expect(filterButton).toBeFocused();
 
     await page.getByRole("button", { name: "地图", exact: true }).click();
-    const marker = page.locator('button[aria-controls^="map-preview-"]').first();
-    await expect(marker).toBeVisible();
-    const markerBox = await marker.boundingBox();
-    expect(markerBox?.width).toBeGreaterThanOrEqual(44);
-    expect(markerBox?.height).toBeGreaterThanOrEqual(44);
-    await marker.click();
-
-    const preview = page.getByRole("region", { name: /活动预览$/ });
-    await expect(preview).toBeVisible();
-    await expect(preview.getByRole("link", { name: "查看活动详情", exact: true })).toHaveAttribute("href", /^\/e\//);
+    await clickRealMapMarker(page);
     await page.screenshot({ path: testInfo.outputPath("discovery-map-preview-mobile.png") });
+
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto(`${baseURL}/discover`);
+    await page.getByRole("button", { name: "地图", exact: true }).click();
+    await clickRealMapMarker(page);
+  });
+
+  test("keeps Tokyo and discovery operable in forced-colors high-contrast mode", async ({ page }, testInfo) => {
+    await page.emulateMedia({ forcedColors: "active", contrast: "more" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${baseURL}/tokyo`);
+
+    expect(await page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(true);
+    expect(await page.evaluate(() => matchMedia("(prefers-contrast: more)").matches)).toBe(true);
+    await expect(page.getByRole("heading", { level: 1, name: "东京，遇见真正想参加的活动" })).toBeVisible();
+    await expect(page.getByRole("banner").getByRole("combobox", { name: "语言" })).toBeVisible();
+    await expect(page.getByTestId("discovery-event").first()).toBeVisible();
+
+    await page.goto(`${baseURL}/discover`);
+    const filterButton = page.getByRole("button", { name: "更多筛选", exact: true });
+    await filterButton.click();
+    const dialog = page.getByRole("dialog", { name: "更多筛选", exact: true });
+    await expect(dialog).toBeVisible();
+    const boundary = await dialog.evaluate((element) => getComputedStyle(element).borderColor);
+    expect(boundary).not.toBe("rgba(0, 0, 0, 0)");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+    await page.screenshot({ path: testInfo.outputPath("discovery-forced-colors-mobile.png") });
   });
 
   test("invalid typed date ranges stay local, announce the field error, and never throw", async ({ page }) => {
@@ -150,8 +203,8 @@ test.describe("rendered discovery safeguards", () => {
         }))
       ).flat();
       return {
-        hasCurrentCache: cacheNames.includes("spott-public-v4"),
-        hasLegacyCache: cacheNames.some((name) => name.startsWith("spott-public-") && name !== "spott-public-v4"),
+        hasCurrentCache: cacheNames.includes("spott-public-v8"),
+        hasLegacyCache: cacheNames.some((name) => name.startsWith("spott-public-") && name !== "spott-public-v8"),
         protectedDocuments,
       };
     })).toEqual({
@@ -161,8 +214,33 @@ test.describe("rendered discovery safeguards", () => {
     });
   });
 
+  test("uses a privacy-safe localized fallback for public and account navigation while offline", async ({ page, context }) => {
+    await page.goto(`${baseURL}/en/tokyo`);
+    await page.evaluate(() => navigator.serviceWorker.ready);
+    await page.reload();
+    await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true);
+    await expect.poll(() => page.evaluate(async () => (
+      await (await caches.open("spott-public-v8")).match("/__spott-locale__")
+    )?.text())).toBe("en");
+
+    await context.setOffline(true);
+    try {
+      await page.goto(`${baseURL}/me/events`);
+      await expect(page.getByRole("heading", { level: 1, name: "You’re offline" })).toBeVisible();
+      await expect(page.getByText(/Public event pages are not stored on this device/)).toBeVisible();
+      await expect(page.getByRole("button", { name: "Retry connection" })).toBeVisible();
+      await expect(page.getByRole("link", { name: "View cached events" })).toHaveCount(0);
+
+      await page.goto(`${baseURL}/ja/tokyo`);
+      await expect(page.getByRole("heading", { level: 1, name: "オフラインです" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "接続を再確認" })).toBeVisible();
+    } finally {
+      await context.setOffline(false);
+    }
+  });
+
   test("map style failure preserves results and offers retry or list mode", async ({ page }, testInfo) => {
-    await page.route("http://127.0.0.1:4201/**", (route) => route.abort("failed"));
+    await page.route(e2eMapStyleURL, (route) => route.abort("failed"));
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${baseURL}/discover`);
     await page.getByRole("button", { name: "地图", exact: true }).click();
@@ -182,3 +260,40 @@ test.describe("rendered discovery safeguards", () => {
     await expect(page.getByTestId("discovery-event").first()).toBeVisible();
   });
 });
+
+async function clickRealMapMarker(page: Page) {
+  const markers = page.locator('button[aria-controls^="map-preview-"]');
+  await expect(markers.first()).toBeVisible();
+  const diagnostics = await markers.evaluateAll((elements) => elements.map((element) => {
+    const marker = element.getBoundingClientRect();
+    const map = element.closest('[role="region"]')?.getBoundingClientRect();
+    const hit = document.elementFromPoint(marker.x + marker.width / 2, marker.y + marker.height / 2);
+    return {
+      width: marker.width,
+      height: marker.height,
+      contained: Boolean(map)
+        && marker.left >= (map?.left ?? 0)
+        && marker.top >= (map?.top ?? 0)
+        && marker.right <= (map?.right ?? 0)
+        && marker.bottom <= (map?.bottom ?? 0),
+      hitTestable: hit === element || element.contains(hit),
+    };
+  }));
+
+  expect(diagnostics.length).toBeGreaterThan(0);
+  expect(diagnostics.every(({ width, height }) => width >= 44 && height >= 44)).toBe(true);
+  expect(diagnostics.every(({ contained }) => contained)).toBe(true);
+  const pointerIndex = diagnostics.findIndex(({ hitTestable }) => hitTestable);
+  expect(pointerIndex).toBeGreaterThanOrEqual(0);
+  await markers.nth(pointerIndex).click();
+
+  const preview = page.getByRole("region", { name: /活动预览$/ });
+  await expect(preview).toBeVisible();
+  await expect(preview.getByRole("link", { name: "查看活动详情", exact: true })).toHaveAttribute("href", /^\/e\//);
+
+  const keyboardMarker = markers.nth(pointerIndex === 0 && diagnostics.length > 1 ? 1 : 0);
+  await keyboardMarker.focus();
+  await expect(keyboardMarker).toBeFocused();
+  await keyboardMarker.press("Enter");
+  await expect(page.getByRole("region", { name: /活动预览$/ })).toBeVisible();
+}

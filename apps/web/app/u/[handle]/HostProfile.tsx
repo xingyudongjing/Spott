@@ -6,8 +6,10 @@ import { useAppDialog } from "../../components/AppDialog";
 import { EventCard } from "../../components/EventCard";
 import { Footer } from "../../components/Footer";
 import { useI18n } from "../../components/I18nProvider";
+import { usePreviewMode } from "../../components/PreviewModeProvider";
+import { ReadOnlyCommunityNotice } from "../../components/ReadOnlyCommunityNotice";
 import { normalizeEvent } from "../../lib/api";
-import { apiRequest, errorMessage, readSession } from "../../lib/client-api";
+import { APIError, apiRequest, errorMessage, readSession } from "../../lib/client-api";
 import type { EventView } from "../../lib/demo-data";
 
 interface PublicProfile {
@@ -29,6 +31,7 @@ interface BlockedUser {
 
 export function HostProfile({ handle }: { handle: string }) {
   const { locale, t } = useI18n();
+  const isReadOnly = usePreviewMode() === "read-only";
   const appDialog = useAppDialog();
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [events, setEvents] = useState<EventView[]>([]);
@@ -36,10 +39,12 @@ export function HostProfile({ handle }: { handle: string }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [loadFailure, setLoadFailure] = useState<"not-found" | "error" | null>(null);
   const copy = profileCopy(locale);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadFailure(null);
     try {
       const [profileValue, eventPayload] = await Promise.all([
         apiRequest<PublicProfile>(`/profiles/${encodeURIComponent(handle)}`),
@@ -49,7 +54,7 @@ export function HostProfile({ handle }: { handle: string }) {
       ]);
       setProfile(profileValue);
       setEvents(eventPayload.items.map(normalizeEvent));
-      if (readSession()) {
+      if (!isReadOnly && readSession()) {
         try {
           const blockPage = await apiRequest<{ items: BlockedUser[] }>("/me/blocks", {
             authenticated: true,
@@ -61,11 +66,17 @@ export function HostProfile({ handle }: { handle: string }) {
       }
       setMessage("");
     } catch (error) {
-      setMessage(errorMessage(error));
+      if (error instanceof APIError && error.status === 404) {
+        setLoadFailure("not-found");
+        setMessage("");
+      } else {
+        setLoadFailure("error");
+        setMessage(errorMessage(error));
+      }
     } finally {
       setLoading(false);
     }
-  }, [handle]);
+  }, [handle, isReadOnly]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
@@ -73,7 +84,7 @@ export function HostProfile({ handle }: { handle: string }) {
   }, [load]);
 
   async function follow() {
-    if (!profile || blocked) return;
+    if (isReadOnly || !profile || blocked) return;
     if (!readSession()) {
       window.location.assign(`/login?returnTo=${encodeURIComponent(`/u/${handle}`)}`);
       return;
@@ -100,7 +111,7 @@ export function HostProfile({ handle }: { handle: string }) {
   }
 
   async function toggleBlock() {
-    if (!profile) return;
+    if (isReadOnly || !profile) return;
     if (!readSession()) {
       window.location.assign(`/login?returnTo=${encodeURIComponent(`/u/${handle}`)}`);
       return;
@@ -161,14 +172,19 @@ export function HostProfile({ handle }: { handle: string }) {
     return (
       <main className="standard-shell">
         <div className="empty-state">
-          <h1>{copy.notFound}</h1>
-          <p>{message}</p>
+          <h1>{loadFailure === "not-found" ? copy.notFound : copy.loadError}</h1>
+          <p>{loadFailure === "not-found" ? copy.notFoundBody : message || copy.loadErrorBody}</p>
+          {loadFailure === "error" ? (
+            <button className="secondary-action compact" type="button" onClick={() => void load()}>
+              {t("common.retry")}
+            </button>
+          ) : null}
         </div>
       </main>
     );
 
   const completed = events.filter((event) => event.status === "ended").length;
-  const ownProfile = readSession()?.user.id === profile.userId;
+  const ownProfile = !isReadOnly && readSession()?.user.id === profile.userId;
 
   return (
     <main>
@@ -199,12 +215,13 @@ export function HostProfile({ handle }: { handle: string }) {
               ))}
             </div>
           </div>
-          <div className="profile-actions">
+          {!isReadOnly ? <div className="profile-actions">
             {!ownProfile && !blocked && (
               <button
                 className={`secondary-action compact follow-profile${profile.viewerFollowing ? " active" : ""}`}
                 type="button"
                 disabled={busy}
+                aria-busy={busy}
                 onClick={() => void follow()}
               >
                 {profile.viewerFollowing ? copy.following : t("event.followHost")}
@@ -217,15 +234,16 @@ export function HostProfile({ handle }: { handle: string }) {
                   <Link href={`/reports/new?targetType=user&targetId=${profile.userId}`}>
                     {copy.report}
                   </Link>
-                  <button type="button" disabled={busy} onClick={() => void toggleBlock()}>
+                  <button type="button" disabled={busy} aria-busy={busy} onClick={() => void toggleBlock()}>
                     {blocked ? copy.unblock : copy.block}
                   </button>
                   <Link href="/safety">{copy.safetyCenter}</Link>
                 </div>
               </details>
             )}
-          </div>
+          </div> : null}
         </section>
+        {isReadOnly ? <ReadOnlyCommunityNotice /> : null}
 
         {blocked && (
           <aside className="blocked-profile-note">
@@ -273,6 +291,9 @@ function profileCopy(locale: "zh-Hans" | "ja" | "en") {
   if (locale === "ja")
     return {
       notFound: "プロフィールが見つかりません",
+      notFoundBody: "URLを確認するか、イベント一覧から主催者を探してください。",
+      loadError: "プロフィールを読み込めませんでした",
+      loadErrorBody: "通信を確認して、もう一度お試しください。",
       noBio: "自己紹介はまだありません。",
       followers: "フォロワー",
       completed: "回完了",
@@ -294,6 +315,9 @@ function profileCopy(locale: "zh-Hans" | "ja" | "en") {
   if (locale === "en")
     return {
       notFound: "Profile not found",
+      notFoundBody: "Check the URL, or find the host again from an event.",
+      loadError: "We could not load this profile",
+      loadErrorBody: "Check your connection and try again.",
       noBio: "No bio yet.",
       followers: "followers",
       completed: "completed",
@@ -314,6 +338,9 @@ function profileCopy(locale: "zh-Hans" | "ja" | "en") {
     };
   return {
     notFound: "用户主页不存在",
+    notFoundBody: "请检查链接，或从活动页重新查找主办方。",
+    loadError: "暂时无法加载主页",
+    loadErrorBody: "请检查网络后重试。",
     noBio: "还没有填写个人简介。",
     followers: "位关注者",
     completed: "场已完成",

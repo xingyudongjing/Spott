@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import { useI18n } from "../../components/I18nProvider";
-import { trackProductEvent } from "../../lib/analytics";
-import { apiRequest, errorMessage, readSession } from "../../lib/client-api";
+import { usePreviewMode } from "../../components/PreviewModeProvider";
+import { apiRequest, errorMessage, readSession, type WebSession } from "../../lib/client-api";
 import type { EventSummary } from "../../lib/event-contract";
 import { resolveEventCTA, type EventCTA, type EventCTAEvent } from "../../lib/event-cta";
 import styles from "./EventActions.module.css";
@@ -25,9 +25,17 @@ type EventActionsEvent = EventCTAEvent & Pick<
   | "organizer"
 >;
 
-export function EventActions({ event }: { event: EventActionsEvent }) {
-  const { locale, t } = useI18n();
-  const [session, setSession] = useState(() => readSession());
+export function EventActions({
+  event,
+  session,
+  viewerMessage = "",
+}: {
+  event: EventActionsEvent;
+  session: WebSession | null;
+  viewerMessage?: string;
+}) {
+  const { t } = useI18n();
+  const isReadOnly = usePreviewMode() === "read-only";
   const [favorited, setFavorited] = useState(event.favorited);
   const [following, setFollowing] = useState(event.organizer.viewerFollowing);
   const [busy, setBusy] = useState(false);
@@ -37,22 +45,6 @@ export function EventActions({ event }: { event: EventActionsEvent }) {
     authenticated: Boolean(session),
     phoneVerified: Boolean(session?.user.phoneVerified),
   });
-
-  useEffect(() => {
-    const changed = () => setSession(readSession());
-    window.addEventListener("spott:session", changed);
-    return () => window.removeEventListener("spott:session", changed);
-  }, []);
-
-  useEffect(() => {
-    void trackProductEvent("event_detail_viewed", {
-      eventId: event.id,
-      category: event.category,
-      region: event.region,
-      status: event.status,
-      availableCapacity: event.availableCapacity,
-    });
-  }, [event.availableCapacity, event.category, event.id, event.region, event.status]);
 
   async function acceptOffer(registrationId: string) {
     setBusy(true);
@@ -121,7 +113,7 @@ export function EventActions({ event }: { event: EventActionsEvent }) {
   async function share() {
     const canonical = `${window.location.origin}/e/${event.publicSlug}`;
     let url = canonical;
-    if (readSession()) {
+    if (!isReadOnly && readSession()) {
       try {
         const created = await apiRequest<{ url: string }>("/shares", {
           method: "POST",
@@ -137,16 +129,24 @@ export function EventActions({ event }: { event: EventActionsEvent }) {
         // A canonical public URL remains a safe share fallback.
       }
     }
-    try {
-      if (navigator.share) await navigator.share({ title: event.title, text: event.description, url });
-      else {
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: event.title, text: event.description, url });
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+      }
+    }
+    if (window.isSecureContext && navigator.clipboard?.writeText) {
+      try {
         await navigator.clipboard.writeText(url);
         setMessage(t("event.linkCopied"));
+        return;
+      } catch {
+        // The selectable canonical URL below works even when permission is denied.
       }
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      setMessage(errorMessage(error));
     }
+    setMessage(t("event.copyManually", { url }));
   }
 
   function addToCalendar() {
@@ -170,12 +170,16 @@ export function EventActions({ event }: { event: EventActionsEvent }) {
 
   const utilities = (
     <>
-      <button type="button" onClick={() => void toggleFavorite()} disabled={busy} aria-pressed={favorited}>
-        {favorited ? t("event.favorited") : t("event.favorite")}
-      </button>
-      <button type="button" onClick={() => void toggleFollow()} disabled={busy} aria-pressed={following}>
-        {following ? t("event.following") : t("event.followHost")}
-      </button>
+      {!isReadOnly ? (
+        <>
+          <button type="button" onClick={() => void toggleFavorite()} disabled={busy} aria-pressed={favorited}>
+            {favorited ? t("event.favorited") : t("event.favorite")}
+          </button>
+          <button type="button" onClick={() => void toggleFollow()} disabled={busy} aria-pressed={following}>
+            {following ? t("event.following") : t("event.followHost")}
+          </button>
+        </>
+      ) : null}
       <button type="button" onClick={() => void share()}>{t("event.share")}</button>
       {event.startsAt && event.endsAt ? <button type="button" onClick={addToCalendar}>{t("event.calendar")}</button> : null}
     </>
@@ -194,7 +198,9 @@ export function EventActions({ event }: { event: EventActionsEvent }) {
         <summary>{t("common.moreActions")}</summary>
         <div>{utilities}</div>
       </details>
-      {message ? <p className={styles.message} role="alert">{message}</p> : null}
+      {viewerMessage || message ? (
+        <p className={styles.message} role="alert">{viewerMessage || message}</p>
+      ) : null}
     </div>
   );
 }
@@ -211,6 +217,7 @@ export function EventPrimaryAction({
   onAccept: (registrationId: string) => void;
 }) {
   const { t } = useI18n();
+  const isReadOnly = usePreviewMode() === "read-only";
   const registerPath = `/register/${event.publicSlug}`;
   const marker = { "data-event-primary": true };
 
@@ -221,6 +228,9 @@ export function EventPrimaryAction({
         ? t("event.fullClosed")
         : t("event.registrationClosed");
     return <button {...marker} className={styles.primary} type="button" disabled>{label}</button>;
+  }
+  if (isReadOnly) {
+    return <button {...marker} className={styles.primary} type="button" disabled>{t("preview.readOnlyAction")}</button>;
   }
   if (cta.kind === "accept_waitlist" && cta.registrationId) {
     return (

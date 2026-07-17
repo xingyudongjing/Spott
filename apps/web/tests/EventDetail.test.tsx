@@ -1,10 +1,188 @@
-import { screen, within } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { EventDetailView, eventStructuredData } from "../app/components/event/EventDetail";
+import { PreviewModeProvider } from "../app/components/PreviewModeProvider";
+import { EventDetailClient } from "../app/e/[slug]/EventDetailClient";
+import { apiRequest } from "../app/lib/client-api";
+import { fetchEvent } from "../app/lib/events-api";
 import { makeDetail, renderWithI18n } from "./event-fixtures";
 
+const actionMocks = vi.hoisted(() => ({
+  session: null as null | {
+    accessToken: string;
+    user: { id: string; phoneVerified: boolean };
+  },
+  apiRequest: vi.fn(),
+  fetchEvent: vi.fn(),
+  trackProductEvent: vi.fn(),
+}));
+
+vi.mock("../app/lib/client-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../app/lib/client-api")>();
+  return {
+    ...actual,
+    apiRequest: actionMocks.apiRequest,
+    readSession: () => actionMocks.session,
+  };
+});
+vi.mock("../app/lib/events-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../app/lib/events-api")>();
+  return { ...actual, fetchEvent: actionMocks.fetchEvent };
+});
+vi.mock("../app/lib/analytics", () => ({ trackProductEvent: actionMocks.trackProductEvent }));
+
+const fetchEventMock = vi.mocked(fetchEvent);
+const apiRequestMock = vi.mocked(apiRequest);
+
+beforeEach(() => {
+  actionMocks.session = null;
+  apiRequestMock.mockReset();
+  fetchEventMock.mockReset();
+  actionMocks.trackProductEvent.mockReset();
+});
+
 describe("premium event detail", () => {
+  test("hydrates anonymous SSR actions with the signed-in viewer event before choosing the CTA", async () => {
+    const anonymousEvent = makeDetail({ availableActions: [], registrationMode: "approval" });
+    const viewerEvent = makeDetail({ availableActions: ["register"], registrationMode: "approval" });
+    actionMocks.session = {
+      accessToken: "viewer-access-token",
+      user: { id: "viewer-user", phoneVerified: true },
+    };
+    apiRequestMock.mockImplementation(async (path) => path === `/events/${anonymousEvent.id}`
+      ? viewerEvent
+      : { published: false, tags: [] });
+
+    renderWithI18n(<EventDetailClient event={anonymousEvent} locale="zh-Hans" />);
+
+    expect(await screen.findByRole("link", { name: "申请参加" })).toHaveAttribute(
+      "href",
+      `/register/${anonymousEvent.publicSlug}`,
+    );
+    expect(apiRequestMock).toHaveBeenCalledWith(
+      `/events/${anonymousEvent.id}`,
+      { authenticated: true },
+    );
+    expect(fetchEventMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "报名已关闭" })).not.toBeInTheDocument();
+  });
+
+  test("loads viewer-authorized event state through the refresh-aware client API", async () => {
+    const anonymousEvent = makeDetail({ availableActions: [], registrationMode: "approval" });
+    const viewerEvent = makeDetail({ availableActions: ["register"], registrationMode: "approval" });
+    actionMocks.session = {
+      accessToken: "expired-access-token",
+      user: { id: "viewer-user", phoneVerified: true },
+    };
+    apiRequestMock.mockImplementation(async (path) => path === `/events/${anonymousEvent.id}`
+      ? viewerEvent
+      : { published: false, tags: [] });
+
+    renderWithI18n(<EventDetailClient event={anonymousEvent} locale="zh-Hans" />);
+
+    expect(await screen.findByRole("link", { name: "申请参加" })).toBeInTheDocument();
+    expect(apiRequestMock).toHaveBeenCalledWith(
+      `/events/${anonymousEvent.id}`,
+      { authenticated: true },
+    );
+  });
+
+  test("records one detail view while replacing public facts with viewer-authorized facts", async () => {
+    const anonymousEvent = makeDetail({ availableActions: [] });
+    const viewerEvent = makeDetail({ availableActions: ["register"] });
+    actionMocks.session = {
+      accessToken: "viewer-access-token",
+      user: { id: "viewer-user", phoneVerified: true },
+    };
+    apiRequestMock.mockImplementation(async (path) => path === `/events/${anonymousEvent.id}`
+      ? viewerEvent
+      : { published: false, tags: [] });
+
+    renderWithI18n(<EventDetailClient event={anonymousEvent} locale="zh-Hans" />);
+    await screen.findByRole("link", { name: "报名参加" });
+
+    await waitFor(() => {
+      expect(actionMocks.trackProductEvent.mock.calls.filter(
+        ([name]) => name === "event_detail_viewed",
+      )).toHaveLength(1);
+    });
+  });
+
+  test("does not hydrate viewer facts or emit analytics in the public read-only preview", async () => {
+    const event = makeDetail({ availableActions: [] });
+    actionMocks.session = {
+      accessToken: "viewer-access-token",
+      user: { id: "viewer-user", phoneVerified: true },
+    };
+    apiRequestMock.mockResolvedValue({ published: false, tags: [] });
+
+    renderWithI18n(
+      <PreviewModeProvider initialMode="read-only">
+        <EventDetailClient event={event} locale="zh-Hans" />
+      </PreviewModeProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument());
+    expect(actionMocks.trackProductEvent).not.toHaveBeenCalled();
+    expect(apiRequestMock).not.toHaveBeenCalledWith(
+      `/events/${event.id}`,
+      { authenticated: true },
+    );
+  });
+
+  test("renders viewer-only facts and the CTA from the same authorized event", async () => {
+    const anonymousEvent = makeDetail({
+      exactAddress: null,
+      availableActions: [],
+      registrationMode: "approval",
+    });
+    const viewerEvent = makeDetail({
+      exactAddress: "东京都江东区平野 1-2-3",
+      availableActions: ["viewTicket"],
+      viewerRegistration: {
+        id: "019b0000-0000-7000-8200-000000000001",
+        status: "confirmed",
+        partySize: 1,
+        availableActions: ["viewTicket"],
+        offerExpiresAt: null,
+      },
+    });
+    actionMocks.session = {
+      accessToken: "viewer-access-token",
+      user: { id: "viewer-user", phoneVerified: true },
+    };
+    apiRequestMock.mockImplementation(async (path) => path === `/events/${anonymousEvent.id}`
+      ? viewerEvent
+      : { published: false, tags: [] });
+
+    renderWithI18n(<EventDetailClient event={anonymousEvent} locale="zh-Hans" />);
+
+    expect(await screen.findByRole("link", { name: "查看我的报名" })).toBeInTheDocument();
+    expect(screen.getByText("东京都江东区平野 1-2-3")).toBeInTheDocument();
+    expect(screen.queryByText("报名确认后显示精确集合点")).not.toBeInTheDocument();
+  });
+
+  test("keeps public JSON-LD server-rendered while a client boundary owns viewer facts", () => {
+    const pageSource = readFileSync(resolve(process.cwd(), "app/e/[slug]/page.tsx"), "utf8");
+
+    expect(pageSource).toContain("EventDetailClient");
+    expect(pageSource).toContain("eventStructuredData(event)");
+  });
+
+  test("pins the mobile primary action to the bottom without inheriting the desktop top offset", () => {
+    const styles = readFileSync(
+      resolve(process.cwd(), "app/components/event/EventDetail.module.css"),
+      "utf8",
+    );
+    const mobileStyles = styles.slice(styles.indexOf("@media (max-width: 780px)"));
+
+    expect(mobileStyles).toMatch(/\.actionSlot\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?top:\s*auto;[\s\S]*?bottom:\s*0;/);
+    expect(mobileStyles).toContain("env(safe-area-inset-bottom)");
+  });
+
   test("answers the seven decision facts in the first viewport without fabricated claims", () => {
     renderWithI18n(
       <EventDetailView

@@ -1,29 +1,24 @@
+import type { Metadata } from "next";
 import { DiscoveryShell } from "../components/discovery/DiscoveryShell";
-import { parseDiscoveryQuery, type EventDiscoveryQuery } from "../lib/discovery-query";
-import type { EventPage } from "../lib/event-contract";
-import { searchEventsForRequest } from "../lib/events-server";
+import { loadDiscoveryPage } from "../lib/discovery-page";
 
 export const dynamic = "force-dynamic";
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
-export default async function DiscoverPage({ searchParams }: { searchParams: SearchParams }) {
+export async function generateMetadata({ searchParams }: { searchParams: SearchParams }): Promise<Metadata> {
   const raw = await searchParams;
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(raw)) {
-    if (Array.isArray(value)) value.forEach((item) => params.append(key, item));
-    else if (value !== undefined) params.set(key, value);
-  }
+  const hasVariant = Object.values(raw).some((value) => (
+    Array.isArray(value) ? value.some((item) => item.length > 0) : Boolean(value)
+  ));
+  return {
+    alternates: { canonical: "/discover" },
+    robots: { index: !hasVariant, follow: true },
+  };
+}
 
-  let initialQuery: EventDiscoveryQuery = {};
-  let initialPage: EventPage | null = null;
-  let initialError: string | null = null;
-  try {
-    initialQuery = parseDiscoveryQuery(params);
-    initialPage = await searchEventsForRequest({ ...initialQuery, limit: initialQuery.limit ?? 24 });
-  } catch (error) {
-    initialError = error instanceof Error ? error.name : "DiscoveryError";
-  }
+export default async function DiscoverPage({ searchParams }: { searchParams: SearchParams }) {
+  const { initialQuery, initialPage, initialError } = await loadDiscoveryPage(await searchParams);
 
   return (
     <main>

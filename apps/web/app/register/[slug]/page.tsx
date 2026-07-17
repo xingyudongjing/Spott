@@ -4,10 +4,12 @@ import { fetchEventForRequest } from "../../lib/events-server";
 import { RegistrationFlow } from "./RegistrationFlow";
 
 export default async function RegisterPage({ params }: { params: Promise<{ slug: string }> }) {
+  let event;
   try {
-    return <RegistrationFlow event={await fetchEventForRequest((await params).slug)} />;
+    event = await fetchEventForRequest((await params).slug);
   } catch (error) {
     if (error instanceof EventAPIError && error.status === 404) notFound();
     throw error;
   }
+  return <RegistrationFlow event={event} />;
 }

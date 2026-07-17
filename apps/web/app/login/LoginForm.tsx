@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import {
@@ -30,8 +31,11 @@ export function LoginForm({ returnTo = '/discover' }: { returnTo?: string }) {
           verify: '確認してログイン',
           send: '確認コードを送信',
           change: 'メールを変更',
-          terms:
-            '続行すると、利用規約とプライバシーポリシーに同意したものとみなされます。参加・公開などには日本の電話番号認証が必要です。',
+          termsPrefix: '続行すると、',
+          terms: '利用規約',
+          termsJoin: 'と',
+          privacy: 'プライバシーポリシー',
+          termsSuffix: 'に同意したものとみなされます。参加・公開などには日本の電話番号認証が必要です。',
         }
       : locale === 'en'
         ? {
@@ -42,8 +46,11 @@ export function LoginForm({ returnTo = '/discover' }: { returnTo?: string }) {
             verify: 'Verify and log in',
             send: 'Send email code',
             change: 'Use another email',
-            terms:
-              'By continuing, you agree to the Terms and Privacy Policy. High-trust actions still require a verified Japanese phone number.',
+            termsPrefix: 'By continuing, you agree to the ',
+            terms: 'Terms',
+            termsJoin: ' and ',
+            privacy: 'Privacy Policy',
+            termsSuffix: '. High-trust actions still require a verified Japanese phone number.',
           }
         : {
             email: '邮箱地址',
@@ -53,7 +60,11 @@ export function LoginForm({ returnTo = '/discover' }: { returnTo?: string }) {
             verify: '验证并登录',
             send: '发送邮箱验证码',
             change: '更换邮箱',
-            terms: '继续即表示你同意服务条款和隐私政策。登录后，高信任动作仍需验证日本手机号。',
+            termsPrefix: '继续即表示你同意',
+            terms: '服务条款',
+            termsJoin: '和',
+            privacy: '隐私政策',
+            termsSuffix: '。登录后，高信任动作仍需验证日本手机号。',
           };
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
@@ -144,7 +155,13 @@ export function LoginForm({ returnTo = '/discover' }: { returnTo?: string }) {
           {copy.change}
         </button>
       )}
-      <p>{copy.terms}</p>
+      <p className="login-legal">
+        {copy.termsPrefix}
+        <Link href="/terms">{copy.terms}</Link>
+        {copy.termsJoin}
+        <Link href="/privacy">{copy.privacy}</Link>
+        {copy.termsSuffix}
+      </p>
     </form>
   );
 }

@@ -1,15 +1,19 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { DiscoveryShell } from "../app/components/discovery/DiscoveryShell";
+import { PreviewModeProvider } from "../app/components/PreviewModeProvider";
 import { apiRequest, readSession } from "../app/lib/client-api";
 import { parseDiscoveryQuery } from "../app/lib/discovery-query";
 import { searchEvents } from "../app/lib/events-api";
 import { eventFixture, makeEvent, makePage, renderWithI18n } from "./event-fixtures";
 
+const analyticsMocks = vi.hoisted(() => ({ trackProductEvent: vi.fn() }));
+
 vi.mock("../app/lib/events-api", () => ({ searchEvents: vi.fn() }));
 vi.mock("../app/lib/client-api", () => ({ apiRequest: vi.fn(), readSession: vi.fn() }));
+vi.mock("../app/lib/analytics", () => ({ trackProductEvent: analyticsMocks.trackProductEvent }));
 
 const searchEventsMock = vi.mocked(searchEvents);
 const apiRequestMock = vi.mocked(apiRequest);
@@ -25,6 +29,7 @@ beforeEach(() => {
   });
   readSessionMock.mockReset();
   readSessionMock.mockReturnValue(null);
+  analyticsMocks.trackProductEvent.mockReset();
 });
 
 afterEach(() => {
@@ -32,6 +37,31 @@ afterEach(() => {
 });
 
 describe("URL-authoritative discovery", () => {
+  test("keeps analytics off and exposes region inside the filter dialog at 390px in read-only mode", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+    searchEventsMock.mockResolvedValue(makePage());
+
+    renderWithI18n(
+      <PreviewModeProvider initialMode="read-only">
+        <DiscoveryShell initialQuery={{}} initialPage={makePage()} />
+      </PreviewModeProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "更多筛选" }));
+    const dialog = screen.getByRole("dialog", { name: "更多筛选" });
+    const region = within(dialog).getByRole("combobox", { name: "地区" });
+    await user.selectOptions(region, "osaka");
+
+    await waitFor(() => expect(window.location.search).toContain("region=osaka"));
+    expect(searchEventsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ region: "osaka" }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(readSessionMock).not.toHaveBeenCalled();
+    expect(analyticsMocks.trackProductEvent).not.toHaveBeenCalled();
+  });
+
   test("reuses the server page and puts a real event immediately after discovery controls", () => {
     renderWithI18n(<DiscoveryShell initialQuery={{}} initialPage={makePage()} />);
 
@@ -98,6 +128,26 @@ describe("URL-authoritative discovery", () => {
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "更多筛选" })).not.toBeInTheDocument();
     expect(opener).toHaveFocus();
+  });
+
+  test("does not announce a custom date range as the weekend shortcut", async () => {
+    searchEventsMock.mockResolvedValue(makePage());
+    renderWithI18n(
+      <DiscoveryShell
+        initialQuery={{
+          startsAfter: "2026-08-02T15:00:00.000Z",
+          startsBefore: "2026-08-03T15:00:00.000Z",
+        }}
+        initialPage={makePage()}
+      />,
+    );
+
+    const weekend = screen.getByRole("button", { name: "本周末" });
+    expect(weekend).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(weekend);
+
+    await waitFor(() => expect(weekend).toHaveAttribute("aria-pressed", "true"));
   });
 
   test("rejects an end date before the start date without mutating the URL or issuing a request", async () => {
@@ -191,6 +241,53 @@ describe("URL-authoritative discovery", () => {
       expect.objectContaining({ region: "osaka", format: "online", availableOnly: true }),
       expect.any(Object),
     );
+  });
+
+  test("keeps a city landing page locked to its authoritative region", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/tokyo?region=osaka");
+    searchEventsMock.mockResolvedValue(makePage());
+
+    renderWithI18n(
+      <DiscoveryShell
+        initialQuery={{ region: "osaka" }}
+        initialPage={makePage()}
+        lockedRegion="tokyo"
+      />,
+    );
+
+    const region = screen.getByRole("combobox", { name: "地区" });
+    expect(region).toHaveValue("tokyo");
+    expect(region).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "更多筛选" }));
+    const dialogRegion = within(screen.getByRole("dialog", { name: "更多筛选" }))
+      .getByRole("combobox", { name: "地区" });
+    expect(dialogRegion).toHaveValue("tokyo");
+    expect(dialogRegion).toBeDisabled();
+    await user.click(within(screen.getByRole("dialog", { name: "更多筛选" }))
+      .getByRole("button", { name: "关闭" }));
+
+    await user.click(screen.getByRole("button", { name: "只看有名额" }));
+    await waitFor(() => expect(searchEventsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ region: "tokyo", availableOnly: true }),
+      expect.any(Object),
+    ));
+    expect(new URLSearchParams(window.location.search).get("region")).toBe("tokyo");
+
+    await user.click(screen.getByRole("button", { name: "清除筛选" }));
+    await waitFor(() => expect(searchEventsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ region: "tokyo" }),
+      expect.any(Object),
+    ));
+
+    window.history.pushState(null, "", "/tokyo?region=kyoto&format=online");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await waitFor(() => expect(searchEventsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ region: "tokyo", format: "online" }),
+      expect.any(Object),
+    ));
+    expect(new URLSearchParams(window.location.search).get("region")).toBe("tokyo");
   });
 
   test("keeps stale results when refresh fails and announces the error", async () => {

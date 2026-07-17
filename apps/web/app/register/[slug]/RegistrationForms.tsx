@@ -8,16 +8,14 @@ import type { EventDetail } from "../../lib/event-contract";
 import { eventDate, eventFeeLabel, eventTime } from "../../lib/format";
 import type { RegistrationAnswer } from "../../lib/registration-draft";
 import styles from "./RegistrationFlow.module.css";
+import { RegistrationHeader } from "./RegistrationHeader";
 import type { RegistrationFieldErrors, RegistrationQuote } from "./registration-model";
 
 export function RegistrationUnavailable({ event }: { event: EventDetail }) {
   const { t } = useI18n();
   return (
     <main className={styles.page}>
-      <header className={styles.header}>
-        <Link className={styles.wordmark} href="/discover">Spott</Link>
-        <Link className={styles.back} href={`/e/${event.publicSlug}`}>← {t("registration.backEvent")}</Link>
-      </header>
+      <RegistrationHeader eventSlug={event.publicSlug} />
       <section className={styles.unavailable}>
         <p className={styles.eyebrow}>{t("registration.completeStep")}</p>
         <h1>{t("registration.unavailableTitle")}</h1>
@@ -154,9 +152,40 @@ export function DetailsForm({
             </span>
           </label>
         ) : null}
+        <RegistrationLegalConsent />
       </section>
       <SubmitBar message={message} label={t("registration.review")} />
     </form>
+  );
+}
+
+function RegistrationLegalConsent() {
+  const { t } = useI18n();
+  const newWindowLabel = t("registration.opensNewWindow");
+  return (
+    <p className={styles.legalConsent}>
+      {t("registration.legalBeforeTerms")}
+      <Link href="/terms" target="_blank" rel="noopener noreferrer">
+        {t("registration.legalTerms")}
+        <span className="sr-only"> ({newWindowLabel})</span>
+        <ExternalLinkIcon />
+      </Link>
+      {t("registration.legalBetween")}
+      <Link href="/privacy" target="_blank" rel="noopener noreferrer">
+        {t("registration.legalPrivacy")}
+        <span className="sr-only"> ({newWindowLabel})</span>
+        <ExternalLinkIcon />
+      </Link>
+      {t("registration.legalAfterPrivacy")}
+    </p>
+  );
+}
+
+function ExternalLinkIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" width="13" height="13" fill="none">
+      <path d="M6 3h7v7M13 3 5.5 10.5M11 9.5V13H3V5h3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 

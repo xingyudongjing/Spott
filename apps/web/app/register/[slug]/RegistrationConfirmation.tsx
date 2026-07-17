@@ -8,6 +8,7 @@ import type { RegistrationView } from "../../lib/client-api";
 import type { EventDetail } from "../../lib/event-contract";
 import { EventSummary } from "./RegistrationForms";
 import styles from "./RegistrationFlow.module.css";
+import { RegistrationHeader } from "./RegistrationHeader";
 
 export function RegistrationConfirmation({
   event,
@@ -68,8 +69,10 @@ export function RegistrationConfirmation({
   }
 
   return (
-    <main className={`${styles.page} ${styles.confirmationPage}`}>
-      <section className={styles.confirmation}>
+    <main className={styles.page}>
+      <RegistrationHeader eventSlug={event.publicSlug} />
+      <div className={styles.confirmationPage}>
+        <section className={styles.confirmation}>
         <div className={styles.successMark} aria-hidden="true">✓</div>
         <p className={styles.eyebrow}>{t("registration.completeStep")}</p>
         <h1>{title}</h1>
@@ -85,7 +88,8 @@ export function RegistrationConfirmation({
         ) : null}
         <Link className={styles.confirmationPrimary} href="/me/events">{t("registration.viewItinerary")}</Link>
         <Link className={styles.confirmationSecondary} href={`/e/${event.publicSlug}`}>{t("registration.backEvent")}</Link>
-      </section>
+        </section>
+      </div>
     </main>
   );
 }

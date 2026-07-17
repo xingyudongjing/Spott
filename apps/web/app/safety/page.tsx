@@ -1,6 +1,11 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { serverLocale } from "../i18n/server";
 import { SafetyCaseTracker } from "./SafetyCaseTracker";
+
+export const metadata: Metadata = {
+  robots: { index: false, follow: false },
+};
 
 export default async function SafetyPage() {
   const locale = await serverLocale();

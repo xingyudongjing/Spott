@@ -98,12 +98,16 @@ export function EventMap({
         if (disposed) return;
         const facts = eventMarkerFacts(events);
         const first = facts[0];
+        const discoveredBounds = markerBounds(facts);
+        const markerOffsets = collisionSafeMarkerOffsets(facts);
         map = new maplibre.Map({
           container,
           style: styleURL,
           ...(bounds
             ? { bounds: [[bounds.west, bounds.south], [bounds.east, bounds.north]], fitBoundsOptions: { padding: 44 } }
-            : { center: first ? [first.longitude, first.latitude] : [138.2529, 36.2048], zoom: first ? 11 : 4 }),
+            : discoveredBounds
+              ? { bounds: discoveredBounds, fitBoundsOptions: { padding: 56, maxZoom: 11 } }
+              : { center: first ? [first.longitude, first.latitude] : [138.2529, 36.2048], zoom: first ? 11 : 4 }),
           attributionControl: false,
         });
 
@@ -144,7 +148,11 @@ export function EventMap({
           markerElement.setAttribute("aria-pressed", String(fact.eventId === selectedEventIdRef.current));
           markerElement.addEventListener("click", () => onSelect?.(fact.eventId));
           markerElements.set(fact.eventId, markerElement);
-          return new maplibre.Marker({ element: markerElement, anchor: "center" })
+          return new maplibre.Marker({
+            element: markerElement,
+            anchor: "center",
+            offset: markerOffsets.get(fact.eventId) ?? [0, 0],
+          })
             .setLngLat([fact.longitude, fact.latitude])
             .addTo(map as MapLibreMap);
         });
@@ -174,6 +182,42 @@ export function EventMap({
   }, [approximateLabel, bounds, events, loadTimeoutMs, onBoundsChange, onFailure, onSelect, styleURL]);
 
   return <div ref={containerRef} className={styles.mapCanvas} role="region" aria-label={mapLabel} />;
+}
+
+function markerBounds(facts: EventMarkerFact[]): [[number, number], [number, number]] | null {
+  if (facts.length < 2) return null;
+  const longitudes = facts.map(({ longitude }) => longitude);
+  const latitudes = facts.map(({ latitude }) => latitude);
+  const west = Math.min(...longitudes);
+  const east = Math.max(...longitudes);
+  const south = Math.min(...latitudes);
+  const north = Math.max(...latitudes);
+  return west === east && south === north ? null : [[west, south], [east, north]];
+}
+
+function collisionSafeMarkerOffsets(facts: EventMarkerFact[]) {
+  const groups = new Map<string, EventMarkerFact[]>();
+  for (const fact of facts) {
+    const key = `${fact.longitude.toFixed(6)}:${fact.latitude.toFixed(6)}`;
+    groups.set(key, [...(groups.get(key) ?? []), fact]);
+  }
+
+  const result = new Map<string, [number, number]>();
+  for (const group of groups.values()) {
+    if (group.length === 1) {
+      result.set(group[0].eventId, [0, 0]);
+      continue;
+    }
+    const radius = Math.max(24, 14 * group.length);
+    group.forEach((fact, index) => {
+      const angle = -Math.PI / 2 + (index * 2 * Math.PI) / group.length;
+      result.set(fact.eventId, [
+        Math.round(Math.cos(angle) * radius),
+        Math.round(Math.sin(angle) * radius),
+      ]);
+    });
+  }
+  return result;
 }
 
 function normalizeBounds(bounds: MapBounds): MapBounds {

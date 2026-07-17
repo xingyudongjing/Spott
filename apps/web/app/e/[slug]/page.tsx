@@ -1,13 +1,12 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
-import { EventDetailView, eventStructuredData } from "../../components/event/EventDetail";
+import { eventStructuredData } from "../../components/event/EventDetail";
 import { Footer } from "../../components/Footer";
 import { serverLocale } from "../../i18n/server";
 import { EventAPIError } from "../../lib/events-api";
 import { fetchEventForRequest } from "../../lib/events-server";
-import { EventActions } from "./EventActions";
-import { EventFeedbackSummary } from "./EventFeedbackSummary";
+import { EventDetailClient } from "./EventDetailClient";
 
 type PageProps = { params: Promise<{ slug: string }> };
 
@@ -36,12 +35,7 @@ export default async function EventPage({ params }: PageProps) {
   return (
     <>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
-      <EventDetailView
-        event={event}
-        locale={locale}
-        actions={<EventActions event={event} />}
-        supplementary={<EventFeedbackSummary eventId={event.id} locale={locale} />}
-      />
+      <EventDetailClient event={event} locale={locale} />
       <Footer />
     </>
   );

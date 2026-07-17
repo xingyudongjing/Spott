@@ -2,9 +2,12 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { RegistrationConfirmation, RegistrationFlow } from "../app/register/[slug]/RegistrationFlow";
+import {
+  RegistrationConfirmation,
+  RegistrationFlow,
+  registrationPartyLimit,
+} from "../app/register/[slug]/RegistrationFlow";
 import { APIError, apiRequest } from "../app/lib/client-api";
-import { fetchEvent } from "../app/lib/events-api";
 import { REGISTRATION_DRAFT_SCHEMA_VERSION, saveRegistrationDraft } from "../app/lib/registration-draft";
 import { makeDetail, renderWithI18n } from "./event-fixtures";
 
@@ -14,27 +17,28 @@ const mocks = vi.hoisted(() => ({
     user: { id: string; phoneVerified: boolean };
   },
   apiRequest: vi.fn(),
-  fetchEvent: vi.fn(),
+  trackProductEvent: vi.fn(),
 }));
 
 vi.mock("../app/lib/client-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../app/lib/client-api")>();
   return { ...actual, apiRequest: mocks.apiRequest, readSession: () => mocks.session };
 });
-vi.mock("../app/lib/events-api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../app/lib/events-api")>();
-  return { ...actual, fetchEvent: mocks.fetchEvent };
-});
+vi.mock("../app/lib/analytics", () => ({
+  trackProductEvent: mocks.trackProductEvent,
+}));
 
 const apiRequestMock = vi.mocked(apiRequest);
-const fetchEventMock = vi.mocked(fetchEvent);
+let defaultViewerEvent = makeDetail();
 
 beforeEach(() => {
   window.sessionStorage.clear();
   mocks.session = { accessToken: "access", user: { id: "user-b", phoneVerified: true } };
   apiRequestMock.mockReset();
-  fetchEventMock.mockReset();
+  mocks.trackProductEvent.mockReset();
+  defaultViewerEvent = makeDetail();
   apiRequestMock.mockImplementation(async (path) => {
+    if (path === `/events/${defaultViewerEvent.id}`) return defaultViewerEvent;
     if (path === "/quotes") {
       return { id: "019b0000-0000-7000-8500-000000000001", amount: 40, currency: "POINTS", expiresAt: "2099-07-16T03:15:00.000Z" };
     }
@@ -43,6 +47,244 @@ beforeEach(() => {
 });
 
 describe("resumable registration flow", () => {
+  test("keeps the language control available throughout the immersive registration route", async () => {
+    renderWithI18n(<RegistrationFlow event={makeDetail()} navigate={vi.fn()} />);
+
+    expect(screen.getByRole("combobox", { name: "语言" })).toBeInTheDocument();
+    await screen.findByRole("button", { name: "继续核对" });
+    expect(screen.getByRole("combobox", { name: "语言" })).toBeInTheDocument();
+  });
+
+  test("announces the current registration step with localized context", async () => {
+    renderWithI18n(<RegistrationFlow event={makeDetail()} navigate={vi.fn()} />, "en");
+
+    await screen.findByRole("button", { name: "Review details" });
+    const progress = screen.getByRole("list", { name: "Registration progress" });
+    const currentStep = progress.querySelector('[aria-current="step"]');
+    expect(currentStep).toHaveTextContent("Registration details · Step 1 of 2");
+  });
+
+  test("keeps the paid-fee checkbox independent from keyboard-accessible legal links", async () => {
+    const user = userEvent.setup();
+    const paidEvent = makeDetail({
+      fee: {
+        isFree: false,
+        amountJPY: 2400,
+        collectorName: "Weekend Kai",
+        method: "Cash at the venue",
+        paymentDeadlineText: "Before check-in",
+        refundPolicy: "Full refund until 24 hours before start",
+      },
+    });
+    defaultViewerEvent = paidEvent;
+
+    renderWithI18n(<RegistrationFlow event={paidEvent} navigate={vi.fn()} />);
+
+    const checkbox = await screen.findByRole("checkbox", {
+      name: /我已阅读线下费用与退款边界/,
+    });
+    const termsLink = screen.getByRole("link", { name: /服务条款/ });
+    const privacyLink = screen.getByRole("link", { name: /隐私政策/ });
+
+    expect(termsLink).toHaveAttribute("href", "/terms");
+    expect(privacyLink).toHaveAttribute("href", "/privacy");
+    expect(termsLink).toHaveAttribute("target", "_blank");
+    expect(privacyLink).toHaveAttribute("target", "_blank");
+    expect(checkbox.closest("label")).not.toContainElement(termsLink);
+    expect(checkbox.closest("label")).not.toContainElement(privacyLink);
+
+    termsLink.focus();
+    expect(termsLink).toHaveFocus();
+    termsLink.addEventListener("click", (event) => event.preventDefault(), { once: true });
+    await user.keyboard("{Enter}");
+    expect(checkbox).not.toBeChecked();
+
+    await user.click(checkbox);
+    expect(checkbox).toBeChecked();
+  });
+
+  test.each([
+    ["ja", "利用規約", "プライバシーポリシー"],
+    ["en", "Terms of Service", "Privacy Policy"],
+  ] as const)("renders localized legal destinations in %s", async (locale, terms, privacy) => {
+    renderWithI18n(<RegistrationFlow event={makeDetail()} navigate={vi.fn()} />, locale);
+
+    expect(await screen.findByRole("link", { name: new RegExp(terms) })).toHaveAttribute("href", "/terms");
+    expect(screen.getByRole("link", { name: new RegExp(privacy) })).toHaveAttribute("href", "/privacy");
+  });
+
+  test("always replaces a registration-ready server event with the viewer-authorized event", async () => {
+    const serverEvent = makeDetail({
+      title: "Public registration snapshot",
+      availableActions: ["register"],
+    });
+    const authorizedEvent = makeDetail({
+      title: "Viewer-authorized registration snapshot",
+      availableActions: ["register"],
+    });
+    apiRequestMock.mockImplementation(async (path) => path === `/events/${serverEvent.id}`
+      ? authorizedEvent
+      : { id: "registration", eventId: serverEvent.id, status: "confirmed", partySize: 1 });
+
+    renderWithI18n(<RegistrationFlow event={serverEvent} navigate={vi.fn()} />);
+
+    expect(await screen.findByText("Viewer-authorized registration snapshot")).toBeInTheDocument();
+    expect(screen.queryByText("Public registration snapshot")).not.toBeInTheDocument();
+    expect(apiRequestMock).toHaveBeenCalledWith(
+      `/events/${serverEvent.id}`,
+      { authenticated: true },
+    );
+  });
+
+  test("prunes draft answers that are absent from the initial viewer-authorized event", async () => {
+    const user = userEvent.setup();
+    const removedQuestionId = "019b0000-0000-7000-8300-000000000008";
+    const serverEvent = makeDetail({
+      registrationQuestions: [{
+        id: removedQuestionId,
+        prompt: "Old server question",
+        kind: "text",
+        required: false,
+        options: [],
+      }],
+    });
+    const authorizedEvent = makeDetail({ registrationQuestions: [] });
+    saveRegistrationDraft(window.sessionStorage, {
+      schemaVersion: REGISTRATION_DRAFT_SCHEMA_VERSION,
+      eventId: serverEvent.id,
+      eventVersion: serverEvent.version,
+      ownerUserId: "user-b",
+      partySize: 1,
+      answers: { [removedQuestionId]: "stale private answer" },
+      attendeeNote: "",
+      acceptedTerms: true,
+      step: "details",
+      idempotencyKey: "019b0000-0000-7000-8400-000000000008",
+      updatedAt: "2026-07-16T03:00:00.000Z",
+    });
+    let submittedBody: Record<string, unknown> | null = null;
+    apiRequestMock.mockImplementation(async (path, init) => {
+      if (path === `/events/${serverEvent.id}`) return authorizedEvent;
+      if (path === "/quotes") {
+        return { id: "quote", amount: 40, currency: "POINTS", expiresAt: "2099-01-01T00:00:00.000Z" };
+      }
+      submittedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return { id: "registration", eventId: serverEvent.id, status: "confirmed", partySize: 1 };
+    });
+
+    renderWithI18n(<RegistrationFlow event={serverEvent} navigate={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "继续核对" }));
+    await user.click(await screen.findByRole("button", { name: "确认并报名" }));
+
+    expect(await screen.findByText("报名已确认")).toBeInTheDocument();
+    expect(submittedBody).not.toBeNull();
+    expect(submittedBody!.answers).toEqual({});
+  });
+
+  test("hydrates the anonymous server event with the authenticated viewer action set", async () => {
+    const anonymousEvent = makeDetail({ availableActions: [] });
+    const authorizedEvent = makeDetail({ availableActions: ["register"] });
+    apiRequestMock.mockImplementation(async (path) => path === `/events/${anonymousEvent.id}`
+      ? authorizedEvent
+      : { id: "registration", eventId: anonymousEvent.id, status: "confirmed", partySize: 1 });
+
+    renderWithI18n(<RegistrationFlow event={anonymousEvent} navigate={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "确认参加信息" })).toBeInTheDocument();
+    expect(apiRequestMock).toHaveBeenCalledWith(
+      `/events/${anonymousEvent.id}`,
+      { authenticated: true },
+    );
+    expect(screen.queryByRole("heading", { name: "报名暂不可用" })).not.toBeInTheDocument();
+  });
+
+  test("hydrates registration eligibility through apiRequest instead of a raw access-token fetch", async () => {
+    const anonymousEvent = makeDetail({ availableActions: [] });
+    const authorizedEvent = makeDetail({ availableActions: ["register"] });
+    apiRequestMock.mockImplementation(async (path) => {
+      if (path === `/events/${anonymousEvent.id}`) return authorizedEvent;
+      if (path === "/quotes") {
+        return { id: "quote", amount: 40, currency: "POINTS", expiresAt: "2099-01-01T00:00:00.000Z" };
+      }
+      return { id: "registration", eventId: anonymousEvent.id, status: "confirmed", partySize: 1 };
+    });
+
+    renderWithI18n(<RegistrationFlow event={anonymousEvent} navigate={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "确认参加信息" })).toBeInTheDocument();
+    expect(apiRequestMock).toHaveBeenCalledWith(
+      `/events/${anonymousEvent.id}`,
+      { authenticated: true },
+    );
+  });
+
+  test("invalidates an old details form on a cross-tab owner change before requesting a quote", async () => {
+    const user = userEvent.setup();
+    mocks.session = { accessToken: "access-a", user: { id: "user-a", phoneVerified: true } };
+    renderWithI18n(<RegistrationFlow event={makeDetail()} navigate={vi.fn()} />);
+
+    const note = await screen.findByLabelText("想对主办方补充什么？");
+    await user.type(note, "User A private answer");
+    const oldForm = screen.getByRole("button", { name: "继续核对" }).closest("form")!;
+    apiRequestMock.mockClear();
+
+    mocks.session = { accessToken: "access-b", user: { id: "user-b", phoneVerified: true } };
+    window.dispatchEvent(new StorageEvent("storage", { key: "spott.web.session.v1" }));
+    fireEvent.submit(oldForm);
+
+    await waitFor(() => {
+      expect(apiRequestMock.mock.calls.filter(([path]) => path === "/quotes")).toHaveLength(0);
+    });
+    expect(screen.queryByDisplayValue("User A private answer")).not.toBeInTheDocument();
+  });
+
+  test("invalidates an old review form on an in-tab session event before registration submit", async () => {
+    const user = userEvent.setup();
+    mocks.session = { accessToken: "access-a", user: { id: "user-a", phoneVerified: true } };
+    renderWithI18n(<RegistrationFlow event={makeDetail()} navigate={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "继续核对" }));
+    const oldForm = (await screen.findByRole("button", { name: "确认并报名" })).closest("form")!;
+    apiRequestMock.mockClear();
+
+    mocks.session = { accessToken: "access-b", user: { id: "user-b", phoneVerified: true } };
+    window.dispatchEvent(new CustomEvent("spott:session"));
+    fireEvent.submit(oldForm);
+
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(apiRequestMock.mock.calls.some(([path]) => path === "/quotes")).toBe(false);
+    expect(apiRequestMock.mock.calls.some(([path]) => String(path).endsWith("/registrations"))).toBe(false);
+    expect(mocks.trackProductEvent).not.toHaveBeenCalledWith(
+      "registration_completed",
+      expect.anything(),
+    );
+  });
+
+  test("offers a retry when authenticated event hydration fails without discarding the draft", async () => {
+    const user = userEvent.setup();
+    const anonymousEvent = makeDetail({ availableActions: [] });
+    const authorizedEvent = makeDetail({ availableActions: ["register"] });
+    let eventCalls = 0;
+    apiRequestMock.mockImplementation(async (path) => {
+      if (path === `/events/${anonymousEvent.id}`) {
+        eventCalls += 1;
+        if (eventCalls === 1) throw new TypeError("offline");
+        return authorizedEvent;
+      }
+      return { id: "registration", eventId: anonymousEvent.id, status: "confirmed", partySize: 1 };
+    });
+
+    renderWithI18n(<RegistrationFlow event={anonymousEvent} navigate={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "无法确认报名资格" })).toBeInTheDocument();
+    const beforeRetry = await storedDraft("");
+    await user.click(screen.getByRole("button", { name: "重试" }));
+
+    expect(await screen.findByRole("heading", { name: "确认参加信息" })).toBeInTheDocument();
+    const afterRetry = await storedDraft("");
+    expect(eventCalls).toBe(2);
+    expect(afterRetry.idempotencyKey).toBe(beforeRetry.idempotencyKey);
+  });
+
   test.each([
     [null, "/login?returnTo="],
     [{ accessToken: "access", user: { id: "user-b", phoneVerified: false } }, "/phone-verification?returnTo="],
@@ -77,6 +319,7 @@ describe("resumable registration flow", () => {
     const event = makeDetail({
       registrationQuestions: [{ id: questionId, prompt: "Dietary needs", kind: "text", required: true, options: [] }],
     });
+    defaultViewerEvent = event;
     saveRegistrationDraft(window.sessionStorage, {
       schemaVersion: REGISTRATION_DRAFT_SCHEMA_VERSION, eventId: event.id, eventVersion: event.version, ownerUserId: "user-b",
       partySize: 3, answers: { [questionId]: "Vegetarian" }, attendeeNote: "Near the lift",
@@ -138,6 +381,7 @@ describe("resumable registration flow", () => {
 
   test("clamps a restored party size to current available capacity", async () => {
     const event = makeDetail({ capacity: 12, availableCapacity: 2 });
+    defaultViewerEvent = event;
     saveRegistrationDraft(window.sessionStorage, {
       schemaVersion: REGISTRATION_DRAFT_SCHEMA_VERSION,
       eventId: event.id,
@@ -161,6 +405,7 @@ describe("resumable registration flow", () => {
     makeDetail({ status: "cancelled", availableActions: [] }),
     makeDetail({ status: "registration_closed", availableActions: [] }),
   ])("blocks a direct registration URL before showing fields when strict CTA is unavailable", async (event) => {
+    defaultViewerEvent = event;
     renderWithI18n(<RegistrationFlow event={event} navigate={vi.fn()} />);
 
     expect(await screen.findByRole("heading", { name: "报名暂不可用" })).toBeInTheDocument();
@@ -174,6 +419,7 @@ describe("resumable registration flow", () => {
     const event = makeDetail({
       registrationQuestions: [{ id: questionId, prompt: "Dietary needs", kind: "text", required: true, options: [] }],
     });
+    defaultViewerEvent = event;
     renderWithI18n(<RegistrationFlow event={event} navigate={vi.fn()} />);
 
     const question = await screen.findByLabelText(/Dietary needs/);
@@ -189,6 +435,7 @@ describe("resumable registration flow", () => {
     const keys: string[] = [];
     let registrationAttempt = 0;
     apiRequestMock.mockImplementation(async (path, init) => {
+      if (path === `/events/${makeDetail().id}`) return makeDetail();
       if (path === "/quotes") return { id: "019b0000-0000-7000-8500-000000000001", amount: 40, currency: "POINTS", expiresAt: "2099-07-16T03:15:00.000Z" };
       if (!init) throw new Error("registration request options are required");
       keys.push(String(init.idempotencyKey));
@@ -203,11 +450,17 @@ describe("resumable registration flow", () => {
     await user.click(screen.getByRole("button", { name: "确认并报名" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("offline");
     expect(screen.queryByText("报名已确认")).not.toBeInTheDocument();
+    expect(mocks.trackProductEvent).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "确认并报名" }));
     expect(await screen.findByText("报名已确认")).toBeInTheDocument();
     expect(keys).toHaveLength(2);
     expect(keys[0]).toBe(keys[1]);
+    expect(mocks.trackProductEvent).toHaveBeenCalledWith("registration_completed", {
+      eventId: makeDetail().id,
+      registrationStatus: "confirmed",
+      partySize: 1,
+    });
   });
 
   test("explicit restart clears the draft and creates a new logical idempotency key", async () => {
@@ -215,6 +468,7 @@ describe("resumable registration flow", () => {
     const keys: string[] = [];
     let attempt = 0;
     apiRequestMock.mockImplementation(async (path, init) => {
+      if (path === `/events/${makeDetail().id}`) return makeDetail();
       if (path === "/quotes") return { id: `quote-${attempt}`, amount: 40, currency: "POINTS", expiresAt: "2099-07-16T03:15:00.000Z" };
       if (!init) throw new Error("registration request options are required");
       keys.push(String(init.idempotencyKey));
@@ -246,6 +500,7 @@ describe("resumable registration flow", () => {
     const quoteIds: string[] = [];
     let quoteCalls = 0;
     apiRequestMock.mockImplementation(async (path, init) => {
+      if (path === `/events/${makeDetail().id}`) return makeDetail();
       if (path === "/quotes") {
         quoteCalls += 1;
         return {
@@ -274,6 +529,7 @@ describe("resumable registration flow", () => {
     const user = userEvent.setup();
     let quoteCalls = 0;
     apiRequestMock.mockImplementation(async (path) => {
+      if (path === `/events/${makeDetail().id}`) return makeDetail();
       if (path !== "/quotes") return { id: "registration", eventId: makeDetail().id, status: "confirmed", partySize: 1 };
       quoteCalls += 1;
       if (quoteCalls === 1) throw new TypeError("quote offline");
@@ -302,6 +558,7 @@ describe("resumable registration flow", () => {
       registrationQuestions: [{ id: questionId, prompt: "Dietary needs", kind: "text", required: true, options: [] }],
     });
     apiRequestMock.mockImplementation(async (path) => {
+      if (path === `/events/${event.id}`) return event;
       if (path === "/quotes") return { id: "quote", amount: 40, currency: "POINTS", expiresAt: "2099-01-01T00:00:00.000Z" };
       throw new APIError(422, { fieldErrors: [{ field: `answers.${questionId}`, message: "Please use a supported answer." }] });
     });
@@ -322,9 +579,12 @@ describe("resumable registration flow", () => {
     const user = userEvent.setup();
     let release!: () => void;
     const pending = new Promise((resolve) => { release = () => resolve({ id: "registration", eventId: makeDetail().id, status: "confirmed", partySize: 1 }); });
-    apiRequestMock.mockImplementation(async (path) => path === "/quotes"
-      ? { id: "019b0000-0000-7000-8500-000000000001", amount: 40, currency: "POINTS", expiresAt: "2099-07-16T03:15:00.000Z" }
-      : pending);
+    apiRequestMock.mockImplementation(async (path) => {
+      if (path === `/events/${makeDetail().id}`) return makeDetail();
+      return path === "/quotes"
+        ? { id: "019b0000-0000-7000-8500-000000000001", amount: 40, currency: "POINTS", expiresAt: "2099-07-16T03:15:00.000Z" }
+        : pending;
+    });
     renderWithI18n(<RegistrationFlow event={makeDetail()} navigate={vi.fn()} />);
     await user.click(await screen.findByRole("button", { name: "继续核对" }));
     const submit = await screen.findByRole("button", { name: "确认并报名" });
@@ -340,23 +600,27 @@ describe("resumable registration flow", () => {
     const user = userEvent.setup();
     const event = makeDetail();
     let quoteCalls = 0;
+    const refreshedEvent = makeDetail({
+      version: event.version + 1,
+      confirmedCount: event.capacity,
+      availableCapacity: 0,
+      availableActions: ["joinWaitlist"],
+    });
+    let eventCalls = 0;
     apiRequestMock.mockImplementation(async (path) => {
       if (path === "/quotes") {
         quoteCalls += 1;
         return { id: `019b0000-0000-7000-8500-00000000000${quoteCalls}`, amount: 40, currency: "POINTS", expiresAt: "2099-07-16T03:15:00.000Z" };
       }
+      if (path === `/events/${event.id}`) {
+        eventCalls += 1;
+        return eventCalls === 1 ? event : refreshedEvent;
+      }
       throw new APIError(409, { code: "REGISTRATION_CAPACITY_FULL", message: "full" });
     });
-    fetchEventMock.mockResolvedValue(makeDetail({
-      version: event.version + 1,
-      confirmedCount: event.capacity,
-      availableCapacity: 0,
-      availableActions: ["joinWaitlist"],
-    }));
     renderWithI18n(<RegistrationFlow event={event} navigate={vi.fn()} />);
     const partySize = await screen.findByLabelText(/参加人数/);
-    await user.clear(partySize);
-    await user.type(partySize, "3");
+    fireEvent.change(partySize, { target: { value: "3" } });
     const note = await screen.findByLabelText("想对主办方补充什么？");
     await user.type(note, "Window seat");
     await user.click(screen.getByRole("button", { name: "继续核对" }));
@@ -366,10 +630,130 @@ describe("resumable registration flow", () => {
     expect(screen.getByText("Window seat")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "返回修改" }));
     expect(screen.getByDisplayValue("Window seat")).toBeInTheDocument();
-    expect(screen.getByLabelText(/参加人数/)).toHaveValue(1);
+    expect(screen.getByLabelText(/参加人数/)).toHaveValue(3);
     expect(screen.queryByText("报名已确认")).not.toBeInTheDocument();
-    expect(fetchEventMock).toHaveBeenCalledWith(event.id, { accessToken: "access" });
+    expect(apiRequestMock).toHaveBeenCalledWith(
+      `/events/${event.id}`,
+      { authenticated: true },
+    );
     await waitFor(() => expect(quoteCalls).toBe(2));
+  });
+
+  test("returns to live required questions and revokes changed paid terms after a 409", async () => {
+    const user = userEvent.setup();
+    const questionId = "019b0000-0000-7000-8300-000000000009";
+    const event = makeDetail({
+      fee: {
+        isFree: false,
+        amountJPY: 1_000,
+        collectorName: "Original host",
+        method: "Cash",
+        paymentDeadlineText: "At check-in",
+        refundPolicy: "Refund until 24 hours before",
+      },
+    });
+    const refreshedEvent = makeDetail({
+      version: event.version + 1,
+      fee: {
+        ...event.fee!,
+        collectorName: "New venue desk",
+      },
+      registrationQuestions: [{
+        id: questionId,
+        prompt: "Emergency contact",
+        kind: "text",
+        required: true,
+        options: [],
+      }],
+    });
+    let eventCalls = 0;
+    apiRequestMock.mockImplementation(async (path) => {
+      if (path === `/events/${event.id}`) {
+        eventCalls += 1;
+        return eventCalls === 1 ? event : refreshedEvent;
+      }
+      if (path === "/quotes") {
+        return { id: `quote-${eventCalls}`, amount: 40, currency: "POINTS", expiresAt: "2099-01-01T00:00:00.000Z" };
+      }
+      throw new APIError(409, { code: "EVENT_VERSION_CONFLICT", message: "changed" });
+    });
+
+    renderWithI18n(<RegistrationFlow event={event} navigate={vi.fn()} />);
+    const terms = await screen.findByRole("checkbox", { name: /我已阅读线下费用与退款边界/ });
+    await user.click(terms);
+    await user.click(screen.getByRole("button", { name: "继续核对" }));
+    await user.click(await screen.findByRole("button", { name: "确认并报名" }));
+
+    const requiredQuestion = await screen.findByLabelText(/Emergency contact/);
+    expect(requiredQuestion).toHaveFocus();
+    expect(requiredQuestion).toHaveAccessibleDescription("请填写此项。");
+    expect(screen.getByRole("checkbox", { name: /我已阅读线下费用与退款边界/ })).not.toBeChecked();
+    expect(screen.getByText(/New venue desk/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "核对并确认" })).not.toBeInTheDocument();
+  });
+
+  test("drops removed question answers before retrying a registration after 409", async () => {
+    const user = userEvent.setup();
+    const removedQuestionId = "019b0000-0000-7000-8300-000000000007";
+    const event = makeDetail({
+      registrationQuestions: [{
+        id: removedQuestionId,
+        prompt: "Question removed during submit",
+        kind: "text",
+        required: true,
+        options: [],
+      }],
+    });
+    const refreshedEvent = makeDetail({
+      version: event.version + 1,
+      registrationQuestions: [],
+    });
+    let eventCalls = 0;
+    const submittedBodies: Array<Record<string, unknown>> = [];
+    apiRequestMock.mockImplementation(async (path, init) => {
+      if (path === `/events/${event.id}`) {
+        eventCalls += 1;
+        return eventCalls === 1 ? event : refreshedEvent;
+      }
+      if (path === "/quotes") {
+        return { id: `quote-${eventCalls}`, amount: 40, currency: "POINTS", expiresAt: "2099-01-01T00:00:00.000Z" };
+      }
+      submittedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (submittedBodies.length === 1) {
+        throw new APIError(409, { code: "EVENT_VERSION_CONFLICT", message: "changed" });
+      }
+      return { id: "registration", eventId: event.id, status: "confirmed", partySize: 1 };
+    });
+
+    renderWithI18n(<RegistrationFlow event={event} navigate={vi.fn()} />);
+    await user.type(await screen.findByLabelText(/Question removed during submit/), "remove me");
+    await user.click(screen.getByRole("button", { name: "继续核对" }));
+    await user.click(await screen.findByRole("button", { name: "确认并报名" }));
+    const reconfirm = await screen.findByRole("checkbox", { name: /我已核对更新后的名额、费用与活动信息/ });
+    await user.click(reconfirm);
+    await user.click(screen.getByRole("button", { name: "确认并报名" }));
+
+    expect(await screen.findByText("报名已确认")).toBeInTheDocument();
+    expect(submittedBodies).toHaveLength(2);
+    expect(submittedBodies[0]).toMatchObject({
+      expectedEventVersion: event.version,
+      answers: { [removedQuestionId]: "remove me" },
+    });
+    expect(submittedBodies[1]).toMatchObject({
+      expectedEventVersion: refreshedEvent.version,
+      answers: {},
+    });
+  });
+});
+
+describe("registration party limits", () => {
+  test.each([
+    [makeDetail({ capacity: 24, availableCapacity: 13 }), 10],
+    [makeDetail({ capacity: 24, availableCapacity: 2 }), 2],
+    [makeDetail({ capacity: 24, availableCapacity: 0, availableActions: ["joinWaitlist"] }), 10],
+    [makeDetail({ capacity: 6, availableCapacity: 0, availableActions: ["joinWaitlist"] }), 6],
+  ])("keeps the API maximum and the live waitlist capacity for %#", (event, expected) => {
+    expect(registrationPartyLimit(event)).toBe(expected);
   });
 });
 
@@ -450,13 +834,13 @@ describe("complete registration confirmation", () => {
   });
 });
 
-async function storedDraft() {
+async function storedDraft(expectedAttendeeNote = "Keep this note") {
   let draft: Record<string, unknown> | null = null;
   await waitFor(() => {
     const key = window.sessionStorage.key(0);
     expect(key).not.toBeNull();
     draft = JSON.parse(window.sessionStorage.getItem(key!)!) as Record<string, unknown>;
-    expect(draft.attendeeNote).toBe("Keep this note");
+    expect(draft.attendeeNote).toBe(expectedAttendeeNote);
   });
   return draft!;
 }

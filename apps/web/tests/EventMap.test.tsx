@@ -12,6 +12,8 @@ const mapBoundary = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => void>(),
   onceHandlers: new Map<string, (...args: unknown[]) => void>(),
   markerElements: [] as HTMLElement[],
+  mapOptions: null as Record<string, unknown> | null,
+  markerOptions: [] as Array<Record<string, unknown>>,
   bounds: {
     getWest: () => 139.6,
     getSouth: () => 35.5,
@@ -22,7 +24,7 @@ const mapBoundary = vi.hoisted(() => ({
 
 vi.mock("maplibre-gl", () => {
   class MapBoundary {
-    constructor() {}
+    constructor(options: Record<string, unknown>) { mapBoundary.mapOptions = options; }
     on(name: string, handler: (...args: unknown[]) => void) { mapBoundary.handlers.set(name, handler); return this; }
     off(name: string) { mapBoundary.handlers.delete(name); return this; }
     once(name: string, handler: (...args: unknown[]) => void) { mapBoundary.onceHandlers.set(name, handler); return this; }
@@ -31,7 +33,10 @@ vi.mock("maplibre-gl", () => {
     remove() { mapBoundary.remove(); }
   }
   class MarkerBoundary {
-    constructor(options: { element: HTMLElement }) { mapBoundary.markerElements.push(options.element); }
+    constructor(options: { element: HTMLElement } & Record<string, unknown>) {
+      mapBoundary.markerElements.push(options.element);
+      mapBoundary.markerOptions.push(options);
+    }
     setLngLat() { return this; }
     addTo() { return this; }
     remove() { return this; }
@@ -45,6 +50,8 @@ beforeEach(() => {
   mapBoundary.handlers.clear();
   mapBoundary.onceHandlers.clear();
   mapBoundary.markerElements.length = 0;
+  mapBoundary.mapOptions = null;
+  mapBoundary.markerOptions.length = 0;
 });
 
 describe("MapLibre adapter", () => {
@@ -121,6 +128,36 @@ describe("MapLibre adapter", () => {
       "href",
       `/e/${eventFixture.publicSlug}`,
     );
+  });
+
+  test("fits every public marker inside the map and separates identical approximate points", async () => {
+    const duplicate = makeEvent({
+      id: "019b0000-0000-7000-8100-000000000002",
+      coordinate: eventFixture.coordinate,
+    });
+    const northern = makeEvent({
+      id: "019b0000-0000-7000-8100-000000000003",
+      coordinate: { latitude: 35.727, longitude: 139.7668, precision: "approximate" },
+    });
+    render(
+      <EventMap
+        events={[eventFixture, duplicate, northern]}
+        styleURL="https://media.spott.jp/map/style.json"
+        mapLabel="活动地图"
+        approximateLabel="约在此区域"
+        onBoundsChange={vi.fn()}
+        onFailure={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(mapBoundary.markerElements).toHaveLength(3));
+    expect(mapBoundary.mapOptions).toMatchObject({
+      bounds: [[139.7668, 35.68], [139.79, 35.727]],
+      fitBoundsOptions: { padding: 56, maxZoom: 11 },
+    });
+    const offsets = mapBoundary.markerOptions.map(({ offset }) => offset);
+    expect(offsets[0]).not.toEqual(offsets[1]);
+    expect(offsets[2]).toEqual([0, 0]);
   });
 
   test("fails once when the map cannot become idle before its loading deadline", async () => {

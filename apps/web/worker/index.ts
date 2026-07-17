@@ -31,17 +31,57 @@ const worker = {
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
-      return handleImageOptimization(request, {
+      const response = await handleImageOptimization(request, {
         fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
         transformImage: async (body, { width, format, quality }) => {
           const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
           return result.response();
         },
       }, allowedWidths);
+      return withProductionSecurityHeaders(request, response);
     }
 
-    return handler.fetch(request, env, ctx);
+    return withProductionSecurityHeaders(request, await handler.fetch(request, env, ctx));
   },
 };
+
+function withProductionSecurityHeaders(request: Request, response: Response): Response {
+  const url = new URL(request.url);
+  const localDevelopment = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  const headers = new Headers(response.headers);
+  headers.set("Content-Security-Policy", [
+    "default-src 'self'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "frame-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    `connect-src 'self' https: wss:${localDevelopment ? " http: ws:" : ""}`,
+    "media-src 'self' blob: https:",
+    "worker-src 'self' blob:",
+    "manifest-src 'self'",
+  ].join("; "));
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  headers.set(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), clipboard-write=(self)",
+  );
+  if (url.protocol === "https:") {
+    headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  } else {
+    headers.delete("Strict-Transport-Security");
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
 
 export default worker;

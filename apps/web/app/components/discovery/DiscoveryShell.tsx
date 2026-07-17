@@ -12,6 +12,7 @@ import {
 } from "../../lib/discovery-query";
 import { parseEventPage, type EventPage } from "../../lib/event-contract";
 import { useI18n } from "../I18nProvider";
+import { usePreviewMode } from "../PreviewModeProvider";
 import { DiscoveryFilters } from "./DiscoveryFilters";
 import { DiscoveryToolbar } from "./DiscoveryToolbar";
 import { EventResults, type DiscoveryErrorKind } from "./EventResults";
@@ -23,15 +24,22 @@ export function DiscoveryShell({
   initialQuery,
   initialPage,
   initialError,
+  lockedRegion,
+  heading,
+  supportingText,
   mapStyleURL = process.env.NEXT_PUBLIC_MAP_STYLE_URL ?? "",
 }: {
   initialQuery: EventDiscoveryQuery;
   initialPage: EventPage | null;
   initialError?: string | null;
+  lockedRegion?: string;
+  heading?: string;
+  supportingText?: string;
   mapStyleURL?: string;
 }) {
   const { t } = useI18n();
-  const [query, setQuery] = useState(() => cleanQuery(initialQuery));
+  const isReadOnly = usePreviewMode() === "read-only";
+  const [query, setQuery] = useState(() => cleanQuery(initialQuery, lockedRegion));
   const [searchText, setSearchText] = useState(initialQuery.q ?? "");
   const [page, setPage] = useState<EventPage | null>(initialPage);
   const [mode, setMode] = useState<"list" | "map">("list");
@@ -48,11 +56,12 @@ export function DiscoveryShell({
   const viewerRevalidated = useRef(false);
 
   useEffect(() => {
+    if (isReadOnly) return;
     void trackProductEvent("discovery_viewed", {
       initialResultCount: initialPage?.items.length ?? 0,
       queryPresent: Boolean(initialQuery.q),
     });
-  }, [initialPage?.items.length, initialQuery.q]);
+  }, [initialPage?.items.length, initialQuery.q, isReadOnly]);
 
   const loadPage = useCallback(async (
     nextQuery: EventDiscoveryQuery,
@@ -82,11 +91,13 @@ export function DiscoveryShell({
           : result);
         setError(brokenCursor(result) ? "pagination" : null);
       });
-      void trackProductEvent("event_search_completed", {
-        queryPresent: Boolean(nextQuery.q),
-        resultCount: result.items.length,
-        page: append ? "next" : "first",
-      });
+      if (!isReadOnly) {
+        void trackProductEvent("event_search_completed", {
+          queryPresent: Boolean(nextQuery.q),
+          resultCount: result.items.length,
+          page: append ? "next" : "first",
+        });
+      }
     } catch (caught) {
       if (isAbortError(caught) || controller.signal.aborted || sequence !== requestSequence.current) return;
       setError(page ? "stale" : "initial");
@@ -97,23 +108,23 @@ export function DiscoveryShell({
         setLoadingMore(false);
       }
     }
-  }, [page]);
+  }, [isReadOnly, page]);
 
   useEffect(() => {
-    if (viewerRevalidated.current || !hasCurrentSession()) return;
+    if (isReadOnly || viewerRevalidated.current || !hasCurrentSession()) return;
     viewerRevalidated.current = true;
     void loadPage(query);
-  }, [loadPage, query]);
+  }, [isReadOnly, loadPage, query]);
 
   const commitQuery = useCallback((nextValue: EventDiscoveryQuery, history: "push" | "replace" = "push") => {
-    const next = cleanQuery(nextValue);
+    const next = cleanQuery(nextValue, lockedRegion);
     const params = serializeDiscoveryQuery(next);
     setQuery(next);
     setSearchText(next.q ?? "");
     const url = `${window.location.pathname}${params.size ? `?${params.toString()}` : ""}`;
     window.history[history === "push" ? "pushState" : "replaceState"](null, "", url);
     void loadPage(next);
-  }, [loadPage]);
+  }, [loadPage, lockedRegion]);
 
   const patchQuery = useCallback((patch: Partial<EventDiscoveryQuery>) => {
     commitQuery({ ...query, ...patch, cursor: undefined });
@@ -131,7 +142,10 @@ export function DiscoveryShell({
   useEffect(() => {
     const onPopState = () => {
       try {
-        const restored = cleanQuery(parseDiscoveryQuery(window.location.search));
+        const restored = cleanQuery(parseDiscoveryQuery(window.location.search), lockedRegion);
+        const restoredParams = serializeDiscoveryQuery(restored);
+        const restoredURL = `${window.location.pathname}${restoredParams.size ? `?${restoredParams.toString()}` : ""}`;
+        window.history.replaceState(null, "", restoredURL);
         setQuery(restored);
         setSearchText(restored.q ?? "");
         void loadPage(restored);
@@ -141,7 +155,7 @@ export function DiscoveryShell({
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, [loadPage, page]);
+  }, [loadPage, lockedRegion, page]);
 
   useEffect(() => () => requestRef.current?.abort(), []);
 
@@ -175,8 +189,8 @@ export function DiscoveryShell({
   return (
     <section className={styles.shell} aria-busy={loading || refreshing}>
       <header className={styles.intro}>
-        <h1>{t("discover.promise")}</h1>
-        <p>{t("discover.support")}</p>
+        <h1>{heading ?? t("discover.promise")}</h1>
+        <p>{supportingText ?? t("discover.support")}</p>
       </header>
 
       <DiscoveryToolbar
@@ -184,11 +198,17 @@ export function DiscoveryShell({
         searchText={searchText}
         mode={mode}
         mapEnabled={Boolean(mapStyleURL)}
+        regionLocked={Boolean(lockedRegion)}
         onSearchTextChange={setSearchText}
         onRegionChange={(region) => patchQuery({ region })}
         onModeChange={changeMode}
       />
-      <DiscoveryFilters query={query} onPatch={patchQuery} onReset={reset} />
+      <DiscoveryFilters
+        query={query}
+        regionLocked={Boolean(lockedRegion)}
+        onPatch={patchQuery}
+        onReset={reset}
+      />
 
       <div className={styles.resultsHeading}>
         <div>
@@ -222,8 +242,8 @@ export function DiscoveryShell({
   );
 }
 
-function cleanQuery(query: EventDiscoveryQuery): EventDiscoveryQuery {
-  const result = { ...query };
+function cleanQuery(query: EventDiscoveryQuery, lockedRegion?: string): EventDiscoveryQuery {
+  const result = { ...query, ...(lockedRegion ? { region: lockedRegion } : {}) };
   delete result.cursor;
   for (const key of Object.keys(result) as Array<keyof EventDiscoveryQuery>) {
     if (result[key] === undefined || result[key] === "") delete result[key];

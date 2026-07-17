@@ -5,6 +5,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Footer } from '../../components/Footer';
 import { EventCard } from '../../components/EventCard';
 import { useI18n } from '../../components/I18nProvider';
+import { usePreviewMode } from '../../components/PreviewModeProvider';
+import { ReadOnlyCommunityNotice } from '../../components/ReadOnlyCommunityNotice';
 import { normalizeEvent } from '../../lib/api';
 import type { EventView } from '../../lib/demo-data';
 import {
@@ -19,6 +21,7 @@ import { GroupDiscussion } from './GroupDiscussion';
 
 export function GroupExperience({ slug }: { slug: string }) {
   const { locale, t } = useI18n();
+  const isReadOnly = usePreviewMode() === 'read-only';
   const [group, setGroup] = useState<GroupView | null>(null);
   const [events, setEvents] = useState<EventView[]>([]);
   const [announcements, setAnnouncements] = useState<GroupAnnouncement[]>([]);
@@ -61,7 +64,7 @@ export function GroupExperience({ slug }: { slug: string }) {
   }, [load]);
 
   async function join() {
-    if (!group) return;
+    if (isReadOnly || !group) return;
     const session = readSession();
     if (!session) {
       window.location.assign(`/login?returnTo=${encodeURIComponent(`/g/${slug}`)}`);
@@ -95,7 +98,7 @@ export function GroupExperience({ slug }: { slug: string }) {
   }
 
   async function follow() {
-    if (!group) return;
+    if (isReadOnly || !group) return;
     if (!readSession()) {
       window.location.assign(`/login?returnTo=${encodeURIComponent(`/g/${slug}`)}`);
       return;
@@ -177,41 +180,46 @@ export function GroupExperience({ slug }: { slug: string }) {
               ))}
             </div>
           </div>
-          <div className="group-hero-actions">
-            {joined ? (
-              <span className="joined-badge">
-                ✓ {group.membershipStatus === 'pending' ? t('group.pending') : t('group.joined')}
-              </span>
-            ) : (
+          {!isReadOnly ? (
+            <div className="group-hero-actions">
+              {joined ? (
+                <span className="joined-badge">
+                  ✓ {group.membershipStatus === 'pending' ? t('group.pending') : t('group.joined')}
+                </span>
+              ) : (
+                <button
+                  className="primary-action compact"
+                  type="button"
+                  onClick={() => void join()}
+                  disabled={busy}
+                  aria-busy={busy}
+                >
+                  {busy ? t('common.loading') : t('group.join')}
+                </button>
+              )}
               <button
-                className="primary-action compact"
+                className={`secondary-action compact${group.viewerFollowing ? ' active' : ''}`}
                 type="button"
-                onClick={() => void join()}
+                onClick={() => void follow()}
                 disabled={busy}
+                aria-busy={busy}
               >
-                {busy ? t('common.loading') : t('group.join')}
+                {group.viewerFollowing
+                  ? locale === 'ja'
+                    ? 'フォロー中'
+                    : locale === 'en'
+                      ? 'Following'
+                      : '已关注'
+                  : locale === 'ja'
+                    ? 'グループをフォロー'
+                    : locale === 'en'
+                      ? 'Follow group'
+                      : '关注群组'}
               </button>
-            )}
-            <button
-              className={`secondary-action compact${group.viewerFollowing ? ' active' : ''}`}
-              type="button"
-              onClick={() => void follow()}
-              disabled={busy}
-            >
-              {group.viewerFollowing
-                ? locale === 'ja'
-                  ? 'フォロー中'
-                  : locale === 'en'
-                    ? 'Following'
-                    : '已关注'
-                : locale === 'ja'
-                  ? 'グループをフォロー'
-                  : locale === 'en'
-                    ? 'Follow group'
-                    : '关注群组'}
-            </button>
-          </div>
+            </div>
+          ) : null}
         </section>
+        {isReadOnly ? <ReadOnlyCommunityNotice /> : null}
         {message && (
           <p className="form-message group-message" role="alert">
             {message}

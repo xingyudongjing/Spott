@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { formatMessage, localeNames, locales, type Locale, type MessageKey } from "../i18n/messages";
+import { isTokyoPath, tokyoPath } from "../lib/city-locale";
 
 interface I18nValue {
   locale: Locale;
@@ -14,12 +15,30 @@ const I18nContext = createContext<I18nValue | null>(null);
 export function I18nProvider({ initialLocale, children }: { initialLocale: Locale; children: React.ReactNode }) {
   const [locale, setLocaleState] = useState(initialLocale);
 
+  useEffect(() => {
+    document.cookie = `spott_locale=${encodeURIComponent(initialLocale)}; Path=/; Max-Age=31536000; SameSite=Lax`;
+    if (!isTokyoPath(window.location.pathname)) return;
+    try {
+      window.localStorage.setItem("spott_locale", initialLocale);
+    } catch {
+      // Cookies remain the source of truth when storage is unavailable.
+    }
+  }, [initialLocale]);
+
   useEffect(() => { document.documentElement.lang = locale; }, [locale]);
 
   const setLocale = useCallback((next: Locale) => {
     setLocaleState(next);
-    window.localStorage.setItem("spott_locale", next);
+    try {
+      window.localStorage.setItem("spott_locale", next);
+    } catch {
+      // A hardened browser may deny storage; the locale cookie still works.
+    }
     document.cookie = `spott_locale=${encodeURIComponent(next)}; Path=/; Max-Age=31536000; SameSite=Lax`;
+    if (isTokyoPath(window.location.pathname)) {
+      window.location.assign(`${tokyoPath(next)}${window.location.search}${window.location.hash}`);
+      return;
+    }
     window.location.reload();
   }, []);
   const t = useCallback((key: MessageKey, values?: Record<string, string | number>) => formatMessage(locale, key, values), [locale]);

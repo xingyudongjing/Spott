@@ -1,13 +1,20 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 
 import { useI18n } from "../../components/I18nProvider";
-import { APIError, apiRequest, errorMessage, readSession, type RegistrationView } from "../../lib/client-api";
+import { trackProductEvent } from "../../lib/analytics";
+import {
+  APIError,
+  apiRequest,
+  errorMessage,
+  readSession,
+  subscribeSessionChanges,
+  type RegistrationView,
+} from "../../lib/client-api";
 import type { EventDetail } from "../../lib/event-contract";
 import { resolveEventCTA } from "../../lib/event-cta";
-import { fetchEvent } from "../../lib/events-api";
+import { fetchViewerEvent } from "../../lib/events-client";
 import {
   clearRegistrationDraft,
   gateDestination,
@@ -19,6 +26,7 @@ import {
 } from "../../lib/registration-draft";
 import { RegistrationConfirmation } from "./RegistrationConfirmation";
 import { DetailsForm, RegistrationUnavailable, ReviewForm } from "./RegistrationForms";
+import { RegistrationHeader } from "./RegistrationHeader";
 import styles from "./RegistrationFlow.module.css";
 import {
   registrationPartyLimit,
@@ -38,6 +46,8 @@ export function RegistrationFlow({
   const { t } = useI18n();
   const [liveEvent, setLiveEvent] = useState(event);
   const [gateReady, setGateReady] = useState(false);
+  const [gateError, setGateError] = useState(false);
+  const [gateAttempt, setGateAttempt] = useState(0);
   const [ownerUserId, setOwnerUserId] = useState<string | null>(null);
   const [step, setStep] = useState<RegistrationStep>("details");
   const [partySize, setPartySize] = useState(1);
@@ -56,6 +66,8 @@ export function RegistrationFlow({
   const restoredOnce = useRef(false);
   const submitting = useRef(false);
   const draftVersions = useRef(new Set([event.version]));
+  const ownerUserIdRef = useRef<string | null>(null);
+  const operationGeneration = useRef(0);
 
   const full = liveEvent.capacity > 0 && liveEvent.availableCapacity === 0;
   const partyLimit = registrationPartyLimit(liveEvent);
@@ -64,51 +76,158 @@ export function RegistrationFlow({
     phoneVerified: ownerUserId !== null,
   });
 
+  const invalidateForOwnerChange = useCallback(() => {
+    const nextOwnerUserId = readSession()?.user.id ?? null;
+    if (nextOwnerUserId === ownerUserIdRef.current) return;
+    operationGeneration.current += 1;
+    submitting.current = false;
+    restoredOnce.current = false;
+    ownerUserIdRef.current = null;
+    draftVersions.current = new Set([event.version]);
+    setOwnerUserId(null);
+    setLiveEvent(event);
+    setGateReady(false);
+    setGateError(false);
+    setStep("details");
+    setPartySize(1);
+    setAnswers({});
+    setAttendeeNote("");
+    setAcceptedTerms(event.fee?.isFree ?? true);
+    setIdempotencyKey("");
+    setQuote(null);
+    setQuoteLoading(false);
+    setResult(null);
+    setBusy(false);
+    setMessage("");
+    setFieldErrors({});
+    setNeedsReconfirmation(false);
+    setReconfirmed(false);
+    setGateAttempt((current) => current + 1);
+  }, [event]);
+
+  const captureOwnerOperation = useCallback(() => {
+    const session = readSession();
+    const owner = ownerUserIdRef.current;
+    if (!session || !owner || session.user.id !== owner) {
+      invalidateForOwnerChange();
+      return null;
+    }
+    return { generation: operationGeneration.current, userId: owner };
+  }, [invalidateForOwnerChange]);
+
+  const isOwnerOperationCurrent = useCallback((operation: { generation: number; userId: string }) => {
+    const session = readSession();
+    return operation.generation === operationGeneration.current
+      && ownerUserIdRef.current === operation.userId
+      && session?.user.id === operation.userId;
+  }, []);
+
+  const requestFreshQuote = useCallback(async (eventId: string) => {
+    const operation = captureOwnerOperation();
+    if (!operation) return null;
+    setQuoteLoading(true);
+    try {
+      const next = await apiRequest<RegistrationQuote>("/quotes", {
+        method: "POST",
+        authenticated: true,
+        body: JSON.stringify({ purpose: "registration", resourceId: eventId }),
+      });
+      if (!isOwnerOperationCurrent(operation)) return null;
+      setQuote(next);
+      return next;
+    } finally {
+      if (isOwnerOperationCurrent(operation)) setQuoteLoading(false);
+    }
+  }, [captureOwnerOperation, isOwnerOperationCurrent]);
+
   useEffect(() => {
     if (restoredOnce.current) return;
-    restoredOnce.current = true;
-    const session = readSession();
-    const currentOwnerUserId = session?.user.id ?? null;
-    const stored = loadRegistrationDraft(window.sessionStorage, event.id, event.version, currentOwnerUserId);
-    const key = stored?.idempotencyKey ?? window.crypto.randomUUID();
-    setOwnerUserId(currentOwnerUserId);
-    if (stored) {
-      setPartySize(Math.min(stored.partySize, registrationPartyLimit(event)));
-      setAnswers(stored.answers);
-      setAttendeeNote(stored.attendeeNote);
-      setAcceptedTerms(stored.acceptedTerms);
-      setStep(stored.step);
-    }
-    setIdempotencyKey(key);
-    const returnTo = `${window.location.pathname}${window.location.search}`;
-    saveRegistrationDraft(window.sessionStorage, {
-      ...(stored ?? {
-        partySize: 1,
-        answers: {},
-        attendeeNote: "",
-        acceptedTerms: event.fee?.isFree ?? true,
-        step: "details",
-        updatedAt: new Date().toISOString(),
-      }),
-      schemaVersion: REGISTRATION_DRAFT_SCHEMA_VERSION,
-      eventId: event.id,
-      eventVersion: event.version,
-      ownerUserId: currentOwnerUserId,
-      idempotencyKey: key,
-    });
-    const gate = gateDestination(readSession(), returnTo);
-    if (gate) {
-      (navigate ?? ((destination: string) => window.location.replace(destination)))(gate);
-      return;
-    }
-    setGateReady(true);
-    if (
-      stored?.step === "review"
-      && resolveEventCTA(event, { authenticated: true, phoneVerified: true }).intent === "register"
-    ) {
-      void requestFreshQuote(event.id).catch((error) => setMessage(errorMessage(error)));
-    }
-  }, [event, navigate]);
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        restoredOnce.current = true;
+        setGateError(false);
+        const session = readSession();
+        const currentOwnerUserId = session?.user.id ?? null;
+        ownerUserIdRef.current = currentOwnerUserId;
+        const stored = loadRegistrationDraft(window.sessionStorage, event.id, event.version, currentOwnerUserId);
+        const key = stored?.idempotencyKey ?? window.crypto.randomUUID();
+        setOwnerUserId(currentOwnerUserId);
+        if (stored) {
+          setPartySize(Math.min(stored.partySize, registrationPartyLimit(event)));
+          setAnswers(stored.answers);
+          setAttendeeNote(stored.attendeeNote);
+          setAcceptedTerms(stored.acceptedTerms);
+          setStep(stored.step);
+        }
+        setIdempotencyKey(key);
+        const returnTo = `${window.location.pathname}${window.location.search}`;
+        saveRegistrationDraft(window.sessionStorage, {
+          ...(stored ?? {
+            partySize: 1,
+            answers: {},
+            attendeeNote: "",
+            acceptedTerms: event.fee?.isFree ?? true,
+            step: "details",
+            updatedAt: new Date().toISOString(),
+          }),
+          schemaVersion: REGISTRATION_DRAFT_SCHEMA_VERSION,
+          eventId: event.id,
+          eventVersion: event.version,
+          ownerUserId: currentOwnerUserId,
+          idempotencyKey: key,
+        });
+        const gate = gateDestination(session, returnTo);
+        if (gate) {
+          (navigate ?? ((destination: string) => window.location.replace(destination)))(gate);
+          return;
+        }
+
+        let authorizedEvent: EventDetail;
+        try {
+          authorizedEvent = await fetchViewerEvent(event.id);
+        } catch (error) {
+          if (
+            !cancelled
+            && ownerUserIdRef.current === currentOwnerUserId
+            && readSession()?.user.id === currentOwnerUserId
+          ) {
+            setMessage(errorMessage(error));
+            setGateError(true);
+            setGateReady(false);
+          }
+          return;
+        }
+        if (
+          cancelled
+          || ownerUserIdRef.current !== currentOwnerUserId
+          || readSession()?.user.id !== currentOwnerUserId
+        ) return;
+        draftVersions.current.add(authorizedEvent.version);
+        setLiveEvent(authorizedEvent);
+        setPartySize((current) => Math.min(current, registrationPartyLimit(authorizedEvent)));
+        setAnswers((current) => answersForEvent(authorizedEvent, current));
+        if (registrationFeeTermsChanged(event, authorizedEvent)) {
+          setAcceptedTerms(authorizedEvent.fee?.isFree ?? true);
+        }
+
+        if (cancelled) return;
+        setGateReady(true);
+        if (
+          stored?.step === "review"
+          && resolveEventCTA(authorizedEvent, { authenticated: true, phoneVerified: true }).intent === "register"
+        ) {
+          void requestFreshQuote(authorizedEvent.id).catch((error) => setMessage(errorMessage(error)));
+        }
+      })();
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [event, gateAttempt, navigate, requestFreshQuote]);
+
+  useEffect(() => subscribeSessionChanges(invalidateForOwnerChange), [invalidateForOwnerChange]);
 
   useEffect(() => {
     if (!gateReady || !idempotencyKey || result) return;
@@ -145,6 +264,8 @@ export function RegistrationFlow({
   }, []);
 
   const requestQuote = useCallback(async (force = false) => {
+    const operation = captureOwnerOperation();
+    if (!operation) return null;
     if (!force && quote && Date.parse(quote.expiresAt) > Date.now() + 5_000) return quote;
     setQuoteLoading(true);
     try {
@@ -153,12 +274,13 @@ export function RegistrationFlow({
         authenticated: true,
         body: JSON.stringify({ purpose: "registration", resourceId: liveEvent.id }),
       });
+      if (!isOwnerOperationCurrent(operation)) return null;
       setQuote(next);
       return next;
     } finally {
-      setQuoteLoading(false);
+      if (isOwnerOperationCurrent(operation)) setQuoteLoading(false);
     }
-  }, [liveEvent.id, quote]);
+  }, [captureOwnerOperation, isOwnerOperationCurrent, liveEvent.id, quote]);
 
   function updateInput(update: () => void) {
     update();
@@ -168,20 +290,35 @@ export function RegistrationFlow({
     setMessage("");
   }
 
-  function validateDetails() {
+  function detailValidationErrors(
+    candidateEvent: EventDetail,
+    candidatePartySize: number,
+    candidateAcceptedTerms: boolean,
+    candidateAnswers: Record<string, RegistrationAnswer>,
+  ) {
     const errors: RegistrationFieldErrors = {};
-    if (!Number.isInteger(partySize) || partySize < 1 || partySize > partyLimit) {
-      errors.partySize = t("registration.partySizeError", { count: partyLimit });
+    const candidatePartyLimit = registrationPartyLimit(candidateEvent);
+    if (
+      !Number.isInteger(candidatePartySize)
+      || candidatePartySize < 1
+      || candidatePartySize > candidatePartyLimit
+    ) {
+      errors.partySize = t("registration.partySizeError", { count: candidatePartyLimit });
     }
-    for (const question of liveEvent.registrationQuestions) {
-      const answer = answers[question.id];
+    for (const question of candidateEvent.registrationQuestions) {
+      const answer = candidateAnswers[question.id];
       if (question.required && (answer === undefined || answer === "")) {
         errors[`answers.${question.id}`] = t("registration.fieldRequired");
       }
     }
-    if (liveEvent.fee && !liveEvent.fee.isFree && !acceptedTerms) {
+    if (candidateEvent.fee && !candidateEvent.fee.isFree && !candidateAcceptedTerms) {
       errors.acceptedTerms = t("registration.acceptError");
     }
+    return errors;
+  }
+
+  function validateDetails() {
+    const errors = detailValidationErrors(liveEvent, partySize, acceptedTerms, answers);
     setFieldErrors(errors);
     const first = Object.keys(errors)[0];
     if (first) {
@@ -195,6 +332,7 @@ export function RegistrationFlow({
 
   async function review(submission: FormEvent) {
     submission.preventDefault();
+    if (!captureOwnerOperation()) return;
     if (!validateDetails()) return;
     setStep("review");
     try {
@@ -205,6 +343,7 @@ export function RegistrationFlow({
   }
 
   async function retryQuote() {
+    if (!captureOwnerOperation()) return;
     setMessage("");
     try {
       await requestQuote(true);
@@ -216,6 +355,8 @@ export function RegistrationFlow({
   async function submitRegistration(submission: FormEvent) {
     submission.preventDefault();
     if (submitting.current) return;
+    const operation = captureOwnerOperation();
+    if (!operation) return;
     if (needsReconfirmation && !reconfirmed) {
       setMessage(t("registration.reconfirmRequired"));
       return;
@@ -225,6 +366,7 @@ export function RegistrationFlow({
     setMessage("");
     try {
       const activeQuote = await requestQuote();
+      if (!activeQuote || !isOwnerOperationCurrent(operation)) return;
       const registration = await apiRequest<RegistrationView>(`/events/${liveEvent.id}/registrations`, {
         method: "POST",
         authenticated: true,
@@ -232,10 +374,17 @@ export function RegistrationFlow({
         body: JSON.stringify({
           partySize,
           quoteId: activeQuote.id,
+          expectedEventVersion: liveEvent.version,
           joinWaitlistIfFull: full,
           attendeeNote: attendeeNote.trim() || undefined,
           answers,
         }),
+      });
+      if (!isOwnerOperationCurrent(operation)) return;
+      void trackProductEvent("registration_completed", {
+        eventId: liveEvent.id,
+        registrationStatus: registration.status,
+        partySize: registration.partySize,
       });
       clearLogicalDrafts();
       setResult(registration);
@@ -252,39 +401,51 @@ export function RegistrationFlow({
         setMessage(errorMessage(error));
       }
     } finally {
-      submitting.current = false;
-      setBusy(false);
+      if (isOwnerOperationCurrent(operation)) {
+        submitting.current = false;
+        setBusy(false);
+      }
     }
   }
 
   async function refreshAfterConflict() {
+    const operation = captureOwnerOperation();
+    if (!operation) return;
     try {
-      const session = readSession();
-      const refreshed = await fetchEvent(liveEvent.id, session ? { accessToken: session.accessToken } : undefined);
+      const refreshed = await fetchViewerEvent(liveEvent.id);
+      if (!isOwnerOperationCurrent(operation)) return;
+      const nextPartySize = Math.min(partySize, registrationPartyLimit(refreshed));
+      const feeTermsChanged = registrationFeeTermsChanged(liveEvent, refreshed);
+      const nextAcceptedTerms = feeTermsChanged
+        ? refreshed.fee?.isFree ?? true
+        : acceptedTerms;
+      const nextAnswers = answersForEvent(refreshed, answers);
+      const errors = detailValidationErrors(
+        refreshed,
+        nextPartySize,
+        nextAcceptedTerms,
+        nextAnswers,
+      );
+      const firstInvalidField = Object.keys(errors)[0];
+      const requiresDetails = feeTermsChanged || Boolean(firstInvalidField);
       draftVersions.current.add(refreshed.version);
       setLiveEvent(refreshed);
-      setPartySize((current) => Math.min(current, registrationPartyLimit(refreshed)));
+      setPartySize(nextPartySize);
+      setAnswers(nextAnswers);
+      setAcceptedTerms(nextAcceptedTerms);
+      setFieldErrors(errors);
       setQuote(null);
       setNeedsReconfirmation(true);
       setReconfirmed(false);
       setMessage(t("registration.changed"));
+      if (requiresDetails) {
+        setStep("details");
+        if (firstInvalidField) focusField(firstInvalidField);
+        return;
+      }
       await requestFreshQuote(refreshed.id);
     } catch (refreshError) {
-      setMessage(errorMessage(refreshError));
-    }
-  }
-
-  async function requestFreshQuote(eventId: string) {
-    setQuoteLoading(true);
-    try {
-      const next = await apiRequest<RegistrationQuote>("/quotes", {
-        method: "POST",
-        authenticated: true,
-        body: JSON.stringify({ purpose: "registration", resourceId: eventId }),
-      });
-      setQuote(next);
-    } finally {
-      setQuoteLoading(false);
+      if (isOwnerOperationCurrent(operation)) setMessage(errorMessage(refreshError));
     }
   }
 
@@ -321,24 +482,54 @@ export function RegistrationFlow({
     }, 0);
   }
 
+  function retryGate() {
+    restoredOnce.current = false;
+    setGateError(false);
+    setGateReady(false);
+    setMessage("");
+    setGateAttempt((current) => current + 1);
+  }
+
+  if (gateError) {
+    return (
+      <main className={styles.page}>
+        <RegistrationHeader eventSlug={liveEvent.publicSlug} />
+        <section className={styles.unavailable}>
+          <p className={styles.eyebrow}>{t("registration.completeStep")}</p>
+          <h1>{t("registration.loadErrorTitle")}</h1>
+          <p>{t("registration.loadErrorBody")}</p>
+          {message ? <p className={styles.gateErrorDetail} role="alert">{message}</p> : null}
+          <button className={styles.confirmationPrimary} type="button" onClick={retryGate}>{t("common.retry")}</button>
+        </section>
+      </main>
+    );
+  }
   if (!gateReady) {
-    return <main className={styles.page}><p className={styles.gateStatus} role="status">{t("registration.gateLoading")}</p></main>;
+    return (
+      <main className={styles.page}>
+        <RegistrationHeader eventSlug={liveEvent.publicSlug} />
+        <p className={styles.gateStatus} role="status">{t("registration.gateLoading")}</p>
+      </main>
+    );
   }
   if (result) return <RegistrationConfirmation event={liveEvent} registration={result} />;
   if (registrationCTA.intent !== "register") return <RegistrationUnavailable event={liveEvent} />;
 
   return (
     <main className={styles.page}>
-      <header className={styles.header}>
-        <Link className={styles.wordmark} href="/discover">Spott</Link>
-        <Link className={styles.back} href={`/e/${liveEvent.publicSlug}`}>← {t("registration.backEvent")}</Link>
-      </header>
+      <RegistrationHeader eventSlug={liveEvent.publicSlug} />
       <div className={styles.shell}>
-        <div className={styles.progress} aria-label={t("registration.progress")}>
-          <span aria-current={step === "details" ? "step" : undefined}>1</span>
-          <i />
-          <span aria-current={step === "review" ? "step" : undefined}>2</span>
-        </div>
+        <ol className={styles.progress} aria-label={t("registration.progress")}>
+          <li aria-current={step === "details" ? "step" : undefined}>
+            <span aria-hidden="true">1</span>
+            <span className="sr-only">{t("registration.detailsStep")}</span>
+          </li>
+          <li className={styles.progressConnector} aria-hidden="true" />
+          <li aria-current={step === "review" ? "step" : undefined}>
+            <span aria-hidden="true">2</span>
+            <span className="sr-only">{t("registration.reviewStep")}</span>
+          </li>
+        </ol>
         {step === "details" ? (
           <DetailsForm
             event={liveEvent}
@@ -377,4 +568,25 @@ export function RegistrationFlow({
       </div>
     </main>
   );
+}
+
+function registrationFeeTermsChanged(previous: EventDetail, next: EventDetail) {
+  const previousFee = previous.fee;
+  const nextFee = next.fee;
+  return previousFee?.isFree !== nextFee?.isFree
+    || previousFee?.amountJPY !== nextFee?.amountJPY
+    || previousFee?.collectorName !== nextFee?.collectorName
+    || previousFee?.method !== nextFee?.method
+    || previousFee?.paymentDeadlineText !== nextFee?.paymentDeadlineText
+    || previousFee?.refundPolicy !== nextFee?.refundPolicy;
+}
+
+function answersForEvent(
+  event: EventDetail,
+  answers: Record<string, RegistrationAnswer>,
+) {
+  const liveQuestionIds = new Set(event.registrationQuestions.map((question) => question.id));
+  return Object.fromEntries(
+    Object.entries(answers).filter(([questionId]) => liveQuestionIds.has(questionId)),
+  ) as Record<string, RegistrationAnswer>;
 }

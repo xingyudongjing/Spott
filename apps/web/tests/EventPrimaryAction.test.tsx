@@ -2,6 +2,7 @@ import { screen } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 
 import { EventPrimaryAction } from "../app/e/[slug]/EventActions";
+import { PreviewModeProvider } from "../app/components/PreviewModeProvider";
 import type { EventCTA } from "../app/lib/event-cta";
 import { makeEvent, renderWithI18n } from "./event-fixtures";
 
@@ -59,5 +60,21 @@ describe("rendered strict CTA states", () => {
     );
     expect(screen.getByRole("button", { name: "活动暂不可参加" })).toBeDisabled();
     expect(screen.queryByRole("link", { name: "活动暂不可参加" })).not.toBeInTheDocument();
+  });
+
+  test("keeps the public HTTP preview from entering a write flow", () => {
+    renderWithI18n(
+      <PreviewModeProvider initialMode="read-only">
+        <EventPrimaryAction
+          cta={{ kind: "register", intent: "register", disabled: false }}
+          event={makeEvent()}
+          busy={false}
+          onAccept={vi.fn()}
+        />
+      </PreviewModeProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "内部测试入口可报名" })).toBeDisabled();
+    expect(screen.queryByRole("link", { name: "报名参加" })).not.toBeInTheDocument();
   });
 });

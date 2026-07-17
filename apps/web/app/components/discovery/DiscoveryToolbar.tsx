@@ -12,6 +12,7 @@ export function DiscoveryToolbar({
   searchText,
   mode,
   mapEnabled,
+  regionLocked = false,
   onSearchTextChange,
   onRegionChange,
   onModeChange,
@@ -20,6 +21,7 @@ export function DiscoveryToolbar({
   searchText: string;
   mode: "list" | "map";
   mapEnabled: boolean;
+  regionLocked?: boolean;
   onSearchTextChange: (value: string) => void;
   onRegionChange: (value: string | undefined) => void;
   onModeChange: (mode: "list" | "map") => void;
@@ -54,6 +56,7 @@ export function DiscoveryToolbar({
         <span className="sr-only">{t("discover.region")}</span>
         <select
           value={query.region ?? ""}
+          disabled={regionLocked}
           onChange={(event) => onRegionChange(event.target.value || undefined)}
           aria-label={t("discover.region")}
         >

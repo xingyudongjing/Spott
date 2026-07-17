@@ -27,12 +27,16 @@ const categories = [
   ["networking", "filter.categoryNetworking"],
 ] as const;
 
+const regions = ["", "tokyo", "kanagawa", "saitama", "chiba", "osaka", "kyoto"] as const;
+
 export function DiscoveryFilters({
   query,
+  regionLocked = false,
   onPatch,
   onReset,
 }: {
   query: EventDiscoveryQuery;
+  regionLocked?: boolean;
   onPatch: (patch: Partial<EventDiscoveryQuery>) => void;
   onReset: () => void;
 }) {
@@ -42,18 +46,20 @@ export function DiscoveryFilters({
   const [dialogOpen, setDialogOpen] = useState(false);
   const dialogTitleId = useId();
   const dateErrorId = useId();
-  const hasDate = Boolean(query.startsAfter || query.startsBefore);
+  const weekendRange = resolveDateShortcut("this_weekend", "Asia/Tokyo");
+  const weekendSelected = query.startsAfter === weekendRange.startsAfter
+    && query.startsBefore === weekendRange.startsBefore;
   const startDate = dateInputValue(query.startsAfter);
   const endDate = dateInputValue(query.startsBefore, true);
   const [endDateDraft, setEndDateDraft] = useState(endDate);
   const [dateRangeInvalid, setDateRangeInvalid] = useState(false);
 
   const toggleWeekend = () => {
-    if (hasDate) {
+    if (weekendSelected) {
       onPatch({ startsAfter: undefined, startsBefore: undefined });
       return;
     }
-    onPatch(resolveDateShortcut("this_weekend", "Asia/Tokyo"));
+    onPatch(weekendRange);
   };
   const closeDialog = useCallback(() => {
     const dialog = dialogRef.current;
@@ -81,7 +87,7 @@ export function DiscoveryFilters({
   return (
     <div className={styles.filters}>
       <div className={styles.filterRail} role="group" aria-label={t("discover.when")}>
-        <button type="button" aria-pressed={hasDate} onClick={toggleWeekend}>
+        <button type="button" aria-pressed={weekendSelected} onClick={toggleWeekend}>
           <span aria-hidden="true">▣</span>{t("discover.weekend")}
         </button>
         <button
@@ -161,6 +167,21 @@ export function DiscoveryFilters({
             <button type="button" onClick={closeDialog} aria-label={t("common.close")}>×</button>
           </div>
           <div className={styles.advancedPanel}>
+            <label>
+              <span>{t("discover.region")}</span>
+              <select
+                value={query.region ?? ""}
+                disabled={regionLocked}
+                aria-label={t("discover.region")}
+                onChange={(event) => onPatch({ region: event.target.value || undefined })}
+              >
+                {regions.map((value) => (
+                  <option key={value || "all"} value={value}>
+                    {t(value ? `region.${value}` as "region.tokyo" : "region.all")}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className={styles.dateFields}>
               <label>
                 <span>{t("discover.startDate")}</span>

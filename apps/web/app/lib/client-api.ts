@@ -30,7 +30,13 @@ type APIRequestInit = RequestInit & {
   ifMatch?: number;
 };
 
-const refreshesInFlight = new Map<string, Promise<WebSession | null>>();
+type SessionGeneration = { readonly marker: symbol };
+type SessionState = { session: WebSession | null; generation: SessionGeneration };
+type RequestSessionContext = { readonly generation: SessionGeneration };
+
+let observedSessionKey: string | null | undefined;
+let observedSessionGeneration: SessionGeneration = { marker: Symbol("spott-session-generation") };
+const refreshesInFlight = new Map<SessionGeneration, Promise<WebSession | null>>();
 
 export interface APIErrorBody {
   code?: string;
@@ -40,12 +46,54 @@ export interface APIErrorBody {
   meta?: Record<string, unknown>;
 }
 
+type ClientCopyKey =
+  | "authRequired"
+  | "operationFailed"
+  | "requestFailed"
+  | "sessionChanged";
+
+function currentClientLocale(): "zh-Hans" | "ja" | "en" {
+  const language = typeof document !== "undefined"
+    ? document.documentElement.lang
+    : typeof navigator !== "undefined"
+      ? navigator.language
+      : "zh-Hans";
+  if (language.toLowerCase().startsWith("ja")) return "ja";
+  if (language.toLowerCase().startsWith("en")) return "en";
+  return "zh-Hans";
+}
+
+function clientCopy(key: ClientCopyKey, status?: number): string {
+  const locale = currentClientLocale();
+  const copy = {
+    "zh-Hans": {
+      authRequired: "请先登录。",
+      operationFailed: "操作没有成功，请稍后再试。",
+      requestFailed: `请求失败（${status ?? "-"}）`,
+      sessionChanged: "登录账号已切换，请重试当前操作。",
+    },
+    ja: {
+      authRequired: "先にログインしてください。",
+      operationFailed: "操作を完了できませんでした。しばらくしてからもう一度お試しください。",
+      requestFailed: `リクエストに失敗しました（${status ?? "-"}）`,
+      sessionChanged: "ログイン中のアカウントが変わりました。もう一度お試しください。",
+    },
+    en: {
+      authRequired: "Please sign in first.",
+      operationFailed: "We could not complete that action. Please try again shortly.",
+      requestFailed: `Request failed (${status ?? "-"})`,
+      sessionChanged: "The signed-in account changed. Please try that action again.",
+    },
+  } as const;
+  return copy[locale][key];
+}
+
 export class APIError extends Error {
   constructor(
     public readonly status: number,
     public readonly body: APIErrorBody,
   ) {
-    super(body.message ?? "请求没有成功，请稍后重试。");
+    super(body.message ?? clientCopy("operationFailed"));
   }
 }
 
@@ -195,6 +243,10 @@ export function readSession(): WebSession | null {
 }
 
 export function saveSession(session: WebSession): void {
+  persistSession(session, { marker: Symbol("spott-session-generation") });
+}
+
+function persistSession(session: WebSession, generation: SessionGeneration): void {
   volatileSession = session;
   try {
     window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
@@ -202,6 +254,8 @@ export function saveSession(session: WebSession): void {
   } catch {
     volatileSessionIsAuthoritative = true;
   }
+  observedSessionKey = sessionAuthenticationKey(session);
+  observedSessionGeneration = generation;
   window.dispatchEvent(new CustomEvent("spott:session", { detail: session }));
 }
 
@@ -219,7 +273,23 @@ export function clearSession(): void {
       volatileSessionIsAuthoritative = true;
     }
   }
+  observedSessionKey = null;
+  observedSessionGeneration = { marker: Symbol("spott-session-generation") };
   window.dispatchEvent(new CustomEvent("spott:session", { detail: null }));
+}
+
+export function subscribeSessionChanges(listener: () => void): () => void {
+  if (typeof window === "undefined") return () => undefined;
+  const onSession = () => listener();
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === null || event.key === SESSION_KEY) listener();
+  };
+  window.addEventListener("spott:session", onSession);
+  window.addEventListener("storage", onStorage);
+  return () => {
+    window.removeEventListener("spott:session", onSession);
+    window.removeEventListener("storage", onStorage);
+  };
 }
 
 function sameSessionIdentity(left: WebSession | null, right: WebSession | null): boolean {
@@ -239,20 +309,48 @@ function sameSessionSnapshot(left: WebSession | null, right: WebSession | null):
   );
 }
 
+function sessionAuthenticationKey(session: WebSession | null): string | null {
+  return session
+    ? [session.user.id, session.sessionId, session.accessToken, session.refreshToken].join("\u0000")
+    : null;
+}
+
+function currentSessionState(): SessionState {
+  const session = readSession();
+  const key = sessionAuthenticationKey(session);
+  if (observedSessionKey === undefined) {
+    observedSessionKey = key;
+  } else if (observedSessionKey !== key) {
+    observedSessionKey = key;
+    observedSessionGeneration = { marker: Symbol("spott-session-generation") };
+  }
+  return { session, generation: observedSessionGeneration };
+}
+
+function assertRequestSession(context: RequestSessionContext): WebSession | null {
+  const current = currentSessionState();
+  if (current.generation !== context.generation) throw sessionChangedError();
+  return current.session;
+}
+
 function sessionChangedError(): APIError {
   return new APIError(401, {
     code: "SESSION_CHANGED",
-    message: "登录账号已切换，请重试当前操作。",
+    message: clientCopy("sessionChanged"),
   });
 }
 
-function clearSessionIfCurrent(session: WebSession): void {
-  if (sameSessionSnapshot(readSession(), session)) clearSession();
+function clearSessionIfCurrent(session: WebSession, context?: RequestSessionContext): void {
+  const current = currentSessionState();
+  if (
+    (!context || current.generation === context.generation)
+    && sameSessionSnapshot(current.session, session)
+  ) clearSession();
 }
 
 export function requireLogin(returnTo = window.location.pathname): never {
   window.location.assign(`/login?returnTo=${encodeURIComponent(returnTo)}`);
-  throw new APIError(401, { code: "AUTH_REQUIRED", message: "请先登录。" });
+  throw new APIError(401, { code: "AUTH_REQUIRED", message: clientCopy("authRequired") });
 }
 
 export async function apiRequest<T>(
@@ -262,19 +360,22 @@ export async function apiRequest<T>(
   const headers = new Headers(init.headers);
   if (init.idempotencyKey) headers.set("Idempotency-Key", init.idempotencyKey);
   else if (init.idempotent && !headers.has("Idempotency-Key")) headers.set("Idempotency-Key", crypto.randomUUID());
-  return apiRequestAttempt<T>(path, { ...init, headers }, true, null);
+  const initial = currentSessionState();
+  const requestContext = initial.session ? { generation: initial.generation } : null;
+  return apiRequestAttempt<T>(path, { ...init, headers }, true, requestContext);
 }
 
 async function apiRequestAttempt<T>(
   path: string,
   init: APIRequestInit,
   allowRefresh: boolean,
-  requestSession: WebSession | null,
+  requestContext: RequestSessionContext | null,
 ): Promise<T> {
-  const session = readSession();
-  if (requestSession && !sameSessionIdentity(session, requestSession)) throw sessionChangedError();
+  const state = currentSessionState();
+  if (requestContext && state.generation !== requestContext.generation) throw sessionChangedError();
+  const session = state.session;
   if (init.authenticated && !session) requireLogin();
-  const ownerSession = requestSession ?? session;
+  const ownerContext = requestContext ?? (session ? { generation: state.generation } : null);
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   headers.set("X-Spott-Device-Id", deviceId());
@@ -283,77 +384,100 @@ async function apiRequestAttempt<T>(
   if (init.ifMatch !== undefined) headers.set("If-Match", `\"${init.ifMatch}\"`);
 
   const response = await fetch(`${apiBase()}${path}`, { ...init, headers, credentials: "include" });
+  if (ownerContext) assertRequestSession(ownerContext);
   if (response.status === 401 && session && path !== "/auth/refresh") {
     if (allowRefresh) {
-      const latestSession = readSession();
-      if (ownerSession && !sameSessionIdentity(latestSession, ownerSession)) throw sessionChangedError();
+      const latestSession = ownerContext ? assertRequestSession(ownerContext) : readSession();
       if (latestSession && !sameSessionSnapshot(latestSession, session)) {
-        return apiRequestAttempt<T>(path, init, false, ownerSession);
+        return apiRequestAttempt<T>(path, init, false, ownerContext);
       }
-      if (latestSession) {
-        const refreshed = await refreshSessionOnce(latestSession);
-        if (ownerSession && !sameSessionIdentity(readSession(), ownerSession)) throw sessionChangedError();
-        if (refreshed) return apiRequestAttempt<T>(path, init, false, ownerSession);
+      if (latestSession && ownerContext) {
+        const refreshed = await refreshSessionOnce(latestSession, ownerContext);
+        assertRequestSession(ownerContext);
+        if (refreshed) return apiRequestAttempt<T>(path, init, false, ownerContext);
       }
     } else {
-      clearSessionIfCurrent(session);
+      clearSessionIfCurrent(session, ownerContext ?? undefined);
     }
   }
   if (!response.ok) {
     let body: APIErrorBody = {};
     try {
       const payload = (await response.json()) as APIErrorBody & { error?: APIErrorBody };
+      if (ownerContext) assertRequestSession(ownerContext);
       body = payload.error ?? payload;
     } catch {
-      body = { message: `请求失败（${response.status}）` };
+      if (ownerContext) assertRequestSession(ownerContext);
+      body = { message: clientCopy("requestFailed", response.status) };
     }
     throw new APIError(response.status, body);
   }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+  if (response.status === 204) {
+    if (ownerContext) assertRequestSession(ownerContext);
+    return undefined as T;
+  }
+  const payload = (await response.json()) as T;
+  if (ownerContext) assertRequestSession(ownerContext);
+  return payload;
 }
 
-async function refreshSession(session: WebSession): Promise<WebSession | null> {
+async function refreshSession(
+  session: WebSession,
+  context: RequestSessionContext,
+): Promise<WebSession | null> {
   const response = await fetch(`${apiBase()}/auth/refresh`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Spott-Device-Id": deviceId() },
     body: JSON.stringify({ refreshToken: session.refreshToken, deviceId: deviceId() }),
   });
+  let currentSession: WebSession | null;
+  try {
+    currentSession = assertRequestSession(context);
+  } catch {
+    return null;
+  }
   if (!response.ok) {
-    const currentSession = readSession();
     if (!sameSessionSnapshot(currentSession, session) && sameSessionIdentity(currentSession, session)) {
       return currentSession;
     }
-    clearSessionIfCurrent(session);
+    clearSessionIfCurrent(session, context);
     return null;
   }
   const refreshed = (await response.json()) as WebSession;
-  const currentSession = readSession();
+  try {
+    currentSession = assertRequestSession(context);
+  } catch {
+    return null;
+  }
   if (!sameSessionSnapshot(currentSession, session)) {
     return sameSessionIdentity(currentSession, session) ? currentSession : null;
   }
-  if (!sameSessionIdentity(refreshed, session)) return null;
-  saveSession(refreshed);
+  if (refreshed.user.id !== session.user.id) return null;
+  persistSession(refreshed, context.generation);
   return refreshed;
 }
 
-function refreshSessionOnce(session: WebSession): Promise<WebSession | null> {
-  const generation = `${session.user.id}:${session.sessionId}:${session.refreshToken}`;
-  let refresh = refreshesInFlight.get(generation);
+function refreshSessionOnce(
+  session: WebSession,
+  context: RequestSessionContext,
+): Promise<WebSession | null> {
+  let refresh = refreshesInFlight.get(context.generation);
   if (!refresh) {
-    refresh = refreshSession(session).finally(() => {
-      refreshesInFlight.delete(generation);
+    refresh = refreshSession(session, context).finally(() => {
+      refreshesInFlight.delete(context.generation);
     });
-    refreshesInFlight.set(generation, refresh);
+    refreshesInFlight.set(context.generation, refresh);
   }
   return refresh;
 }
 
 export async function refreshCurrentSession(): Promise<WebSession | null> {
-  const session = readSession();
-  return session ? refreshSessionOnce(session) : null;
+  const current = currentSessionState();
+  return current.session
+    ? refreshSessionOnce(current.session, { generation: current.generation })
+    : null;
 }
 
 export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "操作没有成功，请稍后再试。";
+  return error instanceof Error ? error.message : clientCopy("operationFailed");
 }

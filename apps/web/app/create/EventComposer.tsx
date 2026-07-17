@@ -2,13 +2,24 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppDialog } from "../components/AppDialog";
 import { useI18n } from "../components/I18nProvider";
 import type { Locale } from "../i18n/messages";
 import { trackProductEvent } from "../lib/analytics";
-import { apiRequest, errorMessage, readSession } from "../lib/client-api";
+import {
+  apiRequest,
+  errorMessage,
+  readSession,
+  subscribeSessionChanges,
+} from "../lib/client-api";
 import type { EventView } from "../lib/demo-data";
+import {
+  createMediaUploadAttempt,
+  uploadProcessedImage,
+  type MediaUploadAttempt,
+} from "../lib/media-upload";
+import { composerDraftStorageKey, parseComposerDraft } from "./event-composer-draft";
 
 type QuestionKind = "text" | "single_choice" | "boolean";
 
@@ -147,58 +158,99 @@ export function EventComposer() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [submitted, setSubmitted] = useState<RemoteEvent | null>(null);
+  const [draftOwnerId, setDraftOwnerId] = useState<string | null>(null);
+  const [draftHydrated, setDraftHydrated] = useState(false);
+  const uploadAttempts = useRef(new WeakMap<File, MediaUploadAttempt>());
 
   useEffect(() => {
-    const session = readSession();
-    if (!session) {
-      window.location.replace(`/login?returnTo=${encodeURIComponent("/create")}`);
-      return;
-    }
-    if (!session.user.phoneVerified) {
-      window.location.replace(`/phone-verification?returnTo=${encodeURIComponent("/create")}`);
-      return;
-    }
+    let activeOwnerId: string | null = null;
 
-    const saved = window.localStorage.getItem("spott.event-composer.v2");
-    if (saved) {
-      try {
-        const value = JSON.parse(saved) as {
-          draft?: Partial<DraftState> & { registrationQuestion?: string };
-          remote?: RemoteEvent;
-          uploadedNames?: string[];
-        };
+    const clearPrivateComposerState = () => {
+      setDraft(initialDraft);
+      setRemote(null);
+      setGroups([]);
+      setCovers([]);
+      setCoverPreviews((current) => {
+        current.forEach((url) => URL.revokeObjectURL(url));
+        return [];
+      });
+      setUploadedNames([]);
+      setRemoteCoverURL("");
+      setStep(0);
+      setMessage("");
+      setSubmitted(null);
+      uploadAttempts.current = new WeakMap<File, MediaUploadAttempt>();
+    };
+
+    const hydrateCurrentOwner = () => {
+      const session = readSession();
+      if (!session) {
+        activeOwnerId = null;
+        setDraftHydrated(false);
+        setDraftOwnerId(null);
+        clearPrivateComposerState();
+        window.location.replace(`/login?returnTo=${encodeURIComponent("/create")}`);
+        return;
+      }
+      if (!session.user.phoneVerified) {
+        activeOwnerId = null;
+        setDraftHydrated(false);
+        setDraftOwnerId(null);
+        clearPrivateComposerState();
+        window.location.replace(`/phone-verification?returnTo=${encodeURIComponent("/create")}`);
+        return;
+      }
+      if (activeOwnerId === session.user.id) return;
+
+      activeOwnerId = session.user.id;
+      setDraftHydrated(false);
+      setDraftOwnerId(session.user.id);
+      clearPrivateComposerState();
+
+      const storageKey = composerDraftStorageKey(session.user.id);
+      const source = window.localStorage.getItem(storageKey);
+      const value = parseComposerDraft<DraftState, RemoteEvent>(source);
+      if (source && !value) window.localStorage.removeItem(storageKey);
+      if (value) {
         const oldQuestion = value.draft?.registrationQuestion?.trim();
         const registrationQuestions = Array.isArray(value.draft?.registrationQuestions)
           ? value.draft.registrationQuestions
           : oldQuestion
             ? [newQuestion(oldQuestion)]
             : [];
-        window.setTimeout(() => {
-          setDraft({ ...initialDraft, ...value.draft, registrationQuestions });
-          setUploadedNames(value.uploadedNames ?? []);
-          if (value.remote) {
-            setRemote(value.remote);
-            void apiRequest<EventView>(`/events/${value.remote.id}`, { authenticated: true })
-              .then((event) => setRemoteCoverURL(event.coverURL ?? ""))
-              .catch(() => undefined);
-          }
-        }, 0);
-      } catch {
-        // Ignore a corrupted local draft and start from a safe blank state.
+        setDraft({ ...initialDraft, ...value.draft, registrationQuestions });
+        setUploadedNames(value.uploadedNames ?? []);
+        if (value.remote) {
+          setRemote(value.remote);
+          void apiRequest<EventView>(`/events/${value.remote.id}`, { authenticated: true })
+            .then((event) => {
+              if (readSession()?.user.id === session.user.id) {
+                setRemoteCoverURL(event.coverURL ?? "");
+              }
+            })
+            .catch(() => undefined);
+        }
       }
-    }
+      setDraftHydrated(true);
 
-    apiRequest<{ items: GroupOption[] }>("/me/groups", { authenticated: true })
-      .then((payload) => setGroups(payload.items))
-      .catch(() => undefined);
+      apiRequest<{ items: GroupOption[] }>("/me/groups", { authenticated: true })
+        .then((payload) => {
+          if (readSession()?.user.id === session.user.id) setGroups(payload.items);
+        })
+        .catch(() => undefined);
+    };
+
+    hydrateCurrentOwner();
+    return subscribeSessionChanges(hydrateCurrentOwner);
   }, []);
 
   useEffect(() => {
+    if (!draftHydrated || !draftOwnerId) return;
     window.localStorage.setItem(
-      "spott.event-composer.v2",
+      composerDraftStorageKey(draftOwnerId),
       JSON.stringify({ draft, remote, uploadedNames }),
     );
-  }, [draft, remote, uploadedNames]);
+  }, [draft, draftHydrated, draftOwnerId, remote, uploadedNames]);
 
   useEffect(
     () => () => coverPreviews.forEach((url) => URL.revokeObjectURL(url)),
@@ -277,52 +329,24 @@ export function EventComposer() {
   }
 
   async function uploadPendingCovers(eventId: string) {
+    if (!draftOwnerId) throw new Error(tr(locale, "登录状态已变化，请重试。", "ログイン状態が変更されました。もう一度お試しください。", "Your session changed. Please try again."));
     const pending = covers.filter((file) => !uploadedNames.includes(file.name));
     for (const [index, file] of pending.entries()) {
-      const intent = await apiRequest<{
-        assetId: string;
-        uploadUrl: string;
-        method: string;
-        requiredHeaders: Record<string, string>;
-      }>("/media/upload-intents", {
-        method: "POST",
-        authenticated: true,
-        body: JSON.stringify({
-          purpose: "event_cover",
-          filename: file.name,
-          mimeType: file.type,
-          byteSize: file.size,
-          focalX: 0.5,
-          focalY: 0.5,
-        }),
-      });
-      const uploaded = await fetch(intent.uploadUrl, {
-        method: intent.method,
-        headers: intent.requiredHeaders,
-        body: file,
-      });
-      if (!uploaded.ok)
-        throw new Error(
-          tr(
-            locale,
-            "封面上传失败，请检查网络后重试。",
-            "画像をアップロードできませんでした。通信を確認してもう一度お試しください。",
-            "The image upload failed. Check your connection and try again.",
-          ),
-        );
-      const hash = await sha256(file);
-      await apiRequest(`/media/${intent.assetId}/complete`, {
-        method: "POST",
-        authenticated: true,
-        headers: { "X-Content-SHA256": hash },
-      });
-      await apiRequest(`/media/${intent.assetId}/attach/event/${eventId}`, {
-        method: "POST",
-        authenticated: true,
-        body: JSON.stringify({
+      let attempt = uploadAttempts.current.get(file);
+      if (!attempt) {
+        attempt = createMediaUploadAttempt(file, "event_cover", draftOwnerId);
+        uploadAttempts.current.set(file, attempt);
+      }
+      await uploadProcessedImage({
+        file,
+        purpose: "event_cover",
+        ownerGeneration: draftOwnerId,
+        attempt,
+        attachPath: (assetId) => `/media/${assetId}/attach/event/${eventId}`,
+        attachBody: {
           kind: index === 0 && uploadedNames.length === 0 ? "cover" : "gallery",
           sortOrder: uploadedNames.length + index,
-        }),
+        },
       });
       setUploadedNames((names) => [...names, file.name]);
     }
@@ -408,7 +432,9 @@ export function EventComposer() {
             region: draft.regionId,
             status: result.status,
           });
-          window.localStorage.removeItem("spott.event-composer.v2");
+          if (draftOwnerId) {
+            window.localStorage.removeItem(composerDraftStorageKey(draftOwnerId));
+          }
         },
       });
     } catch (error) {
@@ -1504,11 +1530,4 @@ function tr(locale: Locale, zh: string, ja: string, en: string): string {
 
 function toISO(value: string): string | undefined {
   return value ? new Date(value).toISOString() : undefined;
-}
-
-async function sha256(file: File): Promise<string> {
-  const value = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
-  return Array.from(new Uint8Array(value))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
 }

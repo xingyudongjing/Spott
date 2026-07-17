@@ -75,7 +75,12 @@
   gap: 11px;
 }
 
-.locale { min-width: 52px; }
+.locale {
+  display: inline-flex;
+  min-width: 52px;
+  min-height: 44px;
+  align-items: center;
+}
 .notification {
   position: relative;
   display: grid;
@@ -116,6 +121,30 @@
 
 .mobileDock { display: none; }
 
+.previewBanner {
+  position: relative;
+  z-index: 50;
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 9px max(20px, calc((100vw - 1180px) / 2));
+  border-bottom: 1px solid color-mix(in srgb, var(--spott-coral) 28%, var(--spott-divider));
+  background: color-mix(in srgb, var(--spott-coral) 9%, var(--spott-surface));
+  color: var(--spott-ink);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+}
+.previewBanner strong {
+  flex: none;
+  color: var(--spott-coral-strong);
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
 @media (max-width: 960px) {
   .header { grid-template-columns: minmax(205px, 1fr) auto; }
   .desktopNav { display: none; }
@@ -139,9 +168,13 @@
     font-size: 12px;
   }
   .actions { gap: 0; }
-  .locale,
   .account,
   .create { display: none; }
+  .locale {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+  }
   .notification {
     border-color: transparent;
     background: transparent;
@@ -162,6 +195,14 @@
     box-shadow: 0 -12px 32px rgb(14 16 20 / 7%);
     backdrop-filter: blur(20px) saturate(140%);
   }
+  .mobileDockReadonly { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .previewBanner {
+    align-items: flex-start;
+    gap: 6px;
+    padding: 9px 16px;
+    font-size: 12px;
+    text-align: left;
+  }
   .mobileDock > a {
     display: grid;
     min-width: 44px;
@@ -179,7 +220,7 @@
     font-weight: 780;
   }
   .mobileDock svg { width: 21px; height: 21px; }
-  .mobileCreate { color: var(--spott-coral) !important; }
+  .mobileCreate { color: var(--spott-coral-strong) !important; }
   .mobileCreate > span {
     display: grid;
     width: 38px;
@@ -188,7 +229,7 @@
     place-items: center;
     border: 4px solid var(--spott-surface);
     border-radius: 50%;
-    background: var(--spott-coral);
+    background: var(--spott-coral-strong);
     color: white;
     font-size: 25px;
     font-weight: 450;

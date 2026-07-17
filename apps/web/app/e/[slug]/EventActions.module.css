@@ -35,7 +35,7 @@
 }
 .utilities button[aria-pressed="true"] { color: var(--spott-twilight); border-color: color-mix(in srgb, var(--spott-twilight) 45%, var(--spott-divider)); }
 .mobileUtilities { display: none; }
-.message { color: var(--spott-coral); font-size: 13px; line-height: 1.45; }
+.message { overflow-wrap: anywhere; color: var(--spott-danger); font-size: 13px; line-height: 1.45; user-select: text; }
 
 @media (max-width: 780px) {
   .root { position: relative; grid-template-columns: minmax(0, 1fr) 48px; align-items: center; gap: 10px; }

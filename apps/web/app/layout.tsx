@@ -1,19 +1,20 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, Noto_Sans_JP, Noto_Sans_SC } from "next/font/google";
+import { Inter } from "next/font/google";
+import { headers } from "next/headers";
 import "./globals.css";
 import { SiteHeader } from "./components/SiteHeader";
 import { AppDialogProvider } from "./components/AppDialog";
 import { I18nProvider } from "./components/I18nProvider";
 import { ServiceWorkerRegistrar } from "./components/ServiceWorkerRegistrar";
+import { PreviewModeProvider } from "./components/PreviewModeProvider";
 import { formatMessage, type Locale } from "./i18n/messages";
 import { serverLocale } from "./i18n/server";
+import { parsePreviewMode } from "./lib/preview-mode";
 
 const inter = Inter({
   variable: "--font-inter",
   subsets: ["latin"],
 });
-const notoSC = Noto_Sans_SC({ variable: "--font-noto-sc", subsets: ["latin"], weight: ["400", "500", "600", "700"] });
-const notoJP = Noto_Sans_JP({ variable: "--font-noto-jp", subsets: ["latin"], weight: ["400", "500", "600", "700"] });
 
 const openGraphLocales: Record<Locale, string> = {
   "zh-Hans": "zh_CN",
@@ -30,27 +31,23 @@ export async function generateMetadata(): Promise<Metadata> {
     title: { default: title, template: "%s · Spott" },
     description,
     applicationName: "Spott",
-    manifest: "/manifest.webmanifest",
+    manifest: `/manifest/${locale}.webmanifest`,
     openGraph: {
       title,
       description,
       siteName: "Spott",
       locale: openGraphLocales[locale],
       type: "website",
-      images: [{ url: "/og.png", width: 1536, height: 1024, alt: title }],
+      images: [{ url: "/og.jpg", width: 1536, height: 1024, alt: title, type: "image/jpeg" }],
     },
-    twitter: { card: "summary_large_image", title, description, images: ["/og.png"] },
-    robots: { index: true, follow: true },
+    twitter: { card: "summary_large_image", title, description, images: ["/og.jpg"] },
     icons: { icon: "/favicon.svg", apple: "/spott-icon.svg" },
   };
 }
 
 export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#F7F5F0" },
-    { media: "(prefers-color-scheme: dark)", color: "#0E1014" },
-  ],
-  colorScheme: "light dark",
+  themeColor: "#F7F5F0",
+  colorScheme: "light",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
@@ -61,16 +58,22 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const locale = await serverLocale();
+  const [locale, requestHeaders] = await Promise.all([serverLocale(), headers()]);
+  const previewMode = parsePreviewMode(requestHeaders.get("x-spott-preview-mode"));
   return (
     <html lang={locale} data-scroll-behavior="smooth">
-      <body className={`${inter.variable} ${notoSC.variable} ${notoJP.variable}`}>
+      <body className={inter.variable}>
         <I18nProvider initialLocale={locale}>
-          <AppDialogProvider>
-            <SiteHeader />
-            {children}
-            <ServiceWorkerRegistrar />
-          </AppDialogProvider>
+          <PreviewModeProvider initialMode={previewMode}>
+            <AppDialogProvider>
+              <a className="skip-link" href="#spott-main-content">
+                {formatMessage(locale, "common.skipToContent")}
+              </a>
+              <SiteHeader />
+              <div id="spott-main-content" tabIndex={-1}>{children}</div>
+              <ServiceWorkerRegistrar />
+            </AppDialogProvider>
+          </PreviewModeProvider>
         </I18nProvider>
       </body>
     </html>

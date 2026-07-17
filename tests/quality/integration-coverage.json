@@ -52,6 +52,11 @@
       "kind": "service-integration"
     },
     {
+      "path": "services/api/src/modules/points/points.checkin.integration.spec.ts",
+      "gate": "postgres-integration",
+      "kind": "service-integration"
+    },
+    {
       "path": "services/api/src/modules/registrations/registrations.concurrency.integration.spec.ts",
       "gate": "postgres-integration",
       "kind": "service-integration"

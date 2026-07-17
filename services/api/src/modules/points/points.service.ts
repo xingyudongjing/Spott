@@ -447,7 +447,11 @@ export class PointsService {
     originalTransactionId: string,
     businessKey: string,
     type: string,
+    options: { amount?: bigint } = {},
   ): Promise<{ transactionId: string; wallet: WalletView }> {
+    if (options.amount !== undefined && options.amount <= 0n) {
+      throw new DomainError('VALIDATION_FAILED', '冲正积分必须大于 0。', 400);
+    }
     const existing = await client.query<{ id: string }>(
       `INSERT INTO commerce.point_transactions(
          user_id, type, business_key, status, reversal_of, posted_at
@@ -471,10 +475,23 @@ export class PointsService {
        GROUP BY bucket`,
       [originalTransactionId, `user:${userId}`],
     );
+    // A partial reversal (pro-rata promotion refund) restores the more valuable
+    // paid bucket first, then free, capped at the amount actually spent per
+    // bucket. Omitting options.amount reverses the full original spend, which is
+    // the historical behaviour every existing caller relies on.
+    const totalSpent = original.rows.reduce((sum, row) => sum + BigInt(row.amount), 0n);
+    let remaining = options.amount === undefined || options.amount > totalSpent ? totalSpent : options.amount;
+    const ordered = [
+      ...original.rows.filter((row) => row.bucket === 'paid'),
+      ...original.rows.filter((row) => row.bucket === 'free'),
+    ];
     let free = 0n;
     let paid = 0n;
-    for (const row of original.rows) {
-      const amount = BigInt(row.amount);
+    for (const row of ordered) {
+      if (remaining === 0n) break;
+      const bucketSpent = BigInt(row.amount);
+      const amount = bucketSpent < remaining ? bucketSpent : remaining;
+      if (amount === 0n) continue;
       const expiry = row.bucket === 'free' ? row.expires_at ?? new Date(Date.now() + 30 * 86_400_000) : null;
       await client.query(
         `INSERT INTO commerce.point_entries(transaction_id, account_code, bucket, amount, expires_at)
@@ -483,6 +500,7 @@ export class PointsService {
       );
       if (row.bucket === 'free') free += amount;
       else paid += amount;
+      remaining -= amount;
     }
     await client.query(
       `UPDATE commerce.wallets SET free_balance = free_balance + $2, paid_balance = paid_balance + $3

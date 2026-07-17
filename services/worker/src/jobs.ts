@@ -667,6 +667,23 @@ export class WorkerJobs {
     return { processed };
   }
 
+  /**
+   * Takes expired activity promotions offline. Reaching the paid window's end is
+   * normal completion, not a fault, so no ledger movement happens here — only a
+   * takedown or platform fault refunds points (handled on the API side). The
+   * partial unique index guarantees at most one active promotion per event, so
+   * flipping the row to `expired` frees the event to be promoted again.
+   */
+  async expireEventPromotions(): Promise<JobResult> {
+    const result = await this.database.query(
+      `UPDATE commerce.event_promotions
+       SET state = 'expired', updated_at = clock_timestamp()
+       WHERE state = 'active' AND expires_at <= clock_timestamp()`,
+    );
+    const expired = result.rowCount ?? 0;
+    return { processed: expired, metadata: { expired } };
+  }
+
   async activateConfiguration(): Promise<JobResult> {
     return this.database.transaction(async (client) => {
       const ready = await client.query<{ id: string; key: string }>(
@@ -1088,6 +1105,7 @@ export const jobNames = [
   'expireAndPromoteWaitlist',
   'expireHoldsAndQuotes',
   'expireFreePointLots',
+  'expireEventPromotions',
   'activateConfiguration',
   'anonymizeDeletedAccounts',
   'reconcileLedger',

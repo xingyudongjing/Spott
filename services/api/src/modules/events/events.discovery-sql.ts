@@ -219,6 +219,11 @@ export function buildDiscoveryStatement(
        END AS attendance_rate_band,
        favorite.event_id IS NOT NULL AS favorited,
        EXISTS(
+         SELECT 1 FROM commerce.event_promotions boost
+         WHERE boost.event_id = e.id AND boost.state = 'active'
+           AND boost.expires_at > clock_timestamp()
+       ) AS promoted,
+       EXISTS(
          SELECT 1 FROM identity.follows follow
          WHERE follow.follower_id = ${viewer} AND follow.target_type = 'user'
            AND follow.target_id = e.organizer_id AND follow.deleted_at IS NULL

@@ -21,8 +21,28 @@ describe('worker job registry', () => {
       'deliverNotifications',
       'expireAndPromoteWaitlist',
       'expireFreePointLots',
+      'expireEventPromotions',
       'reconcileLedger',
     ]));
+  });
+
+  it('takes due activity promotions offline without touching the ledger', async () => {
+    const queries: string[] = [];
+    const database = {
+      query: async (text: string) => {
+        queries.push(text);
+        return result([{ id: 'promotion-1' }], 1);
+      },
+    };
+    const jobs = new WorkerJobs(database as never, config);
+
+    expect(await jobs.expireEventPromotions()).toMatchObject({ processed: 1, metadata: { expired: 1 } });
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toContain('UPDATE commerce.event_promotions');
+    expect(queries[0]).toContain("state = 'expired'");
+    expect(queries[0]).toContain('expires_at <= clock_timestamp()');
+    // Expiry is normal completion, so it must never write ledger entries.
+    expect(queries[0]).not.toContain('point_entries');
   });
 
   it('consumes one announcement fan-out exactly once and uses a durable dedupe key', async () => {

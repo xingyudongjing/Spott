@@ -191,7 +191,7 @@ export class MediaService {
     if (
       authorization.method !== 'PUT'
       || authorization.routePath !== `/v1/media/upload-attempts/${input.attemptId}/content`
-      authorization.attemptId !== input.attemptId
+      || authorization.attemptId !== input.attemptId
       || authorization.mimeType !== input.mimeType
       || authorization.byteSize !== input.byteSize
       || authorization.contentSha256 !== input.contentSha256

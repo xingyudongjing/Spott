@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { PreviewModeLink as Link } from "./PreviewModeLink";
 import { useEffect, useState } from "react";
 import { readSession, type WebSession } from "../lib/client-api";
 import { useI18n } from "./I18nProvider";

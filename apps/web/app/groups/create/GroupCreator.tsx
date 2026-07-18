@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { PreviewModeLink as Link } from "../../components/PreviewModeLink";
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { useAppDialog } from "../../components/AppDialog";

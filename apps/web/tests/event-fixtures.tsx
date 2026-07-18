@@ -52,6 +52,7 @@ export const eventFixture: EventSummary = {
   primaryLocale: "ja",
   supportedLocales: ["ja", "en"],
   localeConfirmed: true,
+  groupId: null,
   availableActions: ["register"],
   version: 2,
   updatedAt: "2026-07-16T00:00:00.000Z",

@@ -1,6 +1,5 @@
-import Link from "next/link";
-
 import type { Locale } from "../../i18n/messages";
+import { PreviewModeLink as Link } from "../PreviewModeLink";
 import type { LegalDocumentCopy } from "./legal-content";
 import styles from "./LegalDocument.module.css";
 

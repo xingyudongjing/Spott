@@ -1,7 +1,5 @@
 "use client";
 
-import Link from "next/link";
-
 import type { EventSummary } from "../../lib/event-contract";
 import {
   eventDate,
@@ -12,6 +10,7 @@ import {
 } from "../../lib/format";
 import { EventCover } from "../EventCover";
 import { useI18n } from "../I18nProvider";
+import { PreviewModeLink as Link } from "../PreviewModeLink";
 import { usePreviewMode } from "../PreviewModeProvider";
 import {
   BuildingIcon,

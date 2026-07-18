@@ -2875,6 +2875,7 @@ components:
         - primaryLocale
         - supportedLocales
         - localeConfirmed
+        - groupId
         - availableActions
         - version
         - updatedAt
@@ -2922,6 +2923,7 @@ components:
           uniqueItems: true
           items: { $ref: '#/components/schemas/Locale' }
         localeConfirmed: { type: boolean }
+        groupId: { type: [string, 'null'], format: uuid }
         availableActions: { type: array, items: { $ref: '#/components/schemas/AvailableAction' } }
         version: { type: integer, format: int64, minimum: 1 }
         updatedAt: { type: string, format: date-time }
@@ -2974,7 +2976,6 @@ components:
             registrationQuestions: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/RegistrationQuestion' } }
             media: { type: array, maxItems: 6, items: { $ref: '#/components/schemas/EventMedia' } }
             mediaCount: { type: integer, minimum: 0, maximum: 6 }
-            groupId: { type: [string, 'null'], format: uuid }
             checkinMode: { type: string, enum: [dynamic_qr, six_digit, manual] }
             commentPermission: { type: string, enum: [disabled, participants, group_members] }
             posterEnabled: { type: boolean }

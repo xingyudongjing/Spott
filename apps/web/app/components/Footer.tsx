@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { LanguageSwitcher, useI18n } from "./I18nProvider";
+import { PreviewModeLink as Link } from "./PreviewModeLink";
 
 export function Footer() {
   const { t } = useI18n();

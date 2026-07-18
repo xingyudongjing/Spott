@@ -57,6 +57,7 @@ const baseEvent: EventSummary = {
   primaryLocale: "ja",
   supportedLocales: ["ja"],
   localeConfirmed: true,
+  groupId: null,
   availableActions: ["register"],
   version: 1,
   updatedAt: "2026-07-15T00:00:00.000Z",

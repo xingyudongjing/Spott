@@ -4901,6 +4901,7 @@ components:
         - primaryLocale
         - supportedLocales
         - localeConfirmed
+        - groupId
         - availableActions
         - version
         - updatedAt
@@ -5005,6 +5006,11 @@ components:
             $ref: '#/components/schemas/Locale'
         localeConfirmed:
           type: boolean
+        groupId:
+          type:
+            - string
+            - 'null'
+          format: uuid
         availableActions:
           type: array
           items:
@@ -5096,11 +5102,6 @@ components:
               type: integer
               minimum: 0
               maximum: 6
-            groupId:
-              type:
-                - string
-                - 'null'
-              format: uuid
             checkinMode:
               type: string
               enum:

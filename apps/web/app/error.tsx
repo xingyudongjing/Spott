@@ -1,8 +1,7 @@
 "use client";
 
-import Link from "next/link";
-
 import { useI18n } from "./components/I18nProvider";
+import { PreviewModeLink as Link } from "./components/PreviewModeLink";
 
 export default function RouteError({ reset }: { error: Error & { digest?: string }; reset: () => void }) {
   const { t } = useI18n();

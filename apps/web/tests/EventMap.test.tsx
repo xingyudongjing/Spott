@@ -1,9 +1,11 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { AnchorHTMLAttributes } from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { EventResults, MapEventPreview } from "../app/components/discovery/EventResults";
 import { EventMap, eventMarkerFacts } from "../app/components/discovery/EventMap";
+import { PreviewModeProvider } from "../app/components/PreviewModeProvider";
 import { eventFixture, makeEvent, makePage, renderWithI18n } from "./event-fixtures";
 
 const mapBoundary = vi.hoisted(() => ({
@@ -43,6 +45,13 @@ vi.mock("maplibre-gl", () => {
   }
   return { Map: MapBoundary, Marker: MarkerBoundary };
 });
+
+vi.mock("next/link", () => ({
+  default: ({ prefetch, ...props }: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
+    href: string;
+    prefetch?: boolean;
+  }) => <a {...props} data-next-navigation="true" data-prefetch={prefetch === false ? "false" : undefined} />,
+}));
 
 beforeEach(() => {
   mapBoundary.remove.mockReset();
@@ -128,6 +137,18 @@ describe("MapLibre adapter", () => {
       "href",
       `/e/${eventFixture.publicSlug}`,
     );
+  });
+
+  test("uses document navigation from the public read-only map preview", () => {
+    renderWithI18n(
+      <PreviewModeProvider initialMode="read-only">
+        <MapEventPreview event={eventFixture} />
+      </PreviewModeProvider>,
+    );
+
+    const link = screen.getByRole("link", { name: "查看活动详情" });
+    expect(link).not.toHaveAttribute("data-next-navigation");
+    expect(link).toHaveAttribute("href", `/e/${eventFixture.publicSlug}`);
   });
 
   test("fits every public marker inside the map and separates identical approximate points", async () => {

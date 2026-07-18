@@ -5,6 +5,20 @@ import { describe, expect, it } from 'vitest';
 const repositoryRoot = resolve(import.meta.dirname, '../../../../..');
 
 describe('event collection OpenAPI contracts', () => {
+  it('publishes the linked group id as a nullable event-summary fact', () => {
+    const source = readFileSync(resolve(repositoryRoot, 'packages/contracts/openapi.yaml'), 'utf8');
+    const bundle = readFileSync(resolve(repositoryRoot, 'packages/contracts/openapi.bundle.yaml'), 'utf8');
+    const generated = readFileSync(resolve(repositoryRoot, 'packages/api-client/src/schema.d.ts'), 'utf8');
+
+    for (const artifact of [source, bundle]) {
+      const summary = artifact.match(/ {4}EventSummaryBase:[\s\S]*?(?=\n {4}EventSummary:)/)?.[0];
+      expect(summary).toBeDefined();
+      expect(summary).toMatch(/required:[\s\S]*?- groupId/);
+      expect(summary).toMatch(/groupId:[\s\S]*?format: uuid/);
+    }
+    expect(generated).toMatch(/EventSummaryBase:[\s\S]*?groupId: string \| null;/);
+  });
+
   it('declares favorites as summary items in every generated contract artifact', () => {
     const source = readFileSync(resolve(repositoryRoot, 'packages/contracts/openapi.yaml'), 'utf8');
     const bundle = readFileSync(resolve(repositoryRoot, 'packages/contracts/openapi.bundle.yaml'), 'utf8');

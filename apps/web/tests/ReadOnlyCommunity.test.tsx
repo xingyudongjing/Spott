@@ -1,5 +1,6 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { AnchorHTMLAttributes } from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { AppDialogProvider } from "../app/components/AppDialog";
@@ -22,6 +23,13 @@ vi.mock("../app/lib/client-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../app/lib/client-api")>();
   return { ...actual, apiRequest: vi.fn(), readSession: vi.fn() };
 });
+
+vi.mock("next/link", () => ({
+  default: ({ prefetch, ...props }: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
+    href: string;
+    prefetch?: boolean;
+  }) => <a {...props} data-next-navigation="true" data-prefetch={prefetch === false ? "false" : undefined} />,
+}));
 
 const apiRequestMock = vi.mocked(apiRequest);
 const readSessionMock = vi.mocked(readSession);
@@ -135,6 +143,7 @@ describe("public read-only community surfaces", () => {
     expect(screen.queryByText("PUBLIC NETWORK")).not.toBeInTheDocument();
     expect(screen.getByRole("note")).toHaveTextContent("此页面仅展示公开内容");
     expect(screen.queryByRole("link", { name: /创建群组/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: new RegExp(group.name) })).not.toHaveAttribute("data-next-navigation");
     expect(apiRequestMock).toHaveBeenCalledTimes(1);
     expect(apiRequestMock).not.toHaveBeenCalledWith("/me/groups", expect.anything());
     expect(readSessionMock).not.toHaveBeenCalled();

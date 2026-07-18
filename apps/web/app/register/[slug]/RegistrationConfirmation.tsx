@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { PreviewModeLink as Link } from "../../components/PreviewModeLink";
 import { useState } from "react";
 
 import { OrganizerContactCard } from "../../components/event/OrganizerContactCard";

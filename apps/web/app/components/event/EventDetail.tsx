@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 import type { Locale, MessageKey } from "../../i18n/messages";
 import { formatMessage } from "../../i18n/messages";
 import type { EventDetail } from "../../lib/event-contract";
@@ -11,6 +9,7 @@ import {
   eventTime,
 } from "../../lib/format";
 import { EventCover } from "../EventCover";
+import { PreviewModeLink as Link } from "../PreviewModeLink";
 import styles from "./EventDetail.module.css";
 import { OrganizerContactCard } from "./OrganizerContactCard";
 

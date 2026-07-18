@@ -12,7 +12,7 @@ vi.mock("next/link", () => ({
   default: ({ prefetch, ...props }: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
     href: string;
     prefetch?: boolean;
-  }) => <a {...props} data-prefetch={prefetch === false ? "false" : undefined} />,
+  }) => <a {...props} data-next-navigation="true" data-prefetch={prefetch === false ? "false" : undefined} />,
 }));
 
 beforeEach(() => {
@@ -43,6 +43,7 @@ describe("responsive site navigation", () => {
     expect(discoverLinks).toHaveLength(2);
     expect(discoverLinks.every((link) => link.getAttribute("aria-current") === "page")).toBe(true);
     expect(screen.getByRole("link", { name: "地区：日本" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "地区：日本" })).toHaveAttribute("data-next-navigation", "true");
     expect(screen.getByRole("link", { name: "通知" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "通知" })).toHaveAttribute("data-unread", "false");
     expect(screen.getByRole("navigation", { name: "移动导航" })).toBeInTheDocument();
@@ -111,6 +112,6 @@ describe("responsive site navigation", () => {
     expect(screen.queryByRole("link", { name: "通知" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "我的活动" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "主办方工作台" })).not.toBeInTheDocument();
-    expect(screen.getAllByRole("link").every((link) => link.dataset.prefetch === "false")).toBe(true);
+    expect(screen.getAllByRole("link").every((link) => link.dataset.nextNavigation === undefined)).toBe(true);
   });
 });

@@ -2595,6 +2595,8 @@ export interface components {
             primaryLocale: components["schemas"]["Locale"];
             supportedLocales: components["schemas"]["Locale"][];
             localeConfirmed: boolean;
+            /** Format: uuid */
+            groupId: string | null;
             availableActions: components["schemas"]["AvailableAction"][];
             /** Format: int64 */
             version: number;
@@ -2625,8 +2627,6 @@ export interface components {
             registrationQuestions: components["schemas"]["RegistrationQuestion"][];
             media: components["schemas"]["EventMedia"][];
             mediaCount: number;
-            /** Format: uuid */
-            groupId?: string | null;
             /** @enum {string} */
             checkinMode?: "dynamic_qr" | "six_digit" | "manual";
             /** @enum {string} */

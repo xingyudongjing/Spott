@@ -31,7 +31,6 @@ export type EventView = Omit<
   registrationQuestions?: KnownEventDetail["registrationQuestions"];
   media?: KnownEventDetail["media"];
   mediaCount?: KnownEventDetail["mediaCount"];
-  groupId?: KnownEventDetail["groupId"];
   checkinMode?: KnownEventDetail["checkinMode"];
   commentPermission?: KnownEventDetail["commentPermission"];
   posterEnabled?: KnownEventDetail["posterEnabled"];

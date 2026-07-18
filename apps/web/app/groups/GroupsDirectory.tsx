@@ -1,11 +1,11 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { APIError, apiRequest, errorMessage, readSession, type GroupView } from "../lib/client-api";
 import { useI18n } from "../components/I18nProvider";
 import { ArrowIcon, UsersIcon } from "../components/icons";
+import { PreviewModeLink as Link } from "../components/PreviewModeLink";
 import { usePreviewMode } from "../components/PreviewModeProvider";
 import { ReadOnlyCommunityNotice } from "../components/ReadOnlyCommunityNotice";
 

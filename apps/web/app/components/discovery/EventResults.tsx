@@ -1,11 +1,11 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import Link from "next/link";
 
 import type { MapBounds } from "../../lib/discovery-query";
 import type { EventPage, EventSummary } from "../../lib/event-contract";
 import { useI18n } from "../I18nProvider";
+import { PreviewModeLink as Link } from "../PreviewModeLink";
 import { usePreviewMode } from "../PreviewModeProvider";
 import { DiscoveryEmpty, DiscoveryError, DiscoveryLoading } from "./DiscoveryState";
 import { EventList } from "./EventList";

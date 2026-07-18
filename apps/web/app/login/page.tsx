@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { PreviewModeLink as Link } from '../components/PreviewModeLink';
 import { LoginForm } from './LoginForm';
 import { serverLocale } from '../i18n/server';
 

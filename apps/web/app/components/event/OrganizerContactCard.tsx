@@ -1,8 +1,7 @@
-import Link from "next/link";
-
 import type { Locale } from "../../i18n/messages";
 import { formatMessage } from "../../i18n/messages";
 import type { OrganizerContact } from "../../lib/event-contract";
+import { PreviewModeLink as Link } from "../PreviewModeLink";
 import styles from "./OrganizerContactCard.module.css";
 
 export function OrganizerContactCard({

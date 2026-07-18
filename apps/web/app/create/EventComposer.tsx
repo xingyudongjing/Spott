@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
+import { PreviewModeLink as Link } from "../components/PreviewModeLink";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppDialog } from "../components/AppDialog";
 import { useI18n } from "../components/I18nProvider";

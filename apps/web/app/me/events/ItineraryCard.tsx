@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { PreviewModeLink as Link } from "../../components/PreviewModeLink";
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 

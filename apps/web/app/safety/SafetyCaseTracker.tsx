@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useAppDialog } from "../components/AppDialog";
+import { PreviewModeLink as Link } from "../components/PreviewModeLink";
 import type { Locale } from "../i18n/messages";
 import { apiRequest, errorMessage, readSession } from "../lib/client-api";
 

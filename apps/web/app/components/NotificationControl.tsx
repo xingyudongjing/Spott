@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { PreviewModeLink as Link } from "./PreviewModeLink";
 import { useCallback, useEffect, useState } from "react";
 
 import {

@@ -64,6 +64,7 @@ const summary: EventSummary = {
   primaryLocale: "ja",
   supportedLocales: ["ja", "en"],
   localeConfirmed: true,
+  groupId: null,
   availableActions: ["register"],
   version: 2,
   updatedAt: "2026-07-16T00:00:00.000Z",
@@ -165,9 +166,11 @@ describe("strict event contracts", () => {
   });
 
   test("strips detail-only and exact-location facts at the discovery parse boundary", () => {
+    const groupId = "019b0000-0000-7000-8300-000000000001";
     const parsed = parseEventPage({
       items: [{
         ...summary,
+        groupId,
         coordinate: { latitude: 35.68123, longitude: 139.79123, precision: "exact" },
         exactAddress: "1-2-3 Kiyosumi",
         organizerContact: { kind: "email", label: "Host", value: "private@example.jp" },
@@ -187,6 +190,7 @@ describe("strict event contracts", () => {
 
     const [event] = parsed.items;
     expect(event.coordinate).toBeNull();
+    expect(event.groupId).toBe(groupId);
     expect(event).not.toHaveProperty("exactAddress");
     expect(event).not.toHaveProperty("organizerContact");
     expect(event).not.toHaveProperty("exactCoordinate");

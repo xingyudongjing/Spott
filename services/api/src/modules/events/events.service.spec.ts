@@ -228,7 +228,8 @@ describe('EventsService event contract', () => {
       toView: (row: ReturnType<typeof eventRow>, viewer: undefined, includeDetail: boolean) => Record<string, unknown>;
     };
 
-    const view = mapper.toView(eventRow(), undefined, false);
+    const groupId = '019b0000-0000-7000-8300-000000000001';
+    const view = mapper.toView(eventRow({ group_id: groupId }), undefined, false);
 
     expect(view).toMatchObject({
       availableCapacity: 3,
@@ -238,6 +239,7 @@ describe('EventsService event contract', () => {
       primaryLocale: 'ja',
       supportedLocales: ['ja', 'en'],
       localeConfirmed: true,
+      groupId,
       viewerRegistration: {
         id: '019b0000-0000-7000-8200-000000000001',
         status: 'offered',

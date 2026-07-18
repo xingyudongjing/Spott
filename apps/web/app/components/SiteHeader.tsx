@@ -1,12 +1,12 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { AccountControl } from "./AccountControl";
 import { LanguageSwitcher, useI18n } from "./I18nProvider";
 import { CalendarIcon, SearchIcon, UserIcon, UsersIcon } from "./icons";
 import { NotificationControl } from "./NotificationControl";
+import { PreviewModeLink as Link } from "./PreviewModeLink";
 import { usePreviewMode } from "./PreviewModeProvider";
 import styles from "./SiteHeader.module.css";
 

@@ -1,10 +1,10 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { Footer } from '../../components/Footer';
 import { EventCard } from '../../components/EventCard';
 import { useI18n } from '../../components/I18nProvider';
+import { PreviewModeLink as Link } from '../../components/PreviewModeLink';
 import { usePreviewMode } from '../../components/PreviewModeProvider';
 import { ReadOnlyCommunityNotice } from '../../components/ReadOnlyCommunityNotice';
 import { normalizeEvent } from '../../lib/api';

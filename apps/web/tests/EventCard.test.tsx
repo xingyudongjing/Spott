@@ -10,7 +10,7 @@ vi.mock("next/link", () => ({
   default: ({ prefetch, ...props }: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
     href: string;
     prefetch?: boolean;
-  }) => <a {...props} data-prefetch={prefetch === false ? "false" : undefined} />,
+  }) => <a {...props} data-next-navigation="true" data-prefetch={prefetch === false ? "false" : undefined} />,
 }));
 
 describe("premium event result", () => {
@@ -74,17 +74,16 @@ describe("premium event result", () => {
     expect(card).not.toHaveTextContent("历史到场率");
   });
 
-  test("disables Vinext RSC prefetch for event cards on the public read-only surface", () => {
+  test("uses a document navigation for event cards on the public read-only surface", () => {
     renderWithI18n(
       <PreviewModeProvider initialMode="read-only">
         <EventResultCard event={eventFixture} />
       </PreviewModeProvider>,
     );
 
-    expect(within(screen.getByRole("article", { name: eventFixture.title })).getByRole("link")).toHaveAttribute(
-      "data-prefetch",
-      "false",
-    );
+    const link = within(screen.getByRole("article", { name: eventFixture.title })).getByRole("link");
+    expect(link).not.toHaveAttribute("data-next-navigation");
+    expect(link).toHaveAttribute("href", `/e/${eventFixture.publicSlug}`);
   });
 
   test("shows waitlist only when a full event exposes the joinWaitlist action", () => {

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { PreviewModeLink as Link } from "../components/PreviewModeLink";
 import { serverLocale } from "../i18n/server";
 import { SafetyCaseTracker } from "./SafetyCaseTracker";
 

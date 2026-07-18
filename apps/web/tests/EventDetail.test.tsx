@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { act, screen, waitFor, within } from "@testing-library/react";
+import type { AnchorHTMLAttributes } from "react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { EventDetailView, eventStructuredData } from "../app/components/event/EventDetail";
@@ -37,6 +38,12 @@ vi.mock("../app/lib/events-api", async (importOriginal) => {
   return { ...actual, fetchEvent: actionMocks.fetchEvent };
 });
 vi.mock("../app/lib/analytics", () => ({ trackProductEvent: actionMocks.trackProductEvent }));
+vi.mock("next/link", () => ({
+  default: ({ prefetch, ...props }: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
+    href: string;
+    prefetch?: boolean;
+  }) => <a {...props} data-next-navigation="true" data-prefetch={prefetch === false ? "false" : undefined} />,
+}));
 
 const fetchEventMock = vi.mocked(fetchEvent);
 const apiRequestMock = vi.mocked(apiRequest);
@@ -157,6 +164,9 @@ describe("premium event detail", () => {
       `/events/${event.id}`,
       { authenticated: true },
     );
+    const internalLinks = screen.getAllByRole("link").filter((link) => link.getAttribute("href")?.startsWith("/"));
+    expect(internalLinks.length).toBeGreaterThan(0);
+    expect(internalLinks.every((link) => link.dataset.nextNavigation === undefined)).toBe(true);
   });
 
   test("renders viewer-only facts and the CTA from the same authorized event", async () => {

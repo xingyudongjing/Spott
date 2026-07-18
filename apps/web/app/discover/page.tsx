@@ -18,13 +18,14 @@ export async function generateMetadata({ searchParams }: { searchParams: SearchP
 }
 
 export default async function DiscoverPage({ searchParams }: { searchParams: SearchParams }) {
-  const { initialQuery, initialPage, initialError } = await loadDiscoveryPage(await searchParams);
+  const { initialQuery, initialPage, initialFeed, initialError } = await loadDiscoveryPage(await searchParams);
 
   return (
     <main>
       <DiscoveryShell
         initialQuery={initialQuery}
         initialPage={initialPage}
+        initialFeed={initialFeed}
         initialError={initialError}
       />
     </main>

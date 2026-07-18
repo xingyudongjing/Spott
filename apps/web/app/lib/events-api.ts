@@ -1,4 +1,5 @@
 import { serializeDiscoveryQuery, type EventDiscoveryQuery } from "./discovery-query";
+import { parseDiscoveryFeed, type DiscoveryFeed } from "./discovery-feed";
 import { parseEventDetail, parseEventPage, type EventDetail, type EventPage } from "./event-contract";
 
 export class EventAPIError extends Error {
@@ -23,6 +24,22 @@ export async function searchEvents(
   });
   if (!response.ok) throw await responseError(response);
   return parseEventPage(await response.json());
+}
+
+export async function fetchDiscoveryFeed(
+  query: EventDiscoveryQuery,
+  options?: { signal?: AbortSignal },
+): Promise<DiscoveryFeed> {
+  const params = serializeDiscoveryQuery(query);
+  const suffix = params.size ? `?${params.toString()}` : "";
+  const response = await fetch(`${eventAPIBase()}/discovery/feed${suffix}`, {
+    method: "GET",
+    headers: new Headers({ Accept: "application/json" }),
+    credentials: "omit",
+    signal: options?.signal,
+  });
+  if (!response.ok) throw await responseError(response);
+  return parseDiscoveryFeed(await response.json());
 }
 
 export async function fetchEvent(

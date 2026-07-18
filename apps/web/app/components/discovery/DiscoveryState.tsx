@@ -8,7 +8,18 @@ export function DiscoveryLoading() {
   return (
     <div className={styles.skeletonList} aria-label={t("common.loading")}>
       {Array.from({ length: 3 }, (_, index) => (
-        <span key={index} className={styles.skeletonRow} />
+        <span
+          key={index}
+          className={`${styles.skeletonRow} ${index === 0 ? styles.skeletonFeatured : ""}`}
+          data-featured={index === 0 || undefined}
+        >
+          {index === 0 ? (
+            <>
+              <span className={styles.skeletonCover} />
+              <span className={styles.skeletonCopy} />
+            </>
+          ) : null}
+        </span>
       ))}
     </div>
   );

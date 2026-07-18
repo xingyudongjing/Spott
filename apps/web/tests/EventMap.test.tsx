@@ -97,20 +97,24 @@ describe("MapLibre adapter", () => {
     expect(screen.getByRole("region", { name: "活动地图" })).toBeInTheDocument();
     await waitFor(() => expect(mapBoundary.handlers.has("moveend")).toBe(true));
     vi.useFakeTimers();
-    mapBoundary.handlers.get("moveend")?.({ originalEvent: undefined });
-    await act(async () => { await vi.advanceTimersByTimeAsync(301); });
-    expect(onBoundsChange).not.toHaveBeenCalled();
+    try {
+      mapBoundary.handlers.get("moveend")?.({ originalEvent: undefined });
+      await act(async () => { await vi.advanceTimersByTimeAsync(301); });
+      expect(onBoundsChange).not.toHaveBeenCalled();
 
-    mapBoundary.onceHandlers.get("idle")?.();
-    mapBoundary.handlers.get("moveend")?.({ originalEvent: new MouseEvent("mouseup") });
-    await act(async () => { await vi.advanceTimersByTimeAsync(301); });
-    expect(onBoundsChange).toHaveBeenCalledTimes(1);
-    expect(onBoundsChange).toHaveBeenCalledWith({ west: 139.6, south: 35.5, east: 139.9, north: 35.8 });
-
-    unmount();
+      mapBoundary.onceHandlers.get("idle")?.();
+      mapBoundary.handlers.get("moveend")?.({ originalEvent: new MouseEvent("mouseup") });
+      await act(async () => { await vi.advanceTimersByTimeAsync(299); });
+      expect(onBoundsChange).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(onBoundsChange).toHaveBeenCalledTimes(1);
+      expect(onBoundsChange).toHaveBeenCalledWith({ west: 139.6, south: 35.5, east: 139.9, north: 35.8 });
+    } finally {
+      unmount();
+      vi.useRealTimers();
+    }
     expect(mapBoundary.handlers.has("moveend")).toBe(false);
     expect(mapBoundary.remove).toHaveBeenCalledTimes(1);
-    vi.useRealTimers();
   });
 
   test("turns a marker selection into an actionable localized detail preview", async () => {
@@ -137,6 +141,57 @@ describe("MapLibre adapter", () => {
       "href",
       `/e/${eventFixture.publicSlug}`,
     );
+  });
+
+  test("only exposes aria-controls from the selected marker", async () => {
+    const events = [eventFixture];
+    const onBoundsChange = vi.fn();
+    const onFailure = vi.fn();
+    const onSelect = vi.fn();
+    const { rerender } = render(
+      <EventMap
+        events={events}
+        styleURL="https://media.spott.jp/map/style.json"
+        mapLabel="活动地图"
+        approximateLabel="约在此区域"
+        selectedEventId={null}
+        onBoundsChange={onBoundsChange}
+        onFailure={onFailure}
+        onSelect={onSelect}
+      />,
+    );
+
+    await waitFor(() => expect(mapBoundary.markerElements).toHaveLength(1));
+    const marker = mapBoundary.markerElements[0];
+    expect(marker).not.toHaveAttribute("aria-controls");
+
+    rerender(
+      <EventMap
+        events={events}
+        styleURL="https://media.spott.jp/map/style.json"
+        mapLabel="活动地图"
+        approximateLabel="约在此区域"
+        selectedEventId={eventFixture.id}
+        onBoundsChange={onBoundsChange}
+        onFailure={onFailure}
+        onSelect={onSelect}
+      />,
+    );
+    expect(marker).toHaveAttribute("aria-controls", `map-preview-${eventFixture.id}`);
+
+    rerender(
+      <EventMap
+        events={events}
+        styleURL="https://media.spott.jp/map/style.json"
+        mapLabel="活动地图"
+        approximateLabel="约在此区域"
+        selectedEventId={null}
+        onBoundsChange={onBoundsChange}
+        onFailure={onFailure}
+        onSelect={onSelect}
+      />,
+    );
+    expect(marker).not.toHaveAttribute("aria-controls");
   });
 
   test("uses document navigation from the public read-only map preview", () => {
@@ -256,6 +311,7 @@ describe("MapLibre adapter", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("地图暂时不可用");
     expect(screen.getByRole("link", { name: new RegExp(eventFixture.title) })).toBeInTheDocument();
+    expect(screen.getByTestId("discovery-event")).not.toHaveAttribute("data-featured");
     await userEvent.click(screen.getByRole("button", { name: "重试地图" }));
     await userEvent.click(screen.getByRole("button", { name: "查看列表" }));
     expect(onRetryMap).toHaveBeenCalledTimes(1);

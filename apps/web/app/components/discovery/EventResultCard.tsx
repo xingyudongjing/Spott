@@ -27,7 +27,9 @@ export type EventCardEvent = Pick<
   | "id"
   | "publicSlug"
   | "title"
+  | "description"
   | "category"
+  | "tags"
   | "coverURL"
   | "startsAt"
   | "endsAt"
@@ -50,10 +52,12 @@ export function EventResultCard({
   event,
   priority = false,
   selected = false,
+  featured = false,
 }: {
   event: EventCardEvent;
   priority?: boolean;
   selected?: boolean;
+  featured?: boolean;
 }) {
   const { locale, t } = useI18n();
   const isReadOnly = usePreviewMode() === "read-only";
@@ -66,12 +70,14 @@ export function EventResultCard({
     : null;
   const capacity = capacityLabel(event, t);
   const capacityIsTight = event.capacity > 0 && event.availableCapacity <= 2;
+  const tags = eventTagLabels(event.category, event.tags, t);
 
   return (
     <article
       className={styles.eventCard}
       aria-label={event.title}
       data-selected={selected || undefined}
+      data-featured={featured || undefined}
       data-testid="discovery-event"
     >
       <Link
@@ -83,7 +89,9 @@ export function EventResultCard({
           <EventCover
             event={event}
             priority={priority}
-            sizes="(max-width: 780px) calc(100vw - 32px), 232px"
+            sizes={featured
+              ? "(max-width: 780px) calc(100vw - 32px), (max-width: 1100px) 42vw, 520px"
+              : "(max-width: 780px) 132px, 232px"}
           />
         </div>
         <div className={styles.eventBody}>
@@ -93,6 +101,9 @@ export function EventResultCard({
             {eventTime(event.startsAt, event.endsAt, locale, event.displayTimeZone)}
           </p>
           <h3>{event.title}</h3>
+          {featured && event.description ? (
+            <p className={styles.eventDescription}>{event.description}</p>
+          ) : null}
           <div className={styles.eventFacts}>
             <span><PinIcon />{area}</span>
             <span><TicketIcon />{fee}<span aria-hidden="true"> · </span>{format}</span>
@@ -102,6 +113,9 @@ export function EventResultCard({
               {event.localeConfirmed ? t("event.languageConfirmed") : t("event.languageUnconfirmed")}
             </span>
           </div>
+          <ul className={styles.eventTags} aria-label={t("discover.tags")}>
+            {tags.map((tag) => <li key={tag}>{tag}</li>)}
+          </ul>
           <div className={styles.trustFacts}>
             <span><BuildingIcon />{event.organizer.name}</span>
             {event.organizer.trust.phoneVerified ? (
@@ -120,6 +134,44 @@ export function EventResultCard({
       </Link>
     </article>
   );
+}
+
+const tagTranslationKeys = {
+  walk: "filter.categoryWalk",
+  "city-walk": "filter.categoryWalk",
+  photography: "filter.categoryPhotography",
+  music: "filter.categoryMusic",
+  food: "filter.categoryFood",
+  coffee: "filter.categoryFood",
+  outdoor: "filter.categoryOutdoor",
+  art: "filter.categoryArt",
+  language: "filter.categoryLanguage",
+  sports: "filter.categorySports",
+  games: "filter.categoryGames",
+  learning: "filter.categoryLearning",
+  wellness: "filter.categoryWellness",
+  networking: "filter.categoryNetworking",
+} as const;
+
+function eventTagLabels(
+  category: string,
+  tags: string[],
+  t: ReturnType<typeof useI18n>["t"],
+) {
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  for (const value of [category, ...tags]) {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) continue;
+    const key = tagTranslationKeys[normalized as keyof typeof tagTranslationKeys];
+    const label = key ? t(key) : value.trim();
+    const identity = label.toLocaleLowerCase();
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    labels.push(label);
+    if (labels.length === 3) break;
+  }
+  return labels;
 }
 
 function capacityLabel(

@@ -2,15 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useAppDialog } from "../../components/AppDialog";
-import { EventCard } from "../../components/EventCard";
 import { Footer } from "../../components/Footer";
 import { useI18n } from "../../components/I18nProvider";
 import { PreviewModeLink as Link } from "../../components/PreviewModeLink";
 import { usePreviewMode } from "../../components/PreviewModeProvider";
 import { ReadOnlyCommunityNotice } from "../../components/ReadOnlyCommunityNotice";
-import { normalizeEvent } from "../../lib/api";
 import { APIError, apiRequest, errorMessage, readSession } from "../../lib/client-api";
-import type { EventView } from "../../lib/demo-data";
 
 interface PublicProfile {
   userId: string;
@@ -29,12 +26,27 @@ interface BlockedUser {
   userId: string;
 }
 
+interface PublicProfileEvent {
+  id: string;
+  publicSlug: string;
+  status: "published" | "registration_closed" | "in_progress" | "ended" | "archived";
+  title: string;
+  startsAt: string;
+  endsAt: string;
+  region: string;
+  publicArea: string;
+  priceLabel: string;
+  coverURL?: string | null;
+}
+
+const profileFreeLabels = new Set(["免费", "無料", "free", "jpy 0", "¥0", "￥0", "0"]);
+
 export function HostProfile({ handle }: { handle: string }) {
   const { locale, t } = useI18n();
   const isReadOnly = usePreviewMode() === "read-only";
   const appDialog = useAppDialog();
   const [profile, setProfile] = useState<PublicProfile | null>(null);
-  const [events, setEvents] = useState<EventView[]>([]);
+  const [events, setEvents] = useState<PublicProfileEvent[]>([]);
   const [blocked, setBlocked] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -49,11 +61,11 @@ export function HostProfile({ handle }: { handle: string }) {
       const [profileValue, eventPayload] = await Promise.all([
         apiRequest<PublicProfile>(`/profiles/${encodeURIComponent(handle)}`),
         apiRequest<{
-          items: Array<Partial<EventView> & Pick<EventView, "id" | "publicSlug" | "title">>;
+          items: PublicProfileEvent[];
         }>(`/profiles/${encodeURIComponent(handle)}/events?limit=60`),
       ]);
       setProfile(profileValue);
-      setEvents(eventPayload.items.map(normalizeEvent));
+      setEvents(eventPayload.items);
       if (!isReadOnly && readSession()) {
         try {
           const blockPage = await apiRequest<{ items: BlockedUser[] }>("/me/blocks", {
@@ -269,9 +281,9 @@ export function HostProfile({ handle }: { handle: string }) {
               </div>
             </div>
             {events.length ? (
-              <div className="event-grid wide">
+              <div className="profile-event-grid">
                 {events.map((event) => (
-                  <EventCard key={event.id} event={event} />
+                  <ProfileEventCard key={event.id} event={event} locale={locale} isReadOnly={isReadOnly} />
                 ))}
               </div>
             ) : (
@@ -285,6 +297,113 @@ export function HostProfile({ handle }: { handle: string }) {
       <Footer />
     </main>
   );
+}
+
+function ProfileEventCard({
+  event,
+  locale,
+  isReadOnly,
+}: {
+  event: PublicProfileEvent;
+  locale: "zh-Hans" | "ja" | "en";
+  isReadOnly: boolean;
+}) {
+  const [coverFailed, setCoverFailed] = useState(false);
+  const showCover = Boolean(event.coverURL) && !coverFailed;
+
+  return (
+    <article className="profile-event-card">
+      <Link
+        className="profile-event-card-link"
+        href={`/e/${event.publicSlug}`}
+        prefetch={isReadOnly ? false : undefined}
+      >
+        <div className="profile-event-cover">
+          {showCover ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={event.coverURL ?? ""}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              onError={() => setCoverFailed(true)}
+            />
+          ) : (
+            <div className="profile-event-cover-fallback" aria-hidden="true">
+              <span>{event.region.toLocaleUpperCase()}</span>
+              <strong>{Array.from(event.title).slice(0, 2).join("")}</strong>
+            </div>
+          )}
+          <span className="profile-event-status">{profileEventStatus(event.status, locale)}</span>
+        </div>
+        <div className="profile-event-copy">
+          <time dateTime={event.startsAt}>{profileEventDate(event, locale)}</time>
+          <h3>{event.title}</h3>
+          <div className="profile-event-meta">
+            <span>{event.publicArea}</span>
+            <strong>{profileEventPrice(event.priceLabel, locale)}</strong>
+            <span className="profile-event-arrow" aria-hidden="true">↗</span>
+          </div>
+        </div>
+      </Link>
+    </article>
+  );
+}
+
+function profileEventDate(event: PublicProfileEvent, locale: "zh-Hans" | "ja" | "en") {
+  const language = locale === "zh-Hans" ? "zh-CN" : locale === "ja" ? "ja-JP" : "en-US";
+  const start = new Date(event.startsAt);
+  const end = new Date(event.endsAt);
+  const day = new Intl.DateTimeFormat(language, {
+    month: "short",
+    day: "numeric",
+    weekday: "short",
+    timeZone: "Asia/Tokyo",
+  }).format(start);
+  const time = new Intl.DateTimeFormat(language, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Tokyo",
+  });
+  const dayKey = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: "Asia/Tokyo",
+  });
+  if (dayKey.format(start) === dayKey.format(end)) {
+    return `${day} · ${time.format(start)}–${time.format(end)}`;
+  }
+  const endDay = new Intl.DateTimeFormat(language, {
+    month: "short",
+    day: "numeric",
+    weekday: "short",
+    timeZone: "Asia/Tokyo",
+  }).format(end);
+  return `${day} · ${time.format(start)}–${endDay} · ${time.format(end)}`;
+}
+
+function profileEventStatus(
+  status: PublicProfileEvent["status"],
+  locale: "zh-Hans" | "ja" | "en",
+) {
+  const labels = {
+    published: { "zh-Hans": "开放报名", ja: "受付中", en: "Open" },
+    registration_closed: { "zh-Hans": "报名结束", ja: "受付終了", en: "Closed" },
+    in_progress: { "zh-Hans": "进行中", ja: "開催中", en: "Live" },
+    ended: { "zh-Hans": "已结束", ja: "終了", en: "Ended" },
+    archived: { "zh-Hans": "已归档", ja: "アーカイブ", en: "Archived" },
+  } as const;
+  return labels[status][locale];
+}
+
+function profileEventPrice(priceLabel: string, locale: "zh-Hans" | "ja" | "en") {
+  const normalized = priceLabel.trim().toLocaleLowerCase("en-US");
+  if (!profileFreeLabels.has(normalized)) return priceLabel;
+  if (locale === "ja") return "無料";
+  if (locale === "en") return "Free";
+  return "免费";
 }
 
 function profileCopy(locale: "zh-Hans" | "ja" | "en") {

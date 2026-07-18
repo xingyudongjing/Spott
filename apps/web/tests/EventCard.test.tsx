@@ -37,6 +37,58 @@ describe("premium event result", () => {
     expect(within(card).getByTestId("event-cover-fallback")).toBeInTheDocument();
   });
 
+  test("gives the first real event an editorial treatment with description and at most three localized tags", () => {
+    renderWithI18n(
+      <EventResultCard
+        event={{
+          ...eventFixture,
+          category: "walk",
+          tags: ["walk", "music", "outdoor", "games", "learning"],
+        }}
+        featured
+      />,
+    );
+
+    const card = screen.getByRole("article", { name: eventFixture.title });
+    expect(card).toHaveAttribute("data-featured", "true");
+    expect(card).toHaveTextContent(eventFixture.description);
+    const tags = within(card).getByRole("list", { name: "活动标签" });
+    expect(within(tags).getAllByRole("listitem")).toHaveLength(3);
+    expect(tags).toHaveTextContent("城市探索");
+    expect(tags).toHaveTextContent("音乐");
+    expect(tags).toHaveTextContent("户外");
+    expect(tags).not.toHaveTextContent("桌游");
+  });
+
+  test.each([
+    ["ja", "イベントタグ", "まち歩き"],
+    ["en", "Event tags", "City walks"],
+  ] as const)("localizes discovery tags for %s without exposing implementation keys", (locale, listName, label) => {
+    renderWithI18n(
+      <EventResultCard event={{ ...eventFixture, category: "city-walk", tags: [] }} />,
+      locale,
+    );
+
+    const tags = screen.getByRole("list", { name: listName });
+    expect(tags).toHaveTextContent(label);
+    expect(tags).not.toHaveTextContent("city-walk");
+  });
+
+  test.each([
+    ["zh-Hans", "活动标签", "摄影"],
+    ["ja", "イベントタグ", "写真"],
+    ["en", "Event tags", "Photography"],
+  ] as const)("preserves photography as a truthful localized tag in %s", (locale, listName, label) => {
+    renderWithI18n(
+      <EventResultCard event={{ ...eventFixture, category: "custom", tags: ["photography"] }} />,
+      locale,
+    );
+
+    const tags = screen.getByRole("list", { name: listName });
+    expect(tags).toHaveTextContent(label);
+    expect(tags).not.toHaveTextContent(locale === "en" ? "City walks" : locale === "ja" ? "まち歩き" : "城市探索");
+  });
+
   test("treats zero capacity as unlimited instead of manufacturing a waitlist", () => {
     renderWithI18n(
       <EventResultCard

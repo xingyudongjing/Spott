@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
+
+import { DiscoveryLoading } from "../app/components/discovery/DiscoveryState";
+import { renderWithI18n } from "./event-fixtures";
 
 const stylesPath = resolve(process.cwd(), "app/components/discovery/DiscoveryShell.module.css");
 const globalsPath = resolve(process.cwd(), "app/globals.css");
@@ -20,8 +24,39 @@ describe("responsive discovery safeguards", () => {
     expect(styles).toMatch(/\.filterDialog::backdrop/);
     expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.regionField\s*\{\s*display:\s*none;/);
     expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.filterRail\s*>\s*label\s*\{\s*display:\s*none;/);
+    expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.filterRail\s*\{[\s\S]*?gap:\s*5px;[\s\S]*?overflow-x:\s*auto;/);
+    expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.filterRail\s*>\s*button,[\s\S]*?\.moreFilters\s*>\s*button\s*\{[\s\S]*?gap:\s*5px;[\s\S]*?padding-inline:\s*5px;/);
     expect(styles).toMatch(/\.intro h1\s*\{[\s\S]*?text-wrap:\s*balance;/);
+    expect(styles).toMatch(/\.eventCard\[data-featured="true"\][\s\S]*?\.eventLink\s*\{[\s\S]*?grid-template-columns:/);
+    expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.eventCard\[data-featured="true"\][\s\S]*?\.coverFrame\s*\{[\s\S]*?aspect-ratio:\s*16\s*\/\s*9;/);
+    expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.mapLayout \.eventLink\s*\{\s*grid-template-columns:\s*132px minmax\(0, 1fr\);/);
+    expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.mapLayout \.eventFacts span:nth-child\(n\+2\)\s*\{\s*display:\s*inline-flex;/);
+    expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.capacity\s*\{[\s\S]*?grid-column:\s*1\s*\/\s*-1;/);
+    expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.capacity strong\s*\{[\s\S]*?white-space:\s*normal;/);
+    expect(styles).toMatch(/\.eventLink:focus-visible\s*\{/);
+    expect(styles).not.toMatch(/@media \(max-width: 780px\)[\s\S]*?\.eventFacts span:nth-child\(3\)\s*\{\s*display:\s*none;/);
+    expect(styles).toMatch(/\.skeletonFeatured\s*\{[\s\S]*?height:\s*296px;/);
+    expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.skeletonFeatured\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\);/);
+    expect(styles).toMatch(/\.recommendationModule\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?max-width:\s*100%;/);
+    expect(styles).toMatch(/\.recommendationRail\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?max-width:\s*100%;/);
+    expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.recommendationRail\s*\{[\s\S]*?grid-auto-flow:\s*column;[\s\S]*?grid-auto-columns:\s*min\(82vw, 312px\);[\s\S]*?overflow-x:\s*auto;/);
+    expect(globals).toMatch(/\.group-tile-link:focus-visible\s*\{[\s\S]*?outline-offset:\s*-3px;/);
+    expect(globals).toMatch(/\.group-skeleton-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);[\s\S]*?gap:\s*18px;/);
+    expect(globals).toMatch(/\.group-skeleton-card\s*\{[\s\S]*?grid-template-rows:\s*auto 1fr;[\s\S]*?border-radius:\s*24px;/);
+    expect(globals).toMatch(/\.group-skeleton-artwork\s*\{[\s\S]*?aspect-ratio:\s*16\s*\/\s*8\.4;/);
+    expect(globals).toMatch(/\.group-skeleton-copy\s*\{[\s\S]*?min-height:\s*218px;/);
+    expect(globals).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.group-skeleton-artwork\s*\{[\s\S]*?aspect-ratio:\s*16\s*\/\s*9;/);
     expect(globals).not.toMatch(/body\s*\{[\s\S]*?min-width:\s*320px/);
+  });
+
+  test("renders one featured skeleton before compact rows to prevent first-viewport layout shift", () => {
+    renderWithI18n(<DiscoveryLoading />);
+
+    const loading = screen.getByLabelText(/加载/);
+    expect(loading.children).toHaveLength(3);
+    expect(loading.children[0]).toHaveAttribute("data-featured", "true");
+    expect(loading.children[1]).not.toHaveAttribute("data-featured");
+    expect(loading.children[2]).not.toHaveAttribute("data-featured");
   });
 
   test("uses actual mint and amber text mixes that exceed 4.5:1 on white", () => {

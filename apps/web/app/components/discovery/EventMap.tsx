@@ -55,7 +55,10 @@ export function EventMap({
   useEffect(() => {
     selectedEventIdRef.current = selectedEventId;
     for (const [eventId, element] of markerElementsRef.current) {
-      element.setAttribute("aria-pressed", String(eventId === selectedEventId));
+      const isSelected = eventId === selectedEventId;
+      element.setAttribute("aria-pressed", String(isSelected));
+      if (isSelected) element.setAttribute("aria-controls", `map-preview-${eventId}`);
+      else element.removeAttribute("aria-controls");
     }
   }, [selectedEventId]);
 
@@ -127,7 +130,7 @@ export function EventMap({
             if (key === lastBounds) return;
             lastBounds = key;
             onBoundsChange(next);
-          }, 280);
+          }, 300);
         };
 
         map.on("moveend", handleMoveEnd);
@@ -144,8 +147,9 @@ export function EventMap({
             "aria-label",
             fact.precision === "approximate" ? `${fact.title} · ${approximateLabel}` : fact.title,
           );
-          markerElement.setAttribute("aria-controls", `map-preview-${fact.eventId}`);
-          markerElement.setAttribute("aria-pressed", String(fact.eventId === selectedEventIdRef.current));
+          const isSelected = fact.eventId === selectedEventIdRef.current;
+          if (isSelected) markerElement.setAttribute("aria-controls", `map-preview-${fact.eventId}`);
+          markerElement.setAttribute("aria-pressed", String(isSelected));
           markerElement.addEventListener("click", () => onSelect?.(fact.eventId));
           markerElements.set(fact.eventId, markerElement);
           return new maplibre.Marker({

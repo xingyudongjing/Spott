@@ -56,6 +56,18 @@ describe("URL-authoritative discovery", () => {
     expect(within(sheet).getByRole("combobox", { name: "语言" })).toBeInTheDocument();
   });
 
+  test("uses compact, complete English copy for the 390px availability filter", () => {
+    searchEventsMock.mockResolvedValue(makePage());
+    renderWithI18n(
+      <DiscoveryShell initialQuery={{}} initialPage={makePage()} />,
+      "en",
+    );
+
+    const availability = screen.getByRole("button", { name: "Open spots" });
+    expect(availability).toHaveTextContent("Open spots");
+    expect(availability.textContent?.trim()).toHaveLength(10);
+  });
+
   test("keeps analytics off and exposes region inside the filter dialog at 390px in read-only mode", async () => {
     const user = userEvent.setup();
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
@@ -82,13 +94,26 @@ describe("URL-authoritative discovery", () => {
   });
 
   test("reuses the server page and puts a real event immediately after discovery controls", () => {
-    renderWithI18n(<DiscoveryShell initialQuery={{}} initialPage={makePage()} />);
+    renderWithI18n(<DiscoveryShell
+      initialQuery={{}}
+      initialPage={makePage([
+        eventFixture,
+        makeEvent({
+          id: "019b0000-0000-7000-8100-000000000004",
+          publicSlug: "second-event",
+          title: "第二场真实活动",
+        }),
+      ])}
+    />);
 
     expect(searchEventsMock).not.toHaveBeenCalled();
     const search = screen.getByRole("searchbox");
     const eventLink = screen.getByRole("link", { name: new RegExp(eventFixture.title) });
     expect(search.compareDocumentPosition(eventLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText("找到兴趣相投的人")).not.toBeInTheDocument();
+    const cards = screen.getAllByTestId("discovery-event");
+    expect(cards[0]).toHaveAttribute("data-featured", "true");
+    expect(cards[1]).not.toHaveAttribute("data-featured");
   });
 
   test("round-trips filters through the URL and the real API query", async () => {
@@ -187,7 +212,7 @@ describe("URL-authoritative discovery", () => {
     expect(searchEventsMock).toHaveBeenCalledTimes(requestsAfterStart);
   });
 
-  test("revalidates once through the refresh-aware client path so viewer facts are current", async () => {
+  test("revalidates the default feed once through the refresh-aware client path so viewer facts are current", async () => {
     readSessionMock.mockReturnValue({
       accessToken: "viewer-access-token",
       accessTokenExpiresAt: "2026-07-16T01:00:00.000Z",
@@ -200,7 +225,7 @@ describe("URL-authoritative discovery", () => {
         restrictions: [],
       },
     });
-    searchEventsMock.mockResolvedValue(makePage([makeEvent({
+    const viewerEvent = makeEvent({
       registrationStatus: "confirmed",
       viewerRegistration: {
         id: "019b0000-0000-7000-8100-000000000090",
@@ -208,15 +233,44 @@ describe("URL-authoritative discovery", () => {
         partySize: 1,
         offerExpiresAt: null,
       },
-    })]));
+    });
+    apiRequestMock.mockResolvedValue({
+      banner: null,
+      modules: [{
+        key: "today",
+        title: "server title",
+        items: [{
+          ...viewerEvent,
+          recommendation: { score: 1, boosted: false, components: { freshness: 1 } },
+        }],
+      }],
+      moduleOrder: ["today"],
+      weights: { freshness: 1 },
+      scoringVersion: "recommendation-v1",
+      naturalResultsMinRatio: 0.7,
+      serverTime: "2026-07-19T00:00:00.000Z",
+      generatedAt: "2026-07-19T00:00:00.000Z",
+      queryExplanationId: "viewer-feed",
+    });
 
-    renderWithI18n(<DiscoveryShell initialQuery={{}} initialPage={makePage()} />);
+    renderWithI18n(<DiscoveryShell
+      initialQuery={{}}
+      initialPage={null}
+      initialFeed={{
+        modules: [{ key: "today", serverTitle: "server title", items: [eventFixture] }],
+        moduleOrder: ["today"],
+        serverTime: "2026-07-19T00:00:00.000Z",
+        generatedAt: "2026-07-19T00:00:00.000Z",
+        queryExplanationId: "anonymous-feed",
+      }}
+    />);
 
-    await waitFor(() => expect(searchEventsMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(apiRequestMock).toHaveBeenCalledTimes(1));
     expect(apiRequestMock).toHaveBeenCalledWith(
-      "/events/search?limit=24",
+      "/discovery/feed?limit=24",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+    expect(searchEventsMock).not.toHaveBeenCalled();
     expect(await screen.findByText("已报名")).toBeInTheDocument();
   });
 

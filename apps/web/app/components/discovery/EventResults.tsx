@@ -103,7 +103,11 @@ export function EventResults({
             )}
             {error !== "map" && selectedEvent ? <MapEventPreview event={selectedEvent} /> : null}
           </div>
-          <EventList events={page.items} selectedEventId={selectedEventId} />
+          <EventList
+            events={page.items}
+            selectedEventId={selectedEventId}
+            featuredFirst={false}
+          />
         </div>
       ) : (
         <EventList events={page.items} selectedEventId={selectedEventId} />

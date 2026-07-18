@@ -497,6 +497,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/events/{id}/promotions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Purchase a points-funded event promotion (pin)
+         * @description Buys a discovery pin for a fixed tier by spending platform points. This is a Spott digital feature, not an activity fee; no money is collected.
+         */
+        post: operations["promoteEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/{id}/promotion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The active promotion for an event, if any */
+        get: operations["activeEventPromotion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events/{id}/registrations": {
         parameters: {
             query?: never;
@@ -4694,6 +4731,64 @@ export interface operations {
                 };
             };
             400: components["responses"]["Error"];
+        };
+    };
+    promoteEvent: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                id: components["parameters"]["ResourceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    tier: "boost_24h" | "boost_72h" | "boost_7d";
+                    quoteId: components["schemas"]["UUID"];
+                };
+            };
+        };
+        responses: {
+            /** @description Promotion purchased and active */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            402: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    activeEventPromotion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ResourceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The active promotion, or null when none is active */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never> | null;
+                };
+            };
+            404: components["responses"]["Error"];
         };
     };
     registerForEvent: {

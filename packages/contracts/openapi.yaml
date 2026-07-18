@@ -641,6 +641,50 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EventDetail' }
+  /events/{id}/promotions:
+    post:
+      operationId: promoteEvent
+      summary: Purchase a points-funded event promotion (pin)
+      description: >-
+        Buys a discovery pin for a fixed tier by spending platform points. This
+        is a Spott digital feature, not an activity fee; no money is collected.
+      tags: [Events]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tier, quoteId]
+              properties:
+                tier: { type: string, enum: [boost_24h, boost_72h, boost_7d] }
+                quoteId: { $ref: '#/components/schemas/UUID' }
+      responses:
+        '201':
+          description: Promotion purchased and active
+          content:
+            application/json:
+              schema: { type: object }
+        '402': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /events/{id}/promotion:
+    get:
+      operationId: activeEventPromotion
+      summary: The active promotion for an event, if any
+      tags: [Events]
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+      responses:
+        '200':
+          description: The active promotion, or null when none is active
+          content:
+            application/json:
+              schema: { type: [object, 'null'] }
+        '404': { $ref: '#/components/responses/Error' }
   /events/{id}/registrations:
     post:
       operationId: registerForEvent

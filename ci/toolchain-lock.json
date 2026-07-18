@@ -36,7 +36,7 @@
     },
     {
       "path": "pnpm-lock.yaml",
-      "sha256": "2efcabe5330267b69063a457225309e39bd77290aeb9324d6ae095fd22d61507"
+      "sha256": "77bac37001d711384b04a255e8c1ec41c21a5a96320fc958bd13f82405360a73"
     },
     {
       "path": "Spott.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",

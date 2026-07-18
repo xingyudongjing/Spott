@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -11,6 +20,90 @@ const deploymentRoot = join(repositoryRoot, 'infrastructure/deploy/ip-preview');
 
 function source(name) {
   return readFileSync(join(deploymentRoot, name), 'utf8');
+}
+
+function writeExecutable(path, contents) {
+  writeFileSync(path, contents, { mode: 0o700 });
+  chmodSync(path, 0o700);
+}
+
+function runBackupDrillHarness(mode) {
+  const directory = mkdtempSync(join(tmpdir(), 'spott-backup-drill-test-'));
+  const release = join(directory, 'a'.repeat(64));
+  const deployment = join(release, 'infrastructure/deploy/ip-preview');
+  const backup = join(directory, 'backups');
+  const bin = join(directory, 'bin');
+  const state = join(directory, 'state');
+  const environmentFile = join(directory, 'ip-preview.env');
+  mkdirSync(deployment, { recursive: true });
+  mkdirSync(bin);
+  mkdirSync(state);
+  writeFileSync(join(deployment, 'compose.yaml'), 'services: {}\n');
+  writeFileSync(join(deployment, 'compose.internal.yaml'), 'services: {}\n');
+  writeFileSync(environmentFile, 'POSTGRES_DB=spott\n');
+  writeExecutable(join(bin, 'id'), `#!/usr/bin/env bash
+if [[ \${1:-} == -u ]]; then printf '0\\n'; else /usr/bin/id "$@"; fi
+`);
+  writeExecutable(join(bin, 'install'), `#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p "\${!#}"
+`);
+  writeExecutable(join(bin, 'mktemp'), `#!/usr/bin/env bash
+set -euo pipefail
+path=\${1/XXXXXX/ABC123}
+: >"$path"
+printf '%s\\n' "$path"
+`);
+  writeExecutable(join(bin, 'openssl'), `#!/usr/bin/env bash
+printf '0123456789abcdef01234567\\n'
+`);
+  writeExecutable(join(bin, 'sha256sum'), `#!/usr/bin/env bash
+printf '%064d  %s\\n' 0 "$1"
+`);
+  writeExecutable(join(bin, 'mv'), `#!/usr/bin/env bash
+set -euo pipefail
+count_file="$FAKE_STATE/mv-count"
+count=0
+if [[ -f $count_file ]]; then read -r count <"$count_file"; fi
+count=$((count + 1))
+printf '%s\\n' "$count" >"$count_file"
+if [[ $FAKE_MODE == finalize-fail && $count -eq 2 ]]; then exit 55; fi
+exec /bin/mv "$@"
+`);
+  writeExecutable(join(bin, 'docker'), `#!/usr/bin/env bash
+set -euo pipefail
+arguments="$*"
+case "$arguments" in
+  *'pg_restore --list'*) exit 0 ;;
+  *'pg_dump'*) printf 'fake-custom-dump'; exit 0 ;;
+  *'createdb'*) exit 0 ;;
+  *'pg_restore'*)
+    if [[ $FAKE_MODE == cleanup-fail ]]; then exit 42; fi
+    exit 0
+    ;;
+  *'dropdb'*)
+    if [[ $FAKE_MODE == cleanup-fail ]]; then exit 43; fi
+    exit 0
+    ;;
+  *'psql'*) printf '22\\t3.6.4\\n'; exit 0 ;;
+esac
+exit 0
+`);
+  const result = spawnSync(
+    '/bin/bash',
+    [join(deploymentRoot, 'backup-restore-check.sh'), release, backup],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        FAKE_MODE: mode,
+        FAKE_STATE: state,
+        PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}`,
+        SPOTT_ENV_FILE: environmentFile,
+      },
+    },
+  );
+  return { backup, directory, result };
 }
 
 test('IP preview uses a digest-pinned production runtime and immutable PostGIS image', () => {
@@ -195,7 +288,34 @@ test('backup restore drill targets the immutable deployed release and existing C
   assert.match(backup, /exec -T postgres pg_restore --list <"\$dump_tmp"/u);
   assert.doesNotMatch(backup, /pg_restore --list -/u);
   assert.match(backup, /schema_migrations/u);
+  assert.doesNotMatch(backup, /rm -f "\$dump_path" "\$checksum_path"/u);
+  assert.doesNotMatch(backup, /dropdb[\s\S]{0,240}\|\| true/u);
+  assert.match(backup, /Failed to remove restore-check database/u);
   assert.doesNotMatch(backup, /set -x|cat .*ip-preview\.env/u);
+});
+
+test('backup restore drill reports a throwaway-database cleanup failure', () => {
+  const harness = runBackupDrillHarness('cleanup-fail');
+  try {
+    assert.notEqual(harness.result.status, 0);
+    assert.match(harness.result.stderr, /Failed to remove restore-check database/u);
+  } finally {
+    rmSync(harness.directory, { recursive: true, force: true });
+  }
+});
+
+test('backup restore drill preserves a finalized dump if sidecar publication fails', () => {
+  const harness = runBackupDrillHarness('finalize-fail');
+  try {
+    assert.notEqual(harness.result.status, 0);
+    const dumps = readdirSync(harness.backup).filter(
+      (name) => !name.startsWith('.') && name.endsWith('.dump'),
+    );
+    assert.equal(dumps.length, 1);
+    assert.ok(statSync(join(harness.backup, dumps[0])).size > 0);
+  } finally {
+    rmSync(harness.directory, { recursive: true, force: true });
+  }
 });
 
 test('internal functional-test entry stays loopback-only and uses same-origin browser API calls', () => {

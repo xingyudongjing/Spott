@@ -46,19 +46,33 @@ if [[ -e $dump_path || -e $checksum_path ]]; then
   exit 73
 fi
 dump_tmp=$(mktemp "$backup_root/.spott-ip-preview-$timestamp.XXXXXX.dump")
+checksum_tmp=
 restore_database=
 
 cleanup() {
   local status=$?
+  local cleanup_failed=0
   if [[ -n $restore_database ]]; then
-    "${compose[@]}" exec -T postgres sh -ceu '
-      export PGPASSWORD="$POSTGRES_PASSWORD"
-      dropdb --if-exists --force --username="$POSTGRES_USER" "$1"
-    ' sh "$restore_database" >/dev/null 2>&1 || true
+    if ! "${compose[@]}" exec -T postgres sh -ceu '
+        export PGPASSWORD="$POSTGRES_PASSWORD"
+        dropdb --if-exists --force --username="$POSTGRES_USER" "$1"
+      ' sh "$restore_database" >/dev/null 2>&1; then
+      printf 'Failed to remove restore-check database: %s\n' "$restore_database" >&2
+      cleanup_failed=1
+    else
+      restore_database=
+    fi
   fi
-  rm -f "$dump_tmp"
-  if [[ $status -ne 0 ]]; then
-    rm -f "$dump_path" "$checksum_path"
+  if [[ -n $dump_tmp && -e $dump_tmp ]] && ! rm -f "$dump_tmp"; then
+    printf 'Failed to remove temporary database dump\n' >&2
+    cleanup_failed=1
+  fi
+  if [[ -n $checksum_tmp && -e $checksum_tmp ]] && ! rm -f "$checksum_tmp"; then
+    printf 'Failed to remove temporary checksum\n' >&2
+    cleanup_failed=1
+  fi
+  if [[ $cleanup_failed -ne 0 ]]; then
+    exit 1
   fi
   exit "$status"
 }
@@ -122,12 +136,19 @@ fi
 ' sh "$restore_database" >/dev/null
 restore_database=
 
+checksum_tmp=$(mktemp "$backup_root/.spott-ip-preview-$timestamp.XXXXXX.sha256")
+dump_checksum=$(sha256sum "$dump_tmp")
+dump_checksum=${dump_checksum%% *}
+if [[ ! $dump_checksum =~ ^[a-f0-9]{64}$ ]]; then
+  printf 'Database backup checksum is invalid\n' >&2
+  exit 1
+fi
+printf '%s  %s\n' "$dump_checksum" "$(basename "$dump_path")" >"$checksum_tmp"
+chmod 600 "$dump_tmp" "$checksum_tmp"
 mv "$dump_tmp" "$dump_path"
-(
-  cd "$backup_root"
-  sha256sum "$(basename "$dump_path")" >"$(basename "$checksum_path")"
-)
-chmod 600 "$dump_path" "$checksum_path"
+dump_tmp=
+mv "$checksum_tmp" "$checksum_path"
+checksum_tmp=
 
 printf 'backup=%s\n' "$dump_path"
 printf 'migrations=%s postgis=%s\n' "$migration_count" "$postgis_version"

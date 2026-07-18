@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 
 import {
   applyManifestMigration,
+  unwrapManifestMigrationTransaction,
   unwrapMigrationTransaction,
   type MigrationTransactionClient,
 } from './migration-transaction.js';
@@ -29,16 +30,43 @@ const wrappedSQL = '-- immutable migration\nBEGIN;\n\nCREATE TABLE example(id uu
 const expectedBody = '-- immutable migration\n\nCREATE TABLE example(id uuid);\n\n';
 const repositoryRoot = resolve(import.meta.dirname, '../..');
 
-void test('every repository migration has one strict runner-owned transaction envelope', async () => {
+void test('every repository migration is safe for the runner-owned transaction', async () => {
   const migrationsDirectory = join(repositoryRoot, 'database', 'migrations');
-  const filenames = (await readdir(migrationsDirectory))
-    .filter((filename) => filename.endsWith('.sql'))
-    .toSorted();
-  assert.ok(filenames.length >= 21);
-  for (const filename of filenames) {
-    const sql = await readFile(join(migrationsDirectory, filename), 'utf8');
-    assert.doesNotThrow(() => unwrapMigrationTransaction(sql), filename);
+  const manifest = JSON.parse(
+    await readFile(join(repositoryRoot, 'database', 'migration-manifest.json'), 'utf8'),
+  ) as { migrations: { sequence: number; filename: string; sha256: string }[] };
+  assert.ok(manifest.migrations.length >= 21);
+  for (const row of manifest.migrations) {
+    const sql = await readFile(join(migrationsDirectory, row.filename), 'utf8');
+    assert.doesNotThrow(() => unwrapManifestMigrationTransaction(row, sql), row.filename);
   }
+});
+
+void test('accepts only the byte-exact legacy unwrapped promotion migration', async () => {
+  const legacy = {
+    sequence: 26,
+    filename: '0026_event_promotion.sql',
+    sha256: 'a2196808c41b380cc243fa19497f84fcc82b7ab18951cbe2e032e284787e7d58',
+  };
+  const sql = await readFile(
+    join(repositoryRoot, 'database', 'migrations', legacy.filename),
+    'utf8',
+  );
+
+  assert.throws(() => unwrapMigrationTransaction(sql), /MIGRATION_TRANSACTION_ENVELOPE_INVALID/u);
+  assert.equal(unwrapManifestMigrationTransaction(legacy, sql), sql);
+  assert.throws(
+    () => unwrapManifestMigrationTransaction({ ...legacy, filename: '0026_other.sql' }, sql),
+    /MIGRATION_TRANSACTION_ENVELOPE_INVALID/u,
+  );
+  assert.throws(
+    () => unwrapManifestMigrationTransaction({ ...legacy, sha256: 'b'.repeat(64) }, sql),
+    /MIGRATION_TRANSACTION_ENVELOPE_INVALID/u,
+  );
+  assert.throws(
+    () => unwrapManifestMigrationTransaction(legacy, `${sql}\n-- changed`),
+    /MIGRATION_TRANSACTION_ENVELOPE_INVALID/u,
+  );
 });
 
 void test('unwraps exactly one outer migration transaction without changing its body', () => {

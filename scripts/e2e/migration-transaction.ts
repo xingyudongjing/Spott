@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { MigrationManifestRow } from './migration-manifest.js';
 
 export interface MigrationTransactionClient {
@@ -5,6 +7,12 @@ export interface MigrationTransactionClient {
 }
 
 const insertLedgerSQL = 'INSERT INTO public.schema_migrations(version, checksum) VALUES ($1, $2)';
+const legacyUnwrappedMigrations = new Map<string, string>([
+  [
+    '0026_event_promotion.sql',
+    'a2196808c41b380cc243fa19497f84fcc82b7ab18951cbe2e032e284787e7d58',
+  ],
+]);
 
 function isCommentOrWhitespace(line: string): boolean {
   const trimmed = line.trim();
@@ -46,12 +54,36 @@ export function unwrapMigrationTransaction(sql: string): string {
   return unwrapped;
 }
 
+export function unwrapManifestMigrationTransaction(
+  migration: MigrationManifestRow,
+  sql: string,
+): string {
+  try {
+    return unwrapMigrationTransaction(sql);
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== 'MIGRATION_TRANSACTION_ENVELOPE_INVALID') {
+      throw error;
+    }
+  }
+
+  const legacyChecksum = legacyUnwrappedMigrations.get(migration.filename);
+  const actualChecksum = createHash('sha256').update(sql, 'utf8').digest('hex');
+  if (
+    !legacyChecksum
+    || migration.sha256 !== legacyChecksum
+    || actualChecksum !== legacyChecksum
+  ) {
+    throw new Error('MIGRATION_TRANSACTION_ENVELOPE_INVALID');
+  }
+  return sql;
+}
+
 export async function applyManifestMigration(
   client: MigrationTransactionClient,
   migration: MigrationManifestRow,
   wrappedSQL: string,
 ): Promise<void> {
-  const migrationBody = unwrapMigrationTransaction(wrappedSQL);
+  const migrationBody = unwrapManifestMigrationTransaction(migration, wrappedSQL);
   let began = false;
   try {
     await client.query('BEGIN');

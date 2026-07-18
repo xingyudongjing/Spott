@@ -620,6 +620,32 @@ final class EventDetailStoreTests: XCTestCase {
         )
     }
 
+    func testLinkedGroupNavigationDoesNotDependOnJoinPermissionOrAuthenticationGate() throws {
+        let groupID = UUID(uuidString: "019b0000-0000-7000-8100-000000000066")!
+        let event = try makeEvent([
+            "viewerRegistration": NSNull(),
+            "groupId": groupID.uuidString.lowercased(),
+            "availableActions": ["viewTicket"],
+        ])
+
+        XCTAssertEqual(
+            EventDetailServerActionPolicy.resolve(
+                event: event,
+                viewerSnapshotIsCurrent: true
+            ),
+            [.openGroup(groupID: groupID)]
+        )
+        XCTAssertFalse(
+            EventDetailServerAction.openGroup(groupID: groupID).requiresTrustGate,
+            "Opening a public linked community is navigation, not a request to join it."
+        )
+        XCTAssertTrue(
+            EventDetailServerAction.cancelRegistration(
+                registrationID: UUID()
+            ).requiresTrustGate
+        )
+    }
+
     func testServerActionPolicyNeverInventsMissingResourceIdentifiers() throws {
         let event = try makeEvent([
             "viewerRegistration": NSNull(),

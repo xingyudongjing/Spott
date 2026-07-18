@@ -34,6 +34,15 @@ enum EventDetailServerAction: Equatable, Hashable, Identifiable, Sendable {
         case .cancelRegistration: .cancelRegistration
         }
     }
+
+    var requiresTrustGate: Bool {
+        switch self {
+        case .checkIn, .cancelRegistration:
+            true
+        case .openGroup:
+            false
+        }
+    }
 }
 
 enum EventDetailServerActionPolicy {
@@ -48,8 +57,7 @@ enum EventDetailServerActionPolicy {
            let registrationID = event.viewerRegistration?.id {
             result.append(.checkIn(registrationID: registrationID))
         }
-        if event.availableActions.contains(.joinGroup),
-           let groupID = event.groupId {
+        if let groupID = event.groupId {
             result.append(.openGroup(groupID: groupID))
         }
         if event.availableActions.contains(.cancelRegistration),

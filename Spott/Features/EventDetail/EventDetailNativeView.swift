@@ -640,20 +640,28 @@ struct EventDetailNativeScreen: View {
     private func performServerAction(_ action: EventDetailServerAction) {
         guard actionRunner.busyAction == nil,
               isCurrentlyAuthorized(action) else { return }
-        model.requireTrust(for: action.eventAction, event: store.event) {
-            guard isCurrentlyAuthorized(action) else { return }
-            switch action {
-            case .checkIn(let registrationID):
-                openCheckIn(registrationID: registrationID)
-            case .openGroup(let groupID):
-                model.router.push(
-                    .group(groupID),
-                    in: .groups,
-                    selectingExplicitTab: true
-                )
-            case .cancelRegistration(let registrationID):
-                cancellationRegistrationID = registrationID
+        if action.requiresTrustGate {
+            model.requireTrust(for: action.eventAction, event: store.event) {
+                executeServerAction(action)
             }
+        } else {
+            executeServerAction(action)
+        }
+    }
+
+    private func executeServerAction(_ action: EventDetailServerAction) {
+        guard isCurrentlyAuthorized(action) else { return }
+        switch action {
+        case .checkIn(let registrationID):
+            openCheckIn(registrationID: registrationID)
+        case .openGroup(let groupID):
+            model.router.push(
+                .group(groupID),
+                in: .groups,
+                selectingExplicitTab: true
+            )
+        case .cancelRegistration(let registrationID):
+            cancellationRegistrationID = registrationID
         }
     }
 

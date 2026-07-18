@@ -17,6 +17,7 @@ import {
   type GroupAnnouncement,
   type GroupView,
 } from '../../lib/client-api';
+import { localizedPublicTags } from '../../lib/public-taxonomy';
 import { GroupDiscussion } from './GroupDiscussion';
 
 export function GroupExperience({ slug }: { slug: string }) {
@@ -177,7 +178,7 @@ export function GroupExperience({ slug }: { slug: string }) {
               <span>{t('group.members', { count: group.memberCount })}</span>
               <span>{t('group.capacity', { count: group.capacity })}</span>
               <span>{joinModeLabel(group.joinMode, locale)}</span>
-              {group.tags?.map((tag) => (
+              {localizedPublicTags(group.tags ?? [], locale).map((tag) => (
                 <span key={tag}>{tag}</span>
               ))}
             </div>

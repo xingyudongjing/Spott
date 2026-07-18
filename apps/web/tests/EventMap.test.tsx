@@ -81,6 +81,25 @@ describe("MapLibre adapter", () => {
     ]);
   });
 
+  test("announces map loading until the first rendered frame becomes idle", async () => {
+    render(
+      <EventMap
+        events={[eventFixture]}
+        styleURL="https://media.spott.jp/map/style.json"
+        mapLabel="活动地图"
+        loadingLabel="正在加载地图…"
+        approximateLabel="约在此区域"
+        onBoundsChange={vi.fn()}
+        onFailure={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("正在加载地图…");
+    await waitFor(() => expect(mapBoundary.onceHandlers.has("idle")).toBe(true));
+    act(() => { mapBoundary.onceHandlers.get("idle")?.(); });
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+  });
+
   test("normalizes one real camera move and tears down the WebGL boundary", async () => {
     const onBoundsChange = vi.fn();
     const { unmount } = render(
@@ -88,6 +107,7 @@ describe("MapLibre adapter", () => {
         events={[eventFixture]}
         styleURL="https://media.spott.jp/map/style.json"
         mapLabel="活动地图"
+        loadingLabel="正在加载地图…"
         approximateLabel="约在此区域"
         onBoundsChange={onBoundsChange}
         onFailure={vi.fn()}
@@ -124,6 +144,7 @@ describe("MapLibre adapter", () => {
         events={[eventFixture]}
         styleURL="https://media.spott.jp/map/style.json"
         mapLabel="活动地图"
+        loadingLabel="正在加载地图…"
         approximateLabel="约在此区域"
         onBoundsChange={vi.fn()}
         onFailure={vi.fn()}
@@ -153,6 +174,7 @@ describe("MapLibre adapter", () => {
         events={events}
         styleURL="https://media.spott.jp/map/style.json"
         mapLabel="活动地图"
+        loadingLabel="正在加载地图…"
         approximateLabel="约在此区域"
         selectedEventId={null}
         onBoundsChange={onBoundsChange}
@@ -170,6 +192,7 @@ describe("MapLibre adapter", () => {
         events={events}
         styleURL="https://media.spott.jp/map/style.json"
         mapLabel="活动地图"
+        loadingLabel="正在加载地图…"
         approximateLabel="约在此区域"
         selectedEventId={eventFixture.id}
         onBoundsChange={onBoundsChange}
@@ -184,6 +207,7 @@ describe("MapLibre adapter", () => {
         events={events}
         styleURL="https://media.spott.jp/map/style.json"
         mapLabel="活动地图"
+        loadingLabel="正在加载地图…"
         approximateLabel="约在此区域"
         selectedEventId={null}
         onBoundsChange={onBoundsChange}
@@ -220,6 +244,7 @@ describe("MapLibre adapter", () => {
         events={[eventFixture, duplicate, northern]}
         styleURL="https://media.spott.jp/map/style.json"
         mapLabel="活动地图"
+        loadingLabel="正在加载地图…"
         approximateLabel="约在此区域"
         onBoundsChange={vi.fn()}
         onFailure={vi.fn()}
@@ -244,6 +269,7 @@ describe("MapLibre adapter", () => {
         events={[eventFixture]}
         styleURL="https://media.spott.jp/map/style.json"
         mapLabel="活动地图"
+        loadingLabel="正在加载地图…"
         approximateLabel="约在此区域"
         loadTimeoutMs={1_000}
         onBoundsChange={vi.fn()}
@@ -269,6 +295,7 @@ describe("MapLibre adapter", () => {
         events={[eventFixture]}
         styleURL="http://127.0.0.1:4201/style.json"
         mapLabel="活动地图"
+        loadingLabel="正在加载地图…"
         approximateLabel="约在此区域"
         loadTimeoutMs={1_000}
         onBoundsChange={vi.fn()}

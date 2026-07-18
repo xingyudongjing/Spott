@@ -1,6 +1,7 @@
 import type { Locale, MessageKey } from "../../i18n/messages";
 import { formatMessage } from "../../i18n/messages";
 import type { EventDetail } from "../../lib/event-contract";
+import { localizedPublicTags } from "../../lib/public-taxonomy";
 import {
   eventDate,
   eventFeeLabel,
@@ -31,6 +32,7 @@ export function EventDetailView({
   const language = event.supportedLocales
     .map((value) => eventLanguageLabel(value, locale))
     .join(" · ");
+  const tags = localizedPublicTags(event.tags, locale);
   const trust = organizerTrustFacts(event, locale);
 
   return (
@@ -54,8 +56,8 @@ export function EventDetailView({
               </div>
               <h1>{event.title}</h1>
               <p className={styles.lead}>{event.description}</p>
-              {event.tags.length ? (
-                <div className={styles.tags}>{event.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
+              {tags.length ? (
+                <div className={styles.tags}>{tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
               ) : null}
             </div>
           </div>

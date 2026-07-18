@@ -8,6 +8,7 @@ import { usePreviewMode } from "../../components/PreviewModeProvider";
 import { apiRequest, errorMessage, readSession, type WebSession } from "../../lib/client-api";
 import type { EventSummary } from "../../lib/event-contract";
 import { resolveEventCTA, type EventCTA, type EventCTAEvent } from "../../lib/event-cta";
+import { internalTestEntryHref } from "../../lib/internal-test-entry";
 import styles from "./EventActions.module.css";
 
 type EventActionsEvent = EventCTAEvent & Pick<
@@ -230,7 +231,17 @@ export function EventPrimaryAction({
     return <button {...marker} className={styles.primary} type="button" disabled>{label}</button>;
   }
   if (isReadOnly) {
-    return <button {...marker} className={styles.primary} type="button" disabled>{t("preview.readOnlyAction")}</button>;
+    return (
+      <a
+        {...marker}
+        className={styles.primary}
+        href={internalTestEntryHref(registerPath)}
+        target="_blank"
+        rel="noreferrer"
+      >
+        {t("preview.readOnlyAction")}
+      </a>
+    );
   }
   if (cta.kind === "accept_waitlist" && cta.registrationId) {
     return (

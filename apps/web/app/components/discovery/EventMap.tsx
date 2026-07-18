@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Map as MapLibreMap, MapEventType, Marker as MapLibreMarker } from "maplibre-gl";
 
 import type { MapBounds } from "../../lib/discovery-query";
@@ -31,6 +31,7 @@ export function EventMap({
   bounds,
   selectedEventId,
   mapLabel,
+  loadingLabel,
   approximateLabel,
   loadTimeoutMs = 10_000,
   onBoundsChange,
@@ -42,6 +43,7 @@ export function EventMap({
   bounds?: MapBounds;
   selectedEventId?: string | null;
   mapLabel: string;
+  loadingLabel: string;
   approximateLabel: string;
   loadTimeoutMs?: number;
   onBoundsChange: (bounds: MapBounds) => void;
@@ -51,6 +53,7 @@ export function EventMap({
   const containerRef = useRef<HTMLDivElement>(null);
   const markerElementsRef = useRef(new Map<string, HTMLButtonElement>());
   const selectedEventIdRef = useRef(selectedEventId);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     selectedEventIdRef.current = selectedEventId;
@@ -65,6 +68,7 @@ export function EventMap({
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !styleURL) return;
+    setLoading(true);
     const markerElements = markerElementsRef.current;
 
     let disposed = false;
@@ -83,12 +87,14 @@ export function EventMap({
       if (ready || failed || disposed) return;
       failed = true;
       if (loadTimer) clearTimeout(loadTimer);
+      setLoading(false);
       onFailure();
     };
     const markReady = () => {
       if (disposed || failed) return;
       ready = true;
       ignoreProgrammaticMove = false;
+      setLoading(false);
       if (loadTimer) clearTimeout(loadTimer);
       loadTimer = null;
     };
@@ -185,7 +191,17 @@ export function EventMap({
     };
   }, [approximateLabel, bounds, events, loadTimeoutMs, onBoundsChange, onFailure, onSelect, styleURL]);
 
-  return <div ref={containerRef} className={styles.mapCanvas} role="region" aria-label={mapLabel} />;
+  return (
+    <div className={styles.mapShell}>
+      <div ref={containerRef} className={styles.mapCanvas} role="region" aria-label={mapLabel} />
+      {loading ? (
+        <div className={styles.mapLoading} role="status" aria-live="polite">
+          <span className={styles.mapLoadingSpinner} aria-hidden="true" />
+          <span>{loadingLabel}</span>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function markerBounds(facts: EventMarkerFact[]): [[number, number], [number, number]] | null {

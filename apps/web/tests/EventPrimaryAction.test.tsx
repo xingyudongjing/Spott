@@ -62,19 +62,27 @@ describe("rendered strict CTA states", () => {
     expect(screen.queryByRole("link", { name: "活动暂不可参加" })).not.toBeInTheDocument();
   });
 
-  test("keeps the public HTTP preview from entering a write flow", () => {
+  test("routes the public HTTP preview to the encrypted loopback test entry", () => {
+    const event = makeEvent();
     renderWithI18n(
       <PreviewModeProvider initialMode="read-only">
         <EventPrimaryAction
           cta={{ kind: "register", intent: "register", disabled: false }}
-          event={makeEvent()}
+          event={event}
           busy={false}
           onAccept={vi.fn()}
         />
       </PreviewModeProvider>,
     );
 
-    expect(screen.getByRole("button", { name: "内部测试入口可报名" })).toBeDisabled();
+    const entry = screen.getByRole("link", { name: "内部测试入口可报名" });
+    expect(entry).toHaveAttribute(
+      "href",
+      `http://localhost:8080/register/${event.publicSlug}`,
+    );
+    expect(entry).toHaveAttribute("target", "_blank");
+    expect(entry).toHaveAttribute("rel", "noreferrer");
+    expect(screen.queryByRole("button", { name: "内部测试入口可报名" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "报名参加" })).not.toBeInTheDocument();
   });
 });

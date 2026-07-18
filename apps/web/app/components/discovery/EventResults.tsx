@@ -95,6 +95,7 @@ export function EventResults({
                 bounds={bounds}
                 selectedEventId={selectedEventId}
                 mapLabel={t("discover.mapRegion")}
+                loadingLabel={t("discover.mapLoading")}
                 approximateLabel={t("discover.approximate")}
                 onBoundsChange={onBoundsChange}
                 onFailure={onMapFailure}

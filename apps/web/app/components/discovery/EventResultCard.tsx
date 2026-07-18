@@ -1,6 +1,7 @@
 "use client";
 
 import type { EventSummary } from "../../lib/event-contract";
+import { localizedPublicTags } from "../../lib/public-taxonomy";
 import {
   eventDate,
   eventFeeLabel,
@@ -70,7 +71,7 @@ export function EventResultCard({
     : null;
   const capacity = capacityLabel(event, t);
   const capacityIsTight = event.capacity > 0 && event.availableCapacity <= 2;
-  const tags = eventTagLabels(event.category, event.tags, t);
+  const tags = localizedPublicTags([event.category, ...event.tags], locale, 3);
 
   return (
     <article
@@ -134,44 +135,6 @@ export function EventResultCard({
       </Link>
     </article>
   );
-}
-
-const tagTranslationKeys = {
-  walk: "filter.categoryWalk",
-  "city-walk": "filter.categoryWalk",
-  photography: "filter.categoryPhotography",
-  music: "filter.categoryMusic",
-  food: "filter.categoryFood",
-  coffee: "filter.categoryFood",
-  outdoor: "filter.categoryOutdoor",
-  art: "filter.categoryArt",
-  language: "filter.categoryLanguage",
-  sports: "filter.categorySports",
-  games: "filter.categoryGames",
-  learning: "filter.categoryLearning",
-  wellness: "filter.categoryWellness",
-  networking: "filter.categoryNetworking",
-} as const;
-
-function eventTagLabels(
-  category: string,
-  tags: string[],
-  t: ReturnType<typeof useI18n>["t"],
-) {
-  const labels: string[] = [];
-  const seen = new Set<string>();
-  for (const value of [category, ...tags]) {
-    const normalized = value.trim().toLowerCase();
-    if (!normalized) continue;
-    const key = tagTranslationKeys[normalized as keyof typeof tagTranslationKeys];
-    const label = key ? t(key) : value.trim();
-    const identity = label.toLocaleLowerCase();
-    if (seen.has(identity)) continue;
-    seen.add(identity);
-    labels.push(label);
-    if (labels.length === 3) break;
-  }
-  return labels;
 }
 
 function capacityLabel(

@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 
+import { internalTestEntryHref } from "../lib/internal-test-entry";
 import { AccountControl } from "./AccountControl";
 import { LanguageSwitcher, useI18n } from "./I18nProvider";
 import { CalendarIcon, SearchIcon, UserIcon, UsersIcon } from "./icons";
@@ -33,7 +34,7 @@ export function SiteHeader() {
   if (registrationRoute && !isReadOnly) return null;
 
   const visibleDestinations = isReadOnly ? destinations.slice(0, 2) : destinations;
-  if (registrationRoute) return <ReadOnlyBanner />;
+  if (registrationRoute) return <ReadOnlyBanner pathname={pathname} />;
 
   return (
     <>
@@ -79,7 +80,7 @@ export function SiteHeader() {
         </div>
       </header>
 
-      {isReadOnly ? <ReadOnlyBanner /> : null}
+      {isReadOnly ? <ReadOnlyBanner pathname={pathname} /> : null}
 
       {!ownsMobileAction ? <nav className={`${styles.mobileDock} ${isReadOnly ? `${styles.mobileDockReadonly} mobile-dock--readonly` : ""} mobile-dock`} aria-label={t("nav.mobile")}>
         <DockLink pathname={pathname} href="/discover" label={t("nav.discover")} icon={<SearchIcon />} prefetch={routePrefetch} />
@@ -104,12 +105,15 @@ export function SiteHeader() {
   );
 }
 
-function ReadOnlyBanner() {
+function ReadOnlyBanner({ pathname }: { pathname: string }) {
   const { t } = useI18n();
   return (
     <div className={styles.previewBanner} role="status">
       <strong>{t("preview.readOnlyBadge")}</strong>
       <span>{t("preview.readOnlyBody")}</span>
+      <a href={internalTestEntryHref(pathname)} target="_blank" rel="noreferrer">
+        {t("preview.openInternalTest")}
+      </a>
     </div>
   );
 }

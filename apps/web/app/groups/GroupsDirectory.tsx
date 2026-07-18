@@ -7,8 +7,8 @@ import { useI18n } from "../components/I18nProvider";
 import { ArrowIcon, UsersIcon } from "../components/icons";
 import { PreviewModeLink as Link } from "../components/PreviewModeLink";
 import { usePreviewMode } from "../components/PreviewModeProvider";
-import { ReadOnlyCommunityNotice } from "../components/ReadOnlyCommunityNotice";
 import type { MessageKey } from "../i18n/messages";
+import { localizedPublicTags } from "../lib/public-taxonomy";
 
 type Translate = (key: MessageKey, values?: Record<string, string | number>) => string;
 
@@ -104,7 +104,6 @@ export function GroupsDirectory() {
           ) : null}
         </div>
       </section>
-      {isReadOnly ? <ReadOnlyCommunityNotice /> : null}
       {message && (
         <div className="inline-error" role="alert">
           <p>{message}</p>
@@ -233,7 +232,7 @@ export function GroupsDirectory() {
                   {group.owner?.name ? <small className="group-owner-line">{t("group.hostedBy", { name: group.owner.name })}</small> : null}
                   {group.tags?.length ? (
                     <div className="group-tag-list">
-                      {group.tags.slice(0, 3).map((tag) => <span key={tag}>{tag}</span>)}
+                      {localizedPublicTags(group.tags, locale, 3).map((tag) => <span key={tag}>{tag}</span>)}
                     </div>
                   ) : null}
                   {group.announcementSummary?.[0] ? (

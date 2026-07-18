@@ -72,6 +72,17 @@ enum EventDetailServerActionPolicy {
     }
 }
 
+@MainActor
+enum EventDetailLinkedGroupNavigation {
+    static func open(
+        groupID: UUID,
+        sourceTab: AppTab,
+        router: AppRouter
+    ) {
+        router.push(.group(groupID), in: sourceTab)
+    }
+}
+
 enum EventDetailActionLoadOutcome<Value: Sendable>: Sendable {
     case authorized(Value)
     case revoked

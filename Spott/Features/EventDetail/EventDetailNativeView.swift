@@ -655,10 +655,10 @@ struct EventDetailNativeScreen: View {
         case .checkIn(let registrationID):
             openCheckIn(registrationID: registrationID)
         case .openGroup(let groupID):
-            model.router.push(
-                .group(groupID),
-                in: .groups,
-                selectingExplicitTab: true
+            EventDetailLinkedGroupNavigation.open(
+                groupID: groupID,
+                sourceTab: sourceTab,
+                router: model.router
             )
         case .cancelRegistration(let registrationID):
             cancellationRegistrationID = registrationID

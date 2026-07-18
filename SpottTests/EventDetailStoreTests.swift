@@ -646,6 +646,29 @@ final class EventDetailStoreTests: XCTestCase {
         )
     }
 
+    func testLinkedGroupNavigationPreservesTheEventBackStack() throws {
+        let groupID = UUID(uuidString: "019b0000-0000-7000-8100-000000000066")!
+        let event = try makeEvent([:])
+        let router = AppRouter()
+        let eventRoute = AppRoute.event(.init(event: event))
+        router.setPath([eventRoute], for: .discovery)
+        router.selectedTab = .discovery
+
+        EventDetailLinkedGroupNavigation.open(
+            groupID: groupID,
+            sourceTab: .discovery,
+            router: router
+        )
+
+        XCTAssertEqual(router.selectedTab, .discovery)
+        XCTAssertEqual(
+            router.path(for: .discovery),
+            [eventRoute, .group(groupID)],
+            "Native back navigation must return from the community to the source event."
+        )
+        XCTAssertTrue(router.path(for: .groups).isEmpty)
+    }
+
     func testServerActionPolicyNeverInventsMissingResourceIdentifiers() throws {
         let event = try makeEvent([
             "viewerRegistration": NSNull(),

@@ -109,6 +109,11 @@ export function buildRecommendationCandidateStatement(
          WHERE ui.user_id = ${viewer}
            AND (ui.tag_id = e.category_id OR ui.tag_id = ANY(e.tags))
        ), 0)::float AS interest_overlap,
+       EXISTS(
+         SELECT 1 FROM commerce.event_promotions promo
+         WHERE promo.event_id = e.id AND promo.state = 'active'
+           AND promo.starts_at <= clock_timestamp() AND promo.expires_at > clock_timestamp()
+       ) AS promoted,
        ${distanceExpression} AS distance_km,
        l.exact_address_visibility,
        CASE WHEN l.point IS NULL THEN NULL

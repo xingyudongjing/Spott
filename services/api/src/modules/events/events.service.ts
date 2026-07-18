@@ -462,7 +462,10 @@ export class EventsService {
       attendanceRateBand: row.attendance_rate_band ?? 'unavailable',
       availableCapacity: row.available_capacity ?? Math.max(0, capacity - occupied),
       capacity,
-      boosted: false,
+      // A paid pin only counts when its promotion is currently active; the SQL
+      // computes it from commerce.event_promotions so the organic-floor logic in
+      // assembleFeed can guarantee a minimum share of non-boosted results.
+      boosted: row.promoted === true,
       safetyPenalty: Math.min(flagged * 0.15, 0.6),
     };
   }

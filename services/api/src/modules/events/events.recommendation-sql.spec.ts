@@ -21,6 +21,15 @@ describe('buildRecommendationCandidateStatement', () => {
     expect(statement.text).toContain('AS organizer_followed');
   });
 
+  it('marks candidates with an active paid promotion so the feed can flag boosts', () => {
+    const statement = buildRecommendationCandidateStatement(viewerId, { limit: 20 }, 200, null);
+    expect(statement.text).toContain('commerce.event_promotions');
+    expect(statement.text).toContain('AS promoted');
+    // Only a currently-active promotion counts (not expired or refunded).
+    expect(statement.text).toContain("promo.state = 'active'");
+    expect(statement.text).toContain('promo.expires_at > clock_timestamp()');
+  });
+
   it('computes distance only when a viewer coordinate is supplied', () => {
     const withoutCoordinate = buildRecommendationCandidateStatement(viewerId, { limit: 20 }, 200, null);
     expect(withoutCoordinate.text).toContain('NULL AS distance_km');

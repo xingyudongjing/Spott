@@ -121,6 +121,31 @@ describe("localized client failure copy", () => {
 });
 
 describe("refresh-aware client requests", () => {
+  test("never attaches browser cookies to a direct API request", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(init?.credentials).toBe("omit");
+      return jsonResponse({ ok: true });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(apiRequest<{ ok: boolean }>("/events/search?limit=24"))
+      .resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("never attaches browser cookies to the legacy direct refresh request", async () => {
+    saveSession(expiredSession);
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      expect(String(input)).toMatch(/\/auth\/refresh$/u);
+      expect(init?.credentials).toBe("omit");
+      return jsonResponse(freshSession);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(refreshCurrentSession()).resolves.toEqual(freshSession);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   test("accepts an authoritative same-user refresh that rotates the session id", async () => {
     saveSession({
       ...expiredSession,

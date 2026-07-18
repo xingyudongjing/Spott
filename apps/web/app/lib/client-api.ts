@@ -395,7 +395,7 @@ async function apiRequestAttempt<T>(
   if (session) headers.set("Authorization", `Bearer ${session.accessToken}`);
   if (init.ifMatch !== undefined) headers.set("If-Match", `\"${init.ifMatch}\"`);
 
-  const response = await fetch(`${apiBase()}${path}`, { ...init, headers, credentials: "include" });
+  const response = await fetch(`${apiBase()}${path}`, { ...init, headers, credentials: "omit" });
   if (ownerContext) assertRequestSession(ownerContext);
   if (response.status === 401 && session && path !== "/auth/refresh") {
     if (allowRefresh) {
@@ -439,6 +439,7 @@ async function refreshSession(
 ): Promise<WebSession | null> {
   const response = await fetch(`${apiBase()}/auth/refresh`, {
     method: "POST",
+    credentials: "omit",
     headers: { "Content-Type": "application/json", "X-Spott-Device-Id": deviceId() },
     body: JSON.stringify({ refreshToken: session.refreshToken, deviceId: deviceId() }),
   });

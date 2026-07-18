@@ -254,6 +254,49 @@ paths:
           $ref: '#/components/responses/Error'
         '403':
           $ref: '#/components/responses/Error'
+  /auth/device-binding/upgrade:
+    post:
+      operationId: upgradeDeviceBinding
+      summary: Attach the first persistent binding to a Web BFF session
+      description: BFF-only operation that atomically attaches one newly generated persistent device binding to an otherwise unbound current web_bff refresh session. The attempt UUID is stable across transport retries. An existing binding is never replaced by this operation, and temporary migration proof cannot satisfy the persistent proof contract.
+      tags:
+        - Auth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - refreshToken
+                - deviceId
+                - attemptId
+                - newBinding
+              properties:
+                refreshToken:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+                  writeOnly: true
+                deviceId:
+                  $ref: '#/components/schemas/UUID'
+                attemptId:
+                  $ref: '#/components/schemas/UUID'
+                newBinding:
+                  $ref: '#/components/schemas/InitialPersistentDeviceBindingProof'
+      responses:
+        '200':
+          $ref: '#/components/responses/DeviceBindingUpgradeMaterial'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
   /sessions/{id}:
     delete:
       operationId: revokeSession
@@ -4267,6 +4310,12 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/AuthSession'
+    DeviceBindingUpgradeMaterial:
+      description: Non-secret metadata for the newly attached persistent binding
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/DeviceBindingUpgradeMaterial'
   schemas:
     UUID:
       type: string
@@ -4361,6 +4410,94 @@ components:
           type: string
           enum:
             - persistent
+    InitialPersistentDeviceBindingProof:
+      type: object
+      additionalProperties: false
+      required:
+        - bindingId
+        - generation
+        - proof
+        - proofClass
+      properties:
+        bindingId:
+          $ref: '#/components/schemas/UUID'
+        generation:
+          type: integer
+          const: 0
+        proof:
+          type: string
+          minLength: 43
+          maxLength: 43
+          pattern: ^[A-Za-z0-9_-]{43}$
+          writeOnly: true
+          description: Canonical base64url encoding of exactly 32 random bytes.
+        proofClass:
+          type: string
+          const: persistent
+    DeviceBindingUpgradeMaterial:
+      type: object
+      additionalProperties: false
+      required:
+        - sessionId
+        - refreshFamilyId
+        - refreshGeneration
+        - transportClass
+        - bindingId
+        - bindingGeneration
+        - bindingIssuedAt
+        - bindingAbsoluteExpiresAt
+        - refreshTokenExpiresAt
+        - user
+      properties:
+        sessionId:
+          $ref: '#/components/schemas/UUID'
+        refreshFamilyId:
+          $ref: '#/components/schemas/UUID'
+        refreshGeneration:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        transportClass:
+          type: string
+          const: web_bff
+        bindingId:
+          $ref: '#/components/schemas/UUID'
+        bindingGeneration:
+          type: integer
+          const: 0
+        bindingIssuedAt:
+          type: string
+          format: date-time
+        bindingAbsoluteExpiresAt:
+          type: string
+          format: date-time
+        refreshTokenExpiresAt:
+          type: string
+          format: date-time
+        user:
+          type: object
+          additionalProperties: false
+          required:
+            - id
+            - publicHandle
+            - phoneVerified
+            - restrictions
+          properties:
+            id:
+              $ref: '#/components/schemas/UUID'
+            publicHandle:
+              type: string
+              minLength: 1
+              maxLength: 128
+            phoneVerified:
+              type: boolean
+            restrictions:
+              type: array
+              maxItems: 64
+              items:
+                type: string
+                minLength: 1
+                maxLength: 128
     WebRefreshEnvelopeDBClaims:
       type: object
       additionalProperties: false

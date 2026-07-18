@@ -135,6 +135,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/device-binding/upgrade": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attach the first persistent binding to a Web BFF session
+         * @description BFF-only operation that atomically attaches one newly generated persistent device binding to an otherwise unbound current web_bff refresh session. The attempt UUID is stable across transport retries. An existing binding is never replaced by this operation, and temporary migration proof cannot satisfy the persistent proof contract.
+         */
+        post: operations["upgradeDeviceBinding"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sessions/{id}": {
         parameters: {
             query?: never;
@@ -2370,6 +2390,37 @@ export interface components {
             /** @enum {string} */
             proofClass: "persistent";
         };
+        InitialPersistentDeviceBindingProof: {
+            bindingId: components["schemas"]["UUID"];
+            /** @constant */
+            generation: 0;
+            /** @description Canonical base64url encoding of exactly 32 random bytes. */
+            proof: string;
+            /** @constant */
+            proofClass: "persistent";
+        };
+        DeviceBindingUpgradeMaterial: {
+            sessionId: components["schemas"]["UUID"];
+            refreshFamilyId: components["schemas"]["UUID"];
+            refreshGeneration: number;
+            /** @constant */
+            transportClass: "web_bff";
+            bindingId: components["schemas"]["UUID"];
+            /** @constant */
+            bindingGeneration: 0;
+            /** Format: date-time */
+            bindingIssuedAt: string;
+            /** Format: date-time */
+            bindingAbsoluteExpiresAt: string;
+            /** Format: date-time */
+            refreshTokenExpiresAt: string;
+            user: {
+                id: components["schemas"]["UUID"];
+                publicHandle: string;
+                phoneVerified: boolean;
+                restrictions: string[];
+            };
+        };
         WebRefreshEnvelopeDBClaims: {
             sessionId: components["schemas"]["UUID"];
             familyId: components["schemas"]["UUID"];
@@ -3955,6 +4006,15 @@ export interface components {
                 "application/json": components["schemas"]["AuthSession"];
             };
         };
+        /** @description Non-secret metadata for the newly attached persistent binding */
+        DeviceBindingUpgradeMaterial: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["DeviceBindingUpgradeMaterial"];
+            };
+        };
     };
     parameters: {
         ResourceId: components["schemas"]["UUID"] | string;
@@ -4129,6 +4189,31 @@ export interface operations {
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];
+        };
+    };
+    upgradeDeviceBinding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    refreshToken: string;
+                    deviceId: components["schemas"]["UUID"];
+                    attemptId: components["schemas"]["UUID"];
+                    newBinding: components["schemas"]["InitialPersistentDeviceBindingProof"];
+                };
+            };
+        };
+        responses: {
+            200: components["responses"]["DeviceBindingUpgradeMaterial"];
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     revokeSession: {

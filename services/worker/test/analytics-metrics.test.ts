@@ -53,6 +53,18 @@ function buildHarness(
           feedback_submitted: '31',
         }]);
       }
+      if (text.includes('/* metric:funnel_host */')) {
+        return result([{
+          drafts: '5', submitted: '4', published: '12',
+          with_registration: '9', completed: '7', repeat_hosts: '3',
+        }]);
+      }
+      if (text.includes('/* metric:funnel_group */')) {
+        return result([{ groups: '8', members_joined: '40', members_active: '25', members_left: '6' }]);
+      }
+      if (text.includes('/* metric:funnel_spread */')) {
+        return result([{ shares_created: '50', opens: '30', registered: '12', attended: '7' }]);
+      }
       if (text.includes('/* invariant:oversell */')) return result([{ count: '2' }]);
       if (text.includes('/* invariant:duplicate_checkin */')) return result([{ count: '0' }]);
       if (text.includes('/* invariant:negative_total_balance */')) return result([{ count: '1' }]);
@@ -134,6 +146,25 @@ describe('deriveAnalyticsMetrics', () => {
     // Aggregate counters only — no identifiers may ride along on server metrics.
     for (const value of Object.values(funnel!.properties)) {
       expect(typeof value).toBe('number');
+    }
+  });
+
+  it('emits the host, group and spread funnels as aggregate-only snapshots', async () => {
+    const { jobs, emitted } = buildHarness({ windowConfig: 60 });
+
+    await jobs.deriveAnalyticsMetrics();
+
+    const host = emitted.find((e) => e.eventName === 'funnel_host_recorded');
+    const group = emitted.find((e) => e.eventName === 'funnel_group_recorded');
+    const spread = emitted.find((e) => e.eventName === 'funnel_spread_recorded');
+    expect(host?.properties).toMatchObject({ drafts: 5, published: 12, completed: 7, repeat_hosts: 3 });
+    expect(group?.properties).toMatchObject({ groups: 8, members_joined: 40, members_active: 25 });
+    expect(spread?.properties).toMatchObject({ shares_created: 50, opens: 30, registered: 12, attended: 7 });
+    for (const snapshot of [host, group, spread]) {
+      expect(snapshot?.platform).toBe('server');
+      for (const value of Object.values(snapshot?.properties ?? {})) {
+        expect(typeof value).toBe('number');
+      }
     }
   });
 

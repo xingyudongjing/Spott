@@ -1193,6 +1193,83 @@ export class WorkerJobs {
       });
       emitted += 1;
 
+      // Host funnel (product §P1): draft → submit → publish → first registration →
+      // completed → repeat host. Aggregate counters only.
+      const hostFunnel = await client.query<{
+        drafts: string; submitted: string; published: string;
+        with_registration: string; completed: string; repeat_hosts: string;
+      }>(
+        `/* metric:funnel_host */
+         SELECT
+           count(*) FILTER (WHERE status = 'draft')::text AS drafts,
+           count(*) FILTER (WHERE status IN ('pending_review','needs_changes'))::text AS submitted,
+           count(*) FILTER (WHERE status IN ('published','registration_closed','in_progress','ended','archived'))::text AS published,
+           count(*) FILTER (WHERE EXISTS (
+             SELECT 1 FROM events.registrations r WHERE r.event_id = e.id
+               AND r.status IN ('confirmed','checked_in')))::text AS with_registration,
+           count(*) FILTER (WHERE status IN ('ended','archived'))::text AS completed,
+           (SELECT count(*)::text FROM (
+             SELECT organizer_id FROM events.events
+             WHERE status IN ('published','registration_closed','in_progress','ended','archived')
+             GROUP BY organizer_id HAVING count(*) >= 2) repeat) AS repeat_hosts
+         FROM events.events e`,
+      );
+      const hostRow = hostFunnel.rows[0];
+      await this.emitServerMetric(client, sessionId, 'funnel_host_recorded', {
+        drafts: Number(hostRow?.drafts ?? '0'),
+        submitted: Number(hostRow?.submitted ?? '0'),
+        published: Number(hostRow?.published ?? '0'),
+        with_registration: Number(hostRow?.with_registration ?? '0'),
+        completed: Number(hostRow?.completed ?? '0'),
+        repeat_hosts: Number(hostRow?.repeat_hosts ?? '0'),
+      });
+      emitted += 1;
+
+      // Group funnel (product §P1): view → join → active → exit. Views are not
+      // server-persisted, so this tracks the joined→active→left lifecycle counts.
+      const groupFunnel = await client.query<{
+        groups: string; members_joined: string; members_active: string; members_left: string;
+      }>(
+        `/* metric:funnel_group */
+         SELECT
+           (SELECT count(*)::text FROM community.groups WHERE status = 'active') AS groups,
+           count(*) FILTER (WHERE status = 'active')::text AS members_joined,
+           count(*) FILTER (WHERE status = 'active'
+             AND joined_at > clock_timestamp() - interval '30 days')::text AS members_active,
+           count(*) FILTER (WHERE status IN ('left','removed'))::text AS members_left
+         FROM community.group_memberships`,
+      );
+      const groupRow = groupFunnel.rows[0];
+      await this.emitServerMetric(client, sessionId, 'funnel_group_recorded', {
+        groups: Number(groupRow?.groups ?? '0'),
+        members_joined: Number(groupRow?.members_joined ?? '0'),
+        members_active: Number(groupRow?.members_active ?? '0'),
+        members_left: Number(groupRow?.members_left ?? '0'),
+      });
+      emitted += 1;
+
+      // Spread funnel (product §P1): share created → external open → detail →
+      // register → check-in. Opens and conversions come from attribution rows.
+      const spreadFunnel = await client.query<{
+        shares_created: string; opens: string; registered: string; attended: string;
+      }>(
+        `/* metric:funnel_spread */
+         SELECT
+           (SELECT count(*)::text FROM growth.share_links) AS shares_created,
+           count(*) FILTER (WHERE action = 'opened')::text AS opens,
+           count(*) FILTER (WHERE action = 'registered')::text AS registered,
+           count(*) FILTER (WHERE action = 'checked_in')::text AS attended
+         FROM growth.attributions`,
+      );
+      const spreadRow = spreadFunnel.rows[0];
+      await this.emitServerMetric(client, sessionId, 'funnel_spread_recorded', {
+        shares_created: Number(spreadRow?.shares_created ?? '0'),
+        opens: Number(spreadRow?.opens ?? '0'),
+        registered: Number(spreadRow?.registered ?? '0'),
+        attended: Number(spreadRow?.attended ?? '0'),
+      });
+      emitted += 1;
+
       // Business invariants (doc 15.3). P0 breaches (oversell, ledger/balance) must be
       // impossible under the DB constraints; a non-zero count means defence-in-depth
       // has caught drift and the value is surfaced as an anomaly for alerting.

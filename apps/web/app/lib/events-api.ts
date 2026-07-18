@@ -10,17 +10,15 @@ export class EventAPIError extends Error {
 
 export async function searchEvents(
   query: EventDiscoveryQuery,
-  options?: { signal?: AbortSignal; accessToken?: string; cookie?: string },
+  options?: { signal?: AbortSignal },
 ): Promise<EventPage> {
   const params = serializeDiscoveryQuery(query);
   const suffix = params.size ? `?${params.toString()}` : "";
   const headers = new Headers({ Accept: "application/json" });
-  if (options?.accessToken) headers.set("Authorization", `Bearer ${options.accessToken}`);
-  if (options?.cookie) headers.set("Cookie", options.cookie);
   const response = await fetch(`${eventAPIBase()}/events/search${suffix}`, {
     method: "GET",
     headers,
-    credentials: "include",
+    credentials: "omit",
     signal: options?.signal,
   });
   if (!response.ok) throw await responseError(response);
@@ -29,15 +27,13 @@ export async function searchEvents(
 
 export async function fetchEvent(
   identifier: string,
-  options?: { signal?: AbortSignal; accessToken?: string; cookie?: string },
+  options?: { signal?: AbortSignal },
 ): Promise<EventDetail> {
   const headers = new Headers({ Accept: "application/json" });
-  if (options?.accessToken) headers.set("Authorization", `Bearer ${options.accessToken}`);
-  if (options?.cookie) headers.set("Cookie", options.cookie);
   const response = await fetch(`${eventAPIBase()}/events/${encodeURIComponent(identifier)}`, {
     method: "GET",
     headers,
-    credentials: "include",
+    credentials: "omit",
     signal: options?.signal,
   });
   if (!response.ok) throw await responseError(response);

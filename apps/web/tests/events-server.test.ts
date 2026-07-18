@@ -19,7 +19,7 @@ beforeEach(() => {
 });
 
 describe("server discovery request boundary", () => {
-  test("forwards only the incoming cookie to the first-party API", async () => {
+  test("never forwards page credentials to the first-party API", async () => {
     headersMock.mockResolvedValue(new Headers({
       cookie: "spott_locale=ja; __Host-spott_session=signed-session",
       authorization: "Bearer untrusted-page-header",
@@ -30,13 +30,11 @@ describe("server discovery request boundary", () => {
 
     await searchEventsForRequest({ region: "tokyo" });
 
-    expect(searchEventsMock).toHaveBeenCalledWith(
-      { region: "tokyo" },
-      { cookie: "spott_locale=ja; __Host-spott_session=signed-session" },
-    );
+    expect(headersMock).not.toHaveBeenCalled();
+    expect(searchEventsMock).toHaveBeenCalledWith({ region: "tokyo" });
   });
 
-  test("uses the same cookie-only boundary for personalized event detail", async () => {
+  test("keeps event detail SSR anonymous even when the page request is authenticated", async () => {
     headersMock.mockResolvedValue(new Headers({
       cookie: "spott_locale=en; __Host-spott_session=signed-session",
       authorization: "Bearer untrusted-page-header",
@@ -45,9 +43,7 @@ describe("server discovery request boundary", () => {
 
     await fetchEventForRequest("tokyo-afterglow-walk");
 
-    expect(fetchEventMock).toHaveBeenCalledWith(
-      "tokyo-afterglow-walk",
-      { cookie: "spott_locale=en; __Host-spott_session=signed-session" },
-    );
+    expect(headersMock).not.toHaveBeenCalled();
+    expect(fetchEventMock).toHaveBeenCalledWith("tokyo-afterglow-walk");
   });
 });

@@ -8,33 +8,48 @@ beforeEach(() => {
 });
 
 describe("discovery authentication boundary", () => {
-  test("adds the current viewer bearer without leaking it into the query string", async () => {
+  test("ignores caller-supplied credentials for anonymous discovery", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(makePage()), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await searchEvents({ region: "tokyo" }, { accessToken: "viewer-access-token" });
+    const untrustedOptions = {
+      accessToken: "viewer-access-token",
+      cookie: "__Host-spott_refresh=refresh-token",
+    } as unknown as Parameters<typeof searchEvents>[1];
+
+    await searchEvents({ region: "tokyo" }, untrustedOptions);
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const headers = new Headers(init.headers);
     expect(url).toContain("region=tokyo");
     expect(url).not.toContain("viewer-access-token");
-    expect(headers.get("Authorization")).toBe("Bearer viewer-access-token");
+    expect(headers.get("Authorization")).toBeNull();
+    expect(headers.get("Cookie")).toBeNull();
+    expect(init.credentials).toBe("omit");
   });
 
-  test("forwards only explicit detail credentials and strictly parses the detail", async () => {
+  test("keeps detail retrieval credentialless and strictly parses the detail", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(makeDetail()), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await fetchEvent("tokyo-afterglow-walk", { cookie: "__Host-spott_session=signed" });
+    const untrustedOptions = {
+      accessToken: "viewer-access-token",
+      cookie: "__Host-spott_refresh=refresh-token",
+    } as unknown as Parameters<typeof fetchEvent>[1];
+
+    await fetchEvent("tokyo-afterglow-walk", untrustedOptions);
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toMatch(/\/events\/tokyo-afterglow-walk$/);
-    expect(new Headers(init.headers).get("Cookie")).toBe("__Host-spott_session=signed");
+    const headers = new Headers(init.headers);
+    expect(headers.get("Authorization")).toBeNull();
+    expect(headers.get("Cookie")).toBeNull();
+    expect(init.credentials).toBe("omit");
   });
 });

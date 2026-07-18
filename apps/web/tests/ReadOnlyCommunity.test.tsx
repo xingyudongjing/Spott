@@ -17,7 +17,7 @@ import {
   type GroupView,
   type WebSession,
 } from "../app/lib/client-api";
-import { renderWithI18n } from "./event-fixtures";
+import { makeEvent, renderWithI18n } from "./event-fixtures";
 
 vi.mock("../app/lib/client-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../app/lib/client-api")>();
@@ -48,7 +48,7 @@ const session: WebSession = {
 };
 
 const group: GroupView = {
-  id: "group-1",
+  id: "019b0000-0000-7000-8300-000000000001",
   name: "东京晨间散步",
   slug: "tokyo-morning-walk",
   description: "周末一起探索东京。",
@@ -63,6 +63,20 @@ const group: GroupView = {
   availableActions: ["joinGroup", "manage"],
   version: 1,
 };
+
+const matchingGroupEvent = makeEvent({
+  id: "019b0000-0000-7000-8100-000000000021",
+  publicSlug: "tokyo-morning-group-walk",
+  title: "群组限定晨间散步",
+  groupId: group.id,
+});
+
+const unrelatedGroupEvent = makeEvent({
+  id: "019b0000-0000-7000-8100-000000000022",
+  publicSlug: "unrelated-community-event",
+  title: "其他社区的活动",
+  groupId: "019b0000-0000-7000-8300-000000000002",
+});
 
 const announcement: GroupAnnouncement = {
   id: "announcement-1",
@@ -113,7 +127,9 @@ describe("public read-only community surfaces", () => {
   test("keeps community write controls available through the internal-test entry", async () => {
     apiRequestMock.mockImplementation(async (path) => {
       if (path === `/groups/${group.slug}`) return group;
-      if (path === "/events/search?limit=100") return { items: [] };
+      if (path === "/events/search?limit=100") {
+        return { items: [matchingGroupEvent, unrelatedGroupEvent] };
+      }
       if (path === `/groups/${group.id}/announcements?limit=30`) return { items: [announcement] };
       throw new Error(`Unexpected request: ${path}`);
     });
@@ -153,7 +169,9 @@ describe("public read-only community surfaces", () => {
     const user = userEvent.setup();
     apiRequestMock.mockImplementation(async (path) => {
       if (path === `/groups/${group.slug}`) return group;
-      if (path === "/events/search?limit=100") return { items: [] };
+      if (path === "/events/search?limit=100") {
+        return { items: [matchingGroupEvent, unrelatedGroupEvent] };
+      }
       if (path === `/groups/${group.id}/announcements?limit=30`) return { items: [announcement] };
       if (path === `/groups/${group.id}/announcements/${announcement.id}/comments`) {
         return { items: [comment] };
@@ -166,6 +184,8 @@ describe("public read-only community surfaces", () => {
     expect(await screen.findByRole("heading", { name: group.name })).toBeInTheDocument();
     expect(screen.getByText("兴趣社区 · 东京")).toBeInTheDocument();
     expect(screen.getByText("即将开始")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: matchingGroupEvent.title })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: unrelatedGroupEvent.title })).not.toBeInTheDocument();
     expect(screen.getByText(/置顶 ·/)).toBeInTheDocument();
     expect(screen.queryByText(/COMMUNITY \/|UP NEXT|^COMMUNITY$|PINNED/)).not.toBeInTheDocument();
     expect(screen.getByRole("note")).toHaveTextContent("创建、加入、关注、点赞、评论、举报和拉黑");

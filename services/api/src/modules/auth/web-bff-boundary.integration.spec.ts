@@ -153,6 +153,14 @@ describe('real HTTP Web BFF transport boundary', () => {
     if (api) await stopAPI(api);
     if (client) {
       if (seededUserIds.length > 0) {
+        await client.query(
+          `UPDATE identity.sessions
+           SET current_binding_id = NULL, current_binding_generation = NULL
+           WHERE user_id = ANY($1::uuid[])`,
+          [seededUserIds],
+        );
+        await client.query('DELETE FROM sync.idempotency_keys WHERE user_id = ANY($1::uuid[])', [seededUserIds]);
+        await client.query('DELETE FROM identity.device_bindings WHERE user_id = ANY($1::uuid[])', [seededUserIds]);
         await client.query('DELETE FROM identity.sessions WHERE user_id = ANY($1::uuid[])', [seededUserIds]);
         await client.query('DELETE FROM identity.devices WHERE user_id = ANY($1::uuid[])', [seededUserIds]);
         await client.query('DELETE FROM identity.auth_identities WHERE user_id = ANY($1::uuid[])', [seededUserIds]);
@@ -546,6 +554,55 @@ describe('real HTTP Web BFF transport boundary', () => {
       [bffKid],
     );
     expect(nonceRows.rows[0]?.count).toBe('1');
+  });
+
+  it('hard-requires one-time BFF authority before the first persistent binding mutation', async () => {
+    const seeded = await seedSession('binding_upgrade', 'web_bff', 'web');
+    const path = '/v1/auth/device-binding/upgrade';
+    const proof = randomBytes(32).toString('base64url');
+    const body = JSON.stringify({
+      refreshToken: seeded.token,
+      deviceId: seeded.deviceId,
+      attemptId: randomUUID(),
+      newBinding: {
+        bindingId: randomUUID(),
+        generation: 0,
+        proof,
+        proofClass: 'persistent',
+      },
+    });
+
+    const unsigned = await postJSONWithoutBrowserHeaders(`${baseURL}${path}`, body, {
+      origin: 'https://spott.jp',
+      'sec-fetch-site': 'same-origin',
+    });
+    const unsignedJSON = await expectRejectedWithoutRefresh(unsigned);
+    expect(unsignedJSON).toMatchObject({ error: { code: 'WEB_BFF_AUTHORITY_REQUIRED' } });
+    const before = await client.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM identity.device_bindings WHERE session_id = $1',
+      [seeded.sessionId],
+    );
+    expect(before.rows).toEqual([{ count: '0' }]);
+
+    const signed = await postJSONWithoutBrowserHeaders(`${baseURL}${path}`, body, {
+      origin: 'https://spott.jp',
+      'sec-fetch-site': 'same-origin',
+      ...signedHeaders(path, body),
+    });
+    expect(signed.status).toBe(200);
+    const material = await responseJSON(signed);
+    expect(material).toMatchObject({
+      sessionId: seeded.sessionId,
+      transportClass: 'web_bff',
+      bindingGeneration: 0,
+    });
+    expect(containsRefreshToken(material)).toBe(false);
+    expect(JSON.stringify(material)).not.toContain(proof);
+    const after = await client.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM identity.device_bindings WHERE session_id = $1',
+      [seeded.sessionId],
+    );
+    expect(after.rows).toEqual([{ count: '1' }]);
   });
 
   it.each(['off', 'observe', 'enforce'] as const)(

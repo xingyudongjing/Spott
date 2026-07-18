@@ -31,6 +31,7 @@ const app = await NestFactory.create<NestFastifyApplication>(
         'body.phoneNumber',
         'body.refreshToken',
         'body.deviceBindingProof',
+        'body.newBinding.proof',
         'body.signedPayload',
         'body.signedTransaction',
         'req.rawBody',

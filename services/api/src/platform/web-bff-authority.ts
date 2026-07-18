@@ -37,6 +37,7 @@ export type SessionAuthorityRoute =
   | 'new_consumer_web_session'
   | 'new_native_session'
   | 'session_successor'
+  | 'binding_upgrade'
   | 'consumed_token_recovery';
 
 export type ParsedRefreshCredential =
@@ -245,7 +246,11 @@ export function decideTransport(input: TransportDecisionInput): TransportDecisio
   }
 
   if (input.storedTransport === 'web_bff') {
-    if (input.route !== 'refresh' && input.route !== 'session_successor') {
+    if (
+      input.route !== 'refresh' &&
+      input.route !== 'session_successor' &&
+      input.route !== 'binding_upgrade'
+    ) {
       return { kind: 'reject', code: 'SESSION_TRANSPORT_MISMATCH' };
     }
     if (input.authority === 'missing') {
@@ -445,7 +450,8 @@ export class WebBFFTransportGuard implements CanActivate {
     }
     const isRefresh = path === '/v1/auth/refresh';
     const isBootstrap = path === '/v1/auth/bootstrap';
-    if (!isRefresh && !isBootstrap) return true;
+    const isBindingUpgrade = path === '/v1/auth/device-binding/upgrade';
+    if (!isRefresh && !isBootstrap && !isBindingUpgrade) return true;
 
     const refreshToken = this.refreshToken(request.body);
     const parsed = parseRefreshCredential(refreshToken);
@@ -472,7 +478,7 @@ export class WebBFFTransportGuard implements CanActivate {
     const decision = decideTransport({
       mode: configuration().WEB_SESSION_BFF_ENFORCEMENT,
       storedTransport,
-      route: isBootstrap ? 'session_successor' : 'refresh',
+      route: isBindingUpgrade ? 'binding_upgrade' : isBootstrap ? 'session_successor' : 'refresh',
       authority: authorityState,
       requestChannel: request.sessionRequestChannel,
     });

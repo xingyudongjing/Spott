@@ -21,6 +21,7 @@ type AuthorityRoute =
   | 'new_consumer_web_session'
   | 'new_native_session'
   | 'session_successor'
+  | 'binding_upgrade'
   | 'consumed_token_recovery';
 type ParsedRefreshCredential =
   | { readonly version: 'legacy'; readonly sessionId: string; readonly secret: string }
@@ -430,6 +431,30 @@ describe('immutable session transport decisions', () => {
     })).toEqual({ kind: 'reject', code: 'SESSION_TRANSPORT_MISMATCH' });
   });
 
+  it.each(modes)('hard-requires verified BFF authority for persistent binding upgrade in %s', (mode) => {
+    expect(decideTransport({
+      mode,
+      storedTransport: 'web_bff',
+      route: 'binding_upgrade',
+      authority: 'valid',
+      requestChannel: 'verified_bff',
+    })).toEqual({ kind: 'allow' });
+    expect(decideTransport({
+      mode,
+      storedTransport: 'web_bff',
+      route: 'binding_upgrade',
+      authority: 'missing',
+      requestChannel: 'headerless_native',
+    })).toEqual({ kind: 'reject', code: 'WEB_BFF_AUTHORITY_REQUIRED' });
+    expect(decideTransport({
+      mode,
+      storedTransport: 'native',
+      route: 'binding_upgrade',
+      authority: 'missing',
+      requestChannel: 'headerless_native',
+    })).toEqual({ kind: 'reject', code: 'SESSION_TRANSPORT_MISMATCH' });
+  });
+
   it.each(modes)('rejects a browser-context native merge successor in %s', (mode) => {
     expect(decideTransport({
       mode,
@@ -730,6 +755,7 @@ describe('production bootstrap security contract', () => {
       'req.headers.x-spott-device-binding',
       'body.refreshToken',
       'body.deviceBindingProof',
+      'body.newBinding.proof',
       'rawBody',
     ]) {
       expect(source).toContain(`'${redaction}'`);

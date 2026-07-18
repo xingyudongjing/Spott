@@ -18,9 +18,10 @@ import type { SessionResponse } from './auth.service.js';
 
 const successorContext = 'spott:refresh-successor';
 const successorVersion = 'v2';
+const persistentBindingContext = 'spott:persistent-device-binding';
+const persistentBindingVersion = 'v1';
 const canonicalUUIDPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const minimumBindingProofLength = 32;
-const maximumBindingProofLength = 1_024;
+const canonicalPersistentBindingProofPattern = /^[A-Za-z0-9_-]{43}$/;
 
 export interface DeviceBindingProof {
   readonly bindingId: string;
@@ -104,6 +105,7 @@ interface BindingRow {
   readonly id: string;
   readonly generation: string;
   readonly current_hash: Buffer;
+  readonly current_kid: string;
 }
 
 interface VerifiedBinding {
@@ -148,6 +150,59 @@ export function deriveSuccessorSecret(input: RefreshSuccessorDerivationInput): s
     input.bindingId,
     String(input.bindingGeneration),
   ])).digest('base64url');
+}
+
+export interface PersistentDeviceBindingHashInput {
+  readonly proof: string;
+  readonly kid: string;
+  readonly userId: string;
+  readonly deviceId: string;
+  readonly sessionId: string;
+  readonly bindingId: string;
+  readonly generation: number;
+}
+
+export function isCanonicalPersistentDeviceBindingProof(value: unknown): value is string {
+  if (typeof value !== 'string' || !canonicalPersistentBindingProofPattern.test(value)) {
+    return false;
+  }
+  try {
+    const decoded = Buffer.from(value, 'base64url');
+    return decoded.byteLength === 32 && decoded.toString('base64url') === value;
+  } catch {
+    return false;
+  }
+}
+
+export function persistentDeviceBindingHash(
+  input: PersistentDeviceBindingHashInput,
+): Buffer | null {
+  const key = configuration().REFRESH_TOKEN_DERIVATION_KEYS.getKey(input.kid);
+  if (!key || key.byteLength < 32) return null;
+  if (
+    !canonicalUUIDPattern.test(input.userId) ||
+    !canonicalUUIDPattern.test(input.deviceId) ||
+    !canonicalUUIDPattern.test(input.sessionId) ||
+    !canonicalUUIDPattern.test(input.bindingId) ||
+    !Number.isSafeInteger(input.generation) ||
+    input.generation < 0 ||
+    !isCanonicalPersistentDeviceBindingProof(input.proof)
+  ) {
+    return null;
+  }
+  return createHmac('sha256', key)
+    .update(frameFields([
+      persistentBindingContext,
+      persistentBindingVersion,
+      input.kid,
+      input.userId,
+      input.deviceId,
+      input.sessionId,
+      input.bindingId,
+      String(input.generation),
+      input.proof,
+    ]))
+    .digest();
 }
 
 @Injectable()
@@ -542,7 +597,7 @@ export class SessionTokenService {
       return null;
     }
     const result = await client.query<BindingRow>(
-      `SELECT id, generation, current_hash
+      `SELECT id, generation, current_hash, current_kid
        FROM identity.device_bindings
        WHERE id = $1 AND user_id = $2 AND device_id = $3 AND session_id = $4
          AND generation = $5::bigint AND proof_class = 'persistent'
@@ -551,8 +606,19 @@ export class SessionTokenService {
       [proof.bindingId, session.user_id, session.device_id, session.id, proof.generation],
     );
     const binding = result.rows[0];
+    const suppliedHash = binding
+      ? persistentDeviceBindingHash({
+          proof: proof.proof,
+          kid: binding.current_kid,
+          userId: session.user_id,
+          deviceId: session.device_id,
+          sessionId: session.id,
+          bindingId: proof.bindingId,
+          generation: proof.generation,
+        })
+      : null;
     if (!binding || this.generation(binding.generation) !== proof.generation
-      || !this.equalHash(this.bindingHash(proof.proof), binding.current_hash)) {
+      || !suppliedHash || !this.equalHash(suppliedHash, binding.current_hash)) {
       return null;
     }
     return { id: binding.id, generation: proof.generation };
@@ -609,17 +675,11 @@ export class SessionTokenService {
     return canonicalUUIDPattern.test(proof.bindingId)
       && Number.isSafeInteger(proof.generation)
       && proof.generation >= 0
-      && typeof proof.proof === 'string'
-      && proof.proof.length >= minimumBindingProofLength
-      && proof.proof.length <= maximumBindingProofLength;
+      && isCanonicalPersistentDeviceBindingProof(proof.proof);
   }
 
   private refreshHash(secret: string): Buffer {
     return createHmac('sha256', configuration().REFRESH_TOKEN_SECRET).update(secret).digest();
-  }
-
-  private bindingHash(proof: string): Buffer {
-    return createHash('sha256').update(proof).digest();
   }
 
   private equalHash(left: Buffer, right: Buffer): boolean {

@@ -7,6 +7,7 @@ import type { SessionTransportClass } from '../../platform/web-bff-authority.js'
 import {
   deriveSuccessorSecret,
   parseRefreshToken,
+  persistentDeviceBindingHash,
   SessionTokenService,
   type DeviceBindingProof,
   type RefreshMutationInput,
@@ -86,6 +87,7 @@ interface MemoryBinding {
   sessionId: string;
   generation: number;
   currentHash: Buffer;
+  currentKid: string;
   absoluteExpiresAt: Date;
   revokedAt: Date | null;
   proofClass: 'persistent';
@@ -95,9 +97,54 @@ function refreshHash(secret: string): Buffer {
   return createHmac('sha256', refreshHmacKey).update(secret).digest();
 }
 
-function bindingHash(secret: string): Buffer {
-  return createHash('sha256').update(secret).digest();
+function bindingHash(
+  secret: string,
+  context: {
+    userId: string;
+    deviceId: string;
+    sessionId: string;
+    bindingId: string;
+    generation: number;
+  } = { userId, deviceId, sessionId, bindingId, generation: 3 },
+): Buffer {
+  const hash = persistentDeviceBindingHash({
+    proof: secret,
+    kid: derivationKid,
+    ...context,
+  });
+  if (!hash) throw new Error('Test persistent binding hash was not derived');
+  return hash;
 }
+
+describe('persistent device-binding proof canonicalization', () => {
+  const context = {
+    kid: derivationKid,
+    userId,
+    deviceId,
+    sessionId,
+    bindingId,
+    generation: 0,
+  } as const;
+
+  it('rejects canonically equivalent Unicode proof spellings instead of normalizing them', () => {
+    const composed = `${'A'.repeat(31)}\u00e9`;
+    const decomposed = `${'A'.repeat(31)}e\u0301`;
+
+    expect(composed.normalize('NFC')).toBe(decomposed.normalize('NFC'));
+    expect(persistentDeviceBindingHash({ ...context, proof: composed })).toBeNull();
+    expect(persistentDeviceBindingHash({ ...context, proof: decomposed })).toBeNull();
+  });
+
+  it('rejects a non-canonical base64url spelling that decodes to the same 32 bytes', () => {
+    const canonical = Buffer.alloc(32, 47).toString('base64url');
+    const nonCanonical = `${canonical.slice(0, -1)}9`;
+
+    expect(Buffer.from(nonCanonical, 'base64url')).toEqual(Buffer.from(canonical, 'base64url'));
+    expect(Buffer.from(nonCanonical, 'base64url').toString('base64url')).toBe(canonical);
+    expect(persistentDeviceBindingHash({ ...context, proof: canonical })).not.toBeNull();
+    expect(persistentDeviceBindingHash({ ...context, proof: nonCanonical })).toBeNull();
+  });
+});
 
 function bufferEqual(left: unknown, right: Buffer): boolean {
   return Buffer.isBuffer(left) && left.byteLength === right.byteLength && left.equals(right);
@@ -155,6 +202,7 @@ class MemoryPoolClient {
       sessionId,
       generation: 3,
       currentHash: bindingHash(bindingSecret),
+      currentKid: derivationKid,
       absoluteExpiresAt: new Date('2026-07-18T00:00:00.000Z'),
       revokedAt: null,
       proofClass: 'persistent',
@@ -241,6 +289,7 @@ class MemoryPoolClient {
           id: this.binding.id,
           generation: String(this.binding.generation),
           current_hash: Buffer.from(this.binding.currentHash),
+          current_kid: this.binding.currentKid,
         }] : [],
         rowCount: valid ? 1 : 0,
       };
@@ -798,7 +847,13 @@ describe.runIf(task4DatabaseURL !== undefined)('SessionTokenService PostgreSQL t
           realUserId,
           realDeviceId,
           realSessionId,
-          bindingHash(realBindingSecret),
+          bindingHash(realBindingSecret, {
+            userId: realUserId,
+            deviceId: realDeviceId,
+            sessionId: realSessionId,
+            bindingId: realBindingId,
+            generation: 3,
+          }),
           derivationKid,
         ],
       );

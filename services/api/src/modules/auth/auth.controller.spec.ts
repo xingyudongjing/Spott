@@ -30,6 +30,7 @@ interface ControllerContract {
   google(request: IssuanceRequest, body: unknown): Promise<unknown>;
   refresh(request: IssuanceRequest, body: unknown, key?: string): Promise<unknown>;
   bootstrap(request: IssuanceRequest, body: unknown): Promise<unknown>;
+  upgradeDeviceBinding(request: IssuanceRequest, body: unknown): Promise<unknown>;
   mergeCommit(
     user: AuthenticatedUser,
     request: IssuanceRequest,
@@ -51,7 +52,7 @@ const bootstrapRefreshToken = `s2.${bootstrapSessionId}.3.${Buffer.alloc(32, 9).
 const bootstrapProof = {
   bindingId: '019b0000-0000-7000-8000-000000000011',
   generation: 3,
-  proof: 'persistent-device-proof-material-0001',
+  proof: Buffer.alloc(32, 23).toString('base64url'),
   proofClass: 'persistent',
 } as const;
 
@@ -68,6 +69,10 @@ function harness() {
     authenticateGoogle: vi.fn().mockResolvedValue({ sessionId: 'google-session' }),
     refresh: vi.fn().mockResolvedValue({ sessionId: 'refresh-session' }),
     bootstrap: vi.fn().mockResolvedValue({ sessionId: 'bootstrap-session' }),
+    upgradeDeviceBinding: vi.fn().mockResolvedValue({
+      sessionId: bootstrapSessionId,
+      bindingId: bootstrapProof.bindingId,
+    }),
     mergeCommit: vi.fn().mockResolvedValue({ sessionId: 'merge-session' }),
   };
   const controller = new AuthController(auth as never) as unknown as ControllerContract;
@@ -189,7 +194,7 @@ describe('AuthController trusted session issuance authority', () => {
     const proof = {
       bindingId: '019b0000-0000-7000-8000-000000000011',
       generation: 3,
-      proof: 'persistent-device-proof-material-0001',
+      proof: Buffer.alloc(32, 23).toString('base64url'),
       proofClass: 'persistent',
     };
     const request: IssuanceRequest = {
@@ -327,6 +332,91 @@ describe('AuthController trusted session issuance authority', () => {
       ),
     ).rejects.toBeDefined();
     expect(auth.bootstrap).not.toHaveBeenCalled();
+  });
+
+  it('passes a strict first-binding upgrade request and only guard-derived BFF authority', async () => {
+    const { auth, controller } = harness();
+    const request: IssuanceRequest = {
+      verifiedBFFAuthority: authority,
+      sessionRequestChannel: 'verified_bff',
+    };
+    const attemptId = '019b0000-0000-7000-8000-000000000012';
+    const body = {
+      refreshToken: bootstrapRefreshToken,
+      deviceId,
+      attemptId,
+      newBinding: {
+        bindingId: bootstrapProof.bindingId,
+        generation: 0,
+        proof: bootstrapProof.proof,
+        proofClass: 'persistent',
+      },
+    };
+
+    await expect(controller.upgradeDeviceBinding(request, body)).resolves.toEqual({
+      sessionId: bootstrapSessionId,
+      bindingId: bootstrapProof.bindingId,
+    });
+    expect(auth.upgradeDeviceBinding).toHaveBeenCalledWith(
+      body,
+      authority,
+      'verified_bff',
+    );
+  });
+
+  it.each([
+    ['temporary new proof', {
+      refreshToken: bootstrapRefreshToken,
+      deviceId,
+      attemptId: '019b0000-0000-7000-8000-000000000012',
+      newBinding: {
+        bindingId: bootstrapProof.bindingId,
+        generation: 0,
+        proof: bootstrapProof.proof,
+        proofClass: 'migration_temporary',
+      },
+    }],
+    ['non-zero first generation', {
+      refreshToken: bootstrapRefreshToken,
+      deviceId,
+      attemptId: '019b0000-0000-7000-8000-000000000012',
+      newBinding: { ...bootstrapProof, generation: 1 },
+    }],
+    ['caller authority field', {
+      refreshToken: bootstrapRefreshToken,
+      deviceId,
+      attemptId: '019b0000-0000-7000-8000-000000000012',
+      newBinding: { ...bootstrapProof, generation: 0 },
+      verifiedBFFAuthority: authority,
+    }],
+    ['canonically equivalent Unicode proof', {
+      refreshToken: bootstrapRefreshToken,
+      deviceId,
+      attemptId: '019b0000-0000-7000-8000-000000000012',
+      newBinding: {
+        ...bootstrapProof,
+        generation: 0,
+        proof: `${'A'.repeat(31)}e\u0301`,
+      },
+    }],
+    ['non-canonical base64url proof', {
+      refreshToken: bootstrapRefreshToken,
+      deviceId,
+      attemptId: '019b0000-0000-7000-8000-000000000012',
+      newBinding: {
+        ...bootstrapProof,
+        generation: 0,
+        proof: `${Buffer.alloc(32, 47).toString('base64url').slice(0, -1)}9`,
+      },
+    }],
+  ] as const)('rejects %s before the binding service can mutate', async (_label, body) => {
+    const { auth, controller } = harness();
+
+    await expect(Promise.resolve().then(() => controller.upgradeDeviceBinding({
+      verifiedBFFAuthority: authority,
+      sessionRequestChannel: 'verified_bff',
+    }, body))).rejects.toBeDefined();
+    expect(auth.upgradeDeviceBinding).not.toHaveBeenCalled();
   });
 
   it('passes a guard-classified headerless Google request through as native', async () => {

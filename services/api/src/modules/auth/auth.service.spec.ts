@@ -11,7 +11,10 @@ import {
   AuthService,
   type SessionResponse,
 } from './auth.service.js';
-import type { DeviceBindingProof } from './session-token.service.js';
+import {
+  persistentDeviceBindingHash,
+  type DeviceBindingProof,
+} from './session-token.service.js';
 
 Object.assign(process.env, {
   NODE_ENV: 'test',
@@ -21,6 +24,15 @@ Object.assign(process.env, {
   FIELD_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 4).toString('base64'),
   LOOKUP_HMAC_PEPPER: 'auth-service-lookup-pepper-at-least-16-bytes',
   GOOGLE_SERVER_CLIENT_ID: 'spott-google-server-client.apps.googleusercontent.com',
+  SPOTT_WEB_BFF_KEYS:
+    `bff-2026-07:${Buffer.from('0123456789abcdef0123456789abcdef').toString('base64url')}`,
+  SPOTT_WEB_BFF_CURRENT_KID: 'bff-2026-07',
+  REFRESH_TOKEN_DERIVATION_KEYS:
+    `refresh-2026-07:${Buffer.from('fedcba9876543210fedcba9876543210').toString('base64url')}`,
+  REFRESH_TOKEN_DERIVATION_CURRENT_KID: 'refresh-2026-07',
+  WEB_SESSION_BFF_ENFORCEMENT: 'off',
+  WEB_SESSION_RECOVERY_SECONDS: '120',
+  SPOTT_WEB_CANONICAL_ORIGIN: 'https://spott.jp',
 });
 
 const currentUserId = '019b0000-0000-7000-8000-000000000001';
@@ -499,11 +511,20 @@ const bootstrapDeviceId = '019b0000-0000-7000-8000-000000000020';
 const bootstrapFamilyId = '019b0000-0000-7000-8000-000000000021';
 const bootstrapBindingId = '019b0000-0000-7000-8000-000000000022';
 const bootstrapSecret = Buffer.alloc(32, 21).toString('base64url');
-const bootstrapBindingSecret = 'persistent-device-binding-proof-secret-0001';
+const bootstrapBindingSecret = Buffer.alloc(32, 22).toString('base64url');
 const bootstrapRefreshHash = createHmac('sha256', process.env.REFRESH_TOKEN_SECRET as string)
   .update(bootstrapSecret)
   .digest();
-const bootstrapBindingHash = createHash('sha256').update(bootstrapBindingSecret).digest();
+const bootstrapBindingHash = persistentDeviceBindingHash({
+  proof: bootstrapBindingSecret,
+  kid: 'refresh-2026-07',
+  userId: currentUserId,
+  deviceId: bootstrapDeviceId,
+  sessionId: currentSessionId,
+  bindingId: bootstrapBindingId,
+  generation: 4,
+});
+if (!bootstrapBindingHash) throw new Error('Bootstrap binding hash fixture was not derived');
 const bootstrapProof = {
   bindingId: bootstrapBindingId,
   generation: 4,
@@ -542,6 +563,7 @@ const baseBootstrapRow = {
   binding_id: bootstrapBindingId,
   binding_generation: '4',
   binding_current_hash: bootstrapBindingHash,
+  binding_current_kid: 'refresh-2026-07',
   binding_proof_class: 'persistent',
   binding_active: true,
   user_status: 'active',
@@ -832,6 +854,208 @@ describe('AuthService read-only session bootstrap', () => {
       sessionId: currentSessionId,
       refreshGeneration: 0,
     });
+  });
+});
+
+describe('AuthService first persistent Web device-binding upgrade', () => {
+  const deviceId = '019b0000-0000-7000-8000-000000000061';
+  const familyId = '019b0000-0000-7000-8000-000000000062';
+  const bindingId = '019b0000-0000-7000-8000-000000000063';
+  const attemptId = '019b0000-0000-7000-8000-000000000064';
+  const refreshSecret = Buffer.alloc(32, 31).toString('base64url');
+  const proof = Buffer.alloc(32, 47).toString('base64url');
+  const refreshHash = createHmac('sha256', process.env.REFRESH_TOKEN_SECRET as string)
+    .update(refreshSecret)
+    .digest();
+  const refreshExpiresAt = new Date('2026-08-17T03:04:05.000Z');
+  const bindingIssuedAt = new Date('2026-07-18T03:04:05.000Z');
+  const input = {
+    refreshToken: `${currentSessionId}.${refreshSecret}`,
+    deviceId,
+    attemptId,
+    newBinding: {
+      bindingId,
+      generation: 0 as const,
+      proof,
+      proofClass: 'persistent' as const,
+    },
+  };
+  const authority: VerifiedBFFAuthority = {
+    version: 'v1',
+    kid: 'bff-2026-07',
+    timestamp: 1_784_346_245_000,
+    nonceHash: Buffer.alloc(32, 12),
+  };
+
+  type UpgradeContract = {
+    upgradeDeviceBinding(
+      upgradeInput: typeof input,
+      verifiedAuthority: VerifiedBFFAuthority | undefined,
+      channel: SessionRequestChannel,
+    ): Promise<Record<string, unknown>>;
+  };
+
+  function harness() {
+    const session = {
+      id: currentSessionId,
+      user_id: currentUserId,
+      device_id: deviceId,
+      device_user_id: currentUserId,
+      device_risk_state: 'normal',
+      refresh_hash: refreshHash,
+      refresh_family_id: familyId,
+      refresh_generation: '0',
+      current_derivation_kid: null,
+      current_binding_id: null as string | null,
+      current_binding_generation: null as string | null,
+      transport_class: 'web_bff',
+      expires_at: refreshExpiresAt,
+      session_active: true,
+      user_status: 'active',
+      public_handle: 'spott_binding_upgrade',
+      phone_verified_at: null,
+      restriction_flags: [],
+    };
+    const history = {
+      session_id: currentSessionId,
+      family_id: familyId,
+      generation: '0',
+      token_hash: refreshHash,
+      derivation_kid: null,
+      transport_class: 'web_bff',
+      binding_id: null as string | null,
+      binding_generation: null as string | null,
+      state: 'current',
+    };
+    const client = {
+      query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
+        void values;
+        if (sql.includes('FROM identity.sessions AS session') && sql.includes('FOR UPDATE')) {
+          return { rows: [session], rowCount: 1 };
+        }
+        if (sql.includes('FROM identity.session_refresh_history') && sql.includes('FOR UPDATE')) {
+          return { rows: [history], rowCount: 1 };
+        }
+        if (sql.includes('identity.claim_proof_hash_class')) {
+          return { rows: [{ accepted: true }], rowCount: 1 };
+        }
+        if (sql.includes('INSERT INTO identity.device_bindings')) {
+          return {
+            rows: [{ issued_at: bindingIssuedAt, absolute_expires_at: refreshExpiresAt }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes('UPDATE identity.sessions') && sql.includes('current_binding_id')) {
+          session.current_binding_id = bindingId;
+          session.current_binding_generation = '0';
+          return { rows: [{ id: currentSessionId }], rowCount: 1 };
+        }
+        if (sql.includes('UPDATE identity.session_refresh_history')) {
+          history.binding_id = bindingId;
+          history.binding_generation = '0';
+          return { rows: [{ session_id: currentSessionId }], rowCount: 1 };
+        }
+        throw new Error(`Unexpected binding upgrade query: ${sql}`);
+      }),
+    };
+    const database = {
+      transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) =>
+        work(client),
+      ),
+    };
+    const idempotency = {
+      requestHash: vi.fn().mockReturnValue(Buffer.alloc(32, 71)),
+      claim: vi.fn().mockResolvedValue(null),
+      complete: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new AuthService(
+      database as never,
+      {} as never,
+      idempotency as never,
+      {} as never,
+    ) as unknown as UpgradeContract;
+    return { service, database, client, idempotency };
+  }
+
+  it('fails closed before PostgreSQL when verified BFF authority is absent', async () => {
+    const { service, database } = harness();
+
+    await expect(
+      service.upgradeDeviceBinding(input, undefined, 'consumer_web'),
+    ).rejects.toMatchObject({ code: 'WEB_BFF_AUTHORITY_REQUIRED', status: 403 });
+    expect(database.transaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['canonically equivalent Unicode', `${'A'.repeat(31)}e\u0301`],
+    ['non-canonical base64url', `${proof.slice(0, -1)}9`],
+  ])('rejects %s persistent proof before PostgreSQL', async (_label, invalidProof) => {
+    const { service, database } = harness();
+
+    await expect(service.upgradeDeviceBinding({
+      ...input,
+      newBinding: { ...input.newBinding, proof: invalidProof },
+    }, authority, 'verified_bff')).rejects.toMatchObject({ code: 'TOKEN_INVALID', status: 401 });
+    expect(database.transaction).not.toHaveBeenCalled();
+  });
+
+  it('atomically binds the current session/history and returns no proof or refresh credential', async () => {
+    const { service, client, idempotency } = harness();
+
+    const material = await service.upgradeDeviceBinding(input, authority, 'verified_bff');
+
+    expect(material).toEqual({
+      sessionId: currentSessionId,
+      refreshFamilyId: familyId,
+      refreshGeneration: 0,
+      transportClass: 'web_bff',
+      bindingId,
+      bindingGeneration: 0,
+      bindingIssuedAt: bindingIssuedAt.toISOString(),
+      bindingAbsoluteExpiresAt: refreshExpiresAt.toISOString(),
+      refreshTokenExpiresAt: refreshExpiresAt.toISOString(),
+      user: {
+        id: currentUserId,
+        publicHandle: 'spott_binding_upgrade',
+        phoneVerified: false,
+        restrictions: [],
+      },
+    });
+    expect(JSON.stringify(material)).not.toContain(proof);
+    expect(JSON.stringify(material)).not.toContain(refreshSecret);
+    expect(idempotency.requestHash).toHaveBeenCalledWith(
+      'POST',
+      '/v1/auth/device-binding/upgrade',
+      input,
+    );
+    expect(idempotency.claim).toHaveBeenCalledWith(
+      client,
+      currentUserId,
+      attemptId,
+      Buffer.alloc(32, 71),
+    );
+    expect(idempotency.complete).toHaveBeenCalledWith(
+      client,
+      currentUserId,
+      attemptId,
+      { status: 200, body: material },
+      { type: 'device_binding', id: bindingId },
+    );
+
+    const proofClassClaim = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes('identity.claim_proof_hash_class'));
+    expect(proofClassClaim?.[1]).toEqual([
+      createHash('sha256').update(proof).digest(),
+    ]);
+
+    const bindingInsert = client.query.mock.calls.find(([sql]) =>
+      String(sql).includes('INSERT INTO identity.device_bindings'));
+    expect(bindingInsert).toBeDefined();
+    const storedValues = bindingInsert?.[1] ?? [];
+    expect(storedValues).toContain('refresh-2026-07');
+    expect(storedValues).not.toContain(proof);
+    expect(storedValues).not.toContain(createHash('sha256').update(proof).digest());
+    expect(storedValues.some((value) => Buffer.isBuffer(value) && value.byteLength === 32)).toBe(true);
   });
 });
 

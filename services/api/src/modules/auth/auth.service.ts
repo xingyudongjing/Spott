@@ -15,7 +15,12 @@ import {
   type SessionTransportClass,
   type VerifiedBFFAuthority,
 } from '../../platform/web-bff-authority.js';
-import { SessionTokenService, type DeviceBindingProof } from './session-token.service.js';
+import {
+  isCanonicalPersistentDeviceBindingProof,
+  persistentDeviceBindingHash,
+  SessionTokenService,
+  type DeviceBindingProof,
+} from './session-token.service.js';
 
 const emailSchema = z.string().trim().toLowerCase().email().max(254);
 const phoneSchema = z.string().regex(/^\+81[1-9][0-9]{8,9}$/);
@@ -25,12 +30,21 @@ const persistentDeviceBindingProofSchema = z
   .object({
     bindingId: z.string().uuid(),
     generation: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-    proof: z.string().min(32).max(1_024),
+    proof: z.string().refine(isCanonicalPersistentDeviceBindingProof),
     proofClass: z.literal('persistent'),
+  })
+  .strict();
+export const deviceBindingUpgradeInputSchema = z
+  .object({
+    refreshToken: z.string(),
+    deviceId: z.string().uuid(),
+    attemptId: z.string().uuid(),
+    newBinding: persistentDeviceBindingProofSchema.extend({ generation: z.literal(0) }),
   })
   .strict();
 
 export type PersistentDeviceBindingProof = z.infer<typeof persistentDeviceBindingProofSchema>;
+export type DeviceBindingUpgradeInput = z.infer<typeof deviceBindingUpgradeInputSchema>;
 
 interface UserRow {
   id: string;
@@ -66,6 +80,7 @@ interface BootstrapSessionRow {
   binding_id: string;
   binding_generation: string;
   binding_current_hash: Buffer;
+  binding_current_kid: string;
   binding_proof_class: string;
   binding_active: boolean;
   user_status: string;
@@ -73,6 +88,67 @@ interface BootstrapSessionRow {
   phone_verified_at: Date | null;
   restriction_flags: string[];
   admin_roles: string[];
+}
+
+interface BindingUpgradeSessionRow {
+  id: string;
+  user_id: string;
+  device_id: string;
+  device_user_id: string;
+  device_risk_state: string;
+  refresh_hash: Buffer;
+  refresh_family_id: string;
+  refresh_generation: string;
+  current_derivation_kid: string | null;
+  current_binding_id: string | null;
+  current_binding_generation: string | null;
+  transport_class: SessionTransportClass;
+  expires_at: Date;
+  session_active: boolean;
+  user_status: string;
+  public_handle: string;
+  phone_verified_at: Date | null;
+  restriction_flags: string[];
+}
+
+interface BindingUpgradeHistoryRow {
+  session_id: string;
+  family_id: string;
+  generation: string;
+  token_hash: Buffer;
+  derivation_kid: string | null;
+  transport_class: SessionTransportClass;
+  binding_id: string | null;
+  binding_generation: string | null;
+  state: 'current' | 'consumed' | 'revoked';
+}
+
+interface IssuedBindingRow {
+  id?: string;
+  generation?: string;
+  current_hash?: Buffer;
+  current_kid?: string;
+  issued_at: Date;
+  absolute_expires_at: Date;
+  revoked_at?: Date | null;
+}
+
+export interface DeviceBindingUpgradeMaterial {
+  sessionId: string;
+  refreshFamilyId: string;
+  refreshGeneration: number;
+  transportClass: 'web_bff';
+  bindingId: string;
+  bindingGeneration: number;
+  bindingIssuedAt: string;
+  bindingAbsoluteExpiresAt: string;
+  refreshTokenExpiresAt: string;
+  user: {
+    id: string;
+    publicHandle: string;
+    phoneVerified: boolean;
+    restrictions: string[];
+  };
 }
 
 export interface SessionResponse {
@@ -388,7 +464,6 @@ export class AuthService {
     const deviceId = parsedDevice.data;
     const proof = parsedProof.data;
     const suppliedRefreshHash = this.refreshHash(credential.secret);
-    const suppliedBindingHash = createHash('sha256').update(proof.proof).digest();
     const result = await this.database.query<BootstrapSessionRow>(
       `SELECT
          session.id, session.user_id, session.device_id, session.refresh_hash,
@@ -409,6 +484,7 @@ export class AuthService {
          binding.id AS binding_id,
          binding.generation AS binding_generation,
          binding.current_hash AS binding_current_hash,
+         binding.current_kid AS binding_current_kid,
          binding.proof_class AS binding_proof_class,
          (binding.revoked_at IS NULL
            AND binding.absolute_expires_at > clock_timestamp()) AS binding_active,
@@ -461,20 +537,30 @@ export class AuthService {
          AND binding.id = $3
          AND binding.generation = $4::bigint
          AND session.refresh_hash = $5
-         AND history.token_hash = $5
-         AND binding.current_hash = $6`,
+         AND history.token_hash = $5`,
       [
         credential.sessionId,
         deviceId,
         proof.bindingId,
         proof.generation,
         suppliedRefreshHash,
-        suppliedBindingHash,
       ],
     );
     const row = result.rows[0];
+    const suppliedBindingHash = row
+      ? persistentDeviceBindingHash({
+          proof: proof.proof,
+          kid: row.binding_current_kid,
+          userId: row.user_id,
+          deviceId: row.device_id,
+          sessionId: row.id,
+          bindingId: proof.bindingId,
+          generation: proof.generation,
+        })
+      : null;
     if (
       !row ||
+      !suppliedBindingHash ||
       !this.validBootstrapState(
         row,
         credential,
@@ -537,6 +623,197 @@ export class AuthService {
         restrictions: row.restriction_flags,
       },
     };
+  }
+
+  async upgradeDeviceBinding(
+    inputValue: DeviceBindingUpgradeInput,
+    authority: VerifiedBFFAuthority | undefined,
+    requestChannel: SessionRequestChannel,
+  ): Promise<DeviceBindingUpgradeMaterial> {
+    if (!authority) {
+      throw new DomainError(
+        'WEB_BFF_AUTHORITY_REQUIRED',
+        '此操作必须通过安全 Web 通道完成。',
+        403,
+        { retryable: false },
+      );
+    }
+    if (requestChannel !== 'verified_bff') {
+      throw new DomainError('SESSION_TRANSPORT_MISMATCH', '会话通道不匹配，请重新登录。', 403, {
+        retryable: false,
+      });
+    }
+    const parsedInput = deviceBindingUpgradeInputSchema.safeParse(inputValue);
+    if (!parsedInput.success) {
+      throw new DomainError('TOKEN_INVALID', '设备绑定凭据无效，请重新登录。', 401, {
+        retryable: false,
+      });
+    }
+    const input = parsedInput.data;
+    const credential = parseRefreshCredential(input.refreshToken);
+    if (!credential) {
+      throw new DomainError('TOKEN_INVALID', '登录凭据无效，请重新登录。', 401, {
+        retryable: false,
+      });
+    }
+
+    try {
+      return await this.database.transaction(async (client) => {
+        const session = await this.lockBindingUpgradeSession(client, credential.sessionId);
+        if (!session || session.transport_class !== 'web_bff') {
+          throw new DomainError(
+            session ? 'SESSION_TRANSPORT_MISMATCH' : 'TOKEN_EXPIRED',
+            '登录已过期，请重新登录。',
+            session ? 403 : 401,
+            { retryable: false },
+          );
+        }
+        const generation = this.generation(session.refresh_generation);
+        if (generation === null) this.throwExpiredBindingUpgrade();
+        const history = await this.lockBindingUpgradeHistory(client, session.id, generation);
+        const suppliedRefreshHash = this.refreshHash(credential.secret);
+        if (!history || !this.validBindingUpgradeState(
+          session,
+          history,
+          credential,
+          input.deviceId,
+          suppliedRefreshHash,
+          generation,
+        )) {
+          this.throwExpiredBindingUpgrade();
+        }
+
+        const rawProofFingerprint = createHash('sha256').update(input.newBinding.proof).digest();
+        const proofClass = await client.query<{ accepted: boolean }>(
+          `SELECT identity.claim_proof_hash_class($1, 'persistent') AS accepted`,
+          [rawProofFingerprint],
+        );
+        if (proofClass.rows[0]?.accepted !== true) {
+          throw new DomainError(
+            'DEVICE_BINDING_PROOF_CLASS_INVALID',
+            '临时迁移凭据不能升级为长期设备绑定。',
+            401,
+            { retryable: false },
+          );
+        }
+
+        const requestHash = this.idempotency.requestHash(
+          'POST',
+          '/v1/auth/device-binding/upgrade',
+          input,
+        );
+        const replay = await this.idempotency.claim<DeviceBindingUpgradeMaterial>(
+          client,
+          session.user_id,
+          input.attemptId,
+          requestHash,
+        );
+        if (replay) {
+          if (replay.status !== 200) this.throwExpiredBindingUpgrade();
+          const current = await this.currentIssuedBinding(client, session, history, input);
+          if (!current) this.throwExpiredBindingUpgrade();
+          return current;
+        }
+
+        if (
+          session.current_binding_id !== null ||
+          session.current_binding_generation !== null ||
+          history.binding_id !== null ||
+          history.binding_generation !== null
+        ) {
+          throw new DomainError(
+            'DEVICE_BINDING_ALREADY_EXISTS',
+            '当前会话已存在长期设备绑定，首次升级不能覆盖它。',
+            409,
+            { retryable: false },
+          );
+        }
+
+        const bindingKid = configuration().REFRESH_TOKEN_DERIVATION_KEYS.currentKid;
+        const bindingHash = persistentDeviceBindingHash({
+          proof: input.newBinding.proof,
+          kid: bindingKid,
+          userId: session.user_id,
+          deviceId: session.device_id,
+          sessionId: session.id,
+          bindingId: input.newBinding.bindingId,
+          generation: input.newBinding.generation,
+        });
+        if (!bindingHash) {
+          throw new DomainError('TOKEN_INVALID', '设备绑定凭据无效，请重新登录。', 401, {
+            retryable: false,
+          });
+        }
+
+        const inserted = await client.query<IssuedBindingRow>(
+          `INSERT INTO identity.device_bindings(
+             id, user_id, device_id, session_id, generation, current_hash, current_kid,
+             absolute_expires_at, proof_class
+           ) VALUES ($1, $2, $3, $4, $5::bigint, $6, $7, $8, 'persistent')
+           RETURNING issued_at, absolute_expires_at`,
+          [
+            input.newBinding.bindingId,
+            session.user_id,
+            session.device_id,
+            session.id,
+            input.newBinding.generation,
+            bindingHash,
+            bindingKid,
+            session.expires_at,
+          ],
+        );
+        const binding = inserted.rows[0];
+        if (!binding) throw new Error('Persistent device binding insert returned no row');
+
+        const updatedSession = await client.query<{ id: string }>(
+          `UPDATE identity.sessions
+           SET current_binding_id = $2, current_binding_generation = $3::bigint
+           WHERE id = $1 AND current_binding_id IS NULL
+             AND current_binding_generation IS NULL AND refresh_hash = $4
+             AND refresh_generation = $5::bigint AND revoked_at IS NULL
+             AND reuse_detected_at IS NULL AND expires_at > clock_timestamp()
+           RETURNING id`,
+          [session.id, input.newBinding.bindingId, input.newBinding.generation,
+            suppliedRefreshHash, generation],
+        );
+        if (updatedSession.rowCount !== 1) {
+          throw new Error('Persistent binding lost the locked current session');
+        }
+
+        const updatedHistory = await client.query<{ session_id: string }>(
+          `UPDATE identity.session_refresh_history
+           SET binding_id = $3, binding_generation = $4::bigint
+           WHERE session_id = $1 AND generation = $2::bigint AND state = 'current'
+             AND binding_id IS NULL AND binding_generation IS NULL AND token_hash = $5
+           RETURNING session_id`,
+          [session.id, generation, input.newBinding.bindingId,
+            input.newBinding.generation, suppliedRefreshHash],
+        );
+        if (updatedHistory.rowCount !== 1) {
+          throw new Error('Persistent binding lost the locked current refresh history');
+        }
+
+        const material = this.bindingUpgradeMaterial(session, generation, input, binding);
+        await this.idempotency.complete(
+          client,
+          session.user_id,
+          input.attemptId,
+          { status: 200, body: material },
+          { type: 'device_binding', id: input.newBinding.bindingId },
+        );
+        return material;
+      });
+    } catch (error) {
+      if (this.pgCode(error) === '23505' || this.pgCode(error) === '23514') {
+        throw new DomainError(
+          'DEVICE_BINDING_CONFLICT',
+          '设备绑定已被使用或与临时凭据冲突。',
+          409,
+          { retryable: false },
+        );
+      }
+      throw error;
+    }
   }
 
   async refreshOps(refreshToken: string): Promise<SessionResponse> {
@@ -1829,6 +2106,155 @@ export class AuthService {
        VALUES ('identity.user', $1, $2, $3)`,
       [userId, eventType, payload],
     );
+  }
+
+  private async lockBindingUpgradeSession(
+    client: PoolClient,
+    sessionId: string,
+  ): Promise<BindingUpgradeSessionRow | null> {
+    const result = await client.query<BindingUpgradeSessionRow>(
+      `SELECT session.id, session.user_id, session.device_id,
+              device.user_id AS device_user_id, device.risk_state AS device_risk_state,
+              session.refresh_hash, session.refresh_family_id, session.refresh_generation,
+              session.current_derivation_kid, session.current_binding_id,
+              session.current_binding_generation, session.transport_class, session.expires_at,
+              (session.revoked_at IS NULL AND session.reuse_detected_at IS NULL
+                AND session.expires_at > clock_timestamp()) AS session_active,
+              user_record.status AS user_status, user_record.public_handle,
+              user_record.phone_verified_at, user_record.restriction_flags
+       FROM identity.sessions AS session
+       JOIN identity.devices AS device ON device.id = session.device_id
+       JOIN identity.users AS user_record
+         ON user_record.id = session.user_id AND user_record.deleted_at IS NULL
+       WHERE session.id = $1
+       FOR UPDATE OF session, device`,
+      [sessionId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private async lockBindingUpgradeHistory(
+    client: PoolClient,
+    sessionId: string,
+    generation: number,
+  ): Promise<BindingUpgradeHistoryRow | null> {
+    const result = await client.query<BindingUpgradeHistoryRow>(
+      `SELECT session_id, family_id, generation, token_hash, derivation_kid,
+              transport_class, binding_id, binding_generation, state
+       FROM identity.session_refresh_history
+       WHERE session_id = $1 AND generation = $2::bigint
+       FOR UPDATE`,
+      [sessionId, generation],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private validBindingUpgradeState(
+    session: BindingUpgradeSessionRow,
+    history: BindingUpgradeHistoryRow,
+    credential: NonNullable<ReturnType<typeof parseRefreshCredential>>,
+    deviceId: string,
+    suppliedRefreshHash: Buffer,
+    generation: number,
+  ): boolean {
+    const historyGeneration = this.generation(history.generation);
+    const storedLegacyCredential = generation === 0 && session.current_derivation_kid === null;
+    const canonicalCredential = credential.version === 'legacy'
+      ? storedLegacyCredential
+      : !storedLegacyCredential && credential.generation === generation;
+    return canonicalCredential
+      && session.id === credential.sessionId
+      && session.device_id === deviceId
+      && session.device_user_id === session.user_id
+      && session.device_risk_state !== 'blocked'
+      && session.user_status === 'active'
+      && !session.restriction_flags.includes('loginBlocked')
+      && session.session_active
+      && this.sameHash(session.refresh_hash, suppliedRefreshHash)
+      && history.session_id === session.id
+      && history.family_id === session.refresh_family_id
+      && historyGeneration === generation
+      && this.sameHash(history.token_hash, suppliedRefreshHash)
+      && this.sameHash(history.token_hash, session.refresh_hash)
+      && history.derivation_kid === session.current_derivation_kid
+      && history.transport_class === session.transport_class
+      && history.binding_id === session.current_binding_id
+      && this.generation(history.binding_generation)
+        === this.generation(session.current_binding_generation)
+      && history.state === 'current';
+  }
+
+  private async currentIssuedBinding(
+    client: PoolClient,
+    session: BindingUpgradeSessionRow,
+    history: BindingUpgradeHistoryRow,
+    input: DeviceBindingUpgradeInput,
+  ): Promise<DeviceBindingUpgradeMaterial | null> {
+    if (
+      session.current_binding_id !== input.newBinding.bindingId ||
+      this.generation(session.current_binding_generation) !== input.newBinding.generation ||
+      history.binding_id !== input.newBinding.bindingId ||
+      this.generation(history.binding_generation) !== input.newBinding.generation
+    ) {
+      return null;
+    }
+    const result = await client.query<IssuedBindingRow>(
+      `SELECT id, generation, current_hash, current_kid, issued_at,
+              absolute_expires_at, revoked_at
+       FROM identity.device_bindings
+       WHERE id = $1 AND user_id = $2 AND device_id = $3 AND session_id = $4
+         AND generation = $5::bigint AND proof_class = 'persistent'
+         AND revoked_at IS NULL AND absolute_expires_at > clock_timestamp()
+       FOR UPDATE`,
+      [input.newBinding.bindingId, session.user_id, session.device_id,
+        session.id, input.newBinding.generation],
+    );
+    const binding = result.rows[0];
+    if (!binding || !binding.current_hash || !binding.current_kid) return null;
+    const suppliedHash = persistentDeviceBindingHash({
+      proof: input.newBinding.proof,
+      kid: binding.current_kid,
+      userId: session.user_id,
+      deviceId: session.device_id,
+      sessionId: session.id,
+      bindingId: input.newBinding.bindingId,
+      generation: input.newBinding.generation,
+    });
+    if (!suppliedHash || !this.sameHash(suppliedHash, binding.current_hash)) return null;
+    const generation = this.generation(session.refresh_generation);
+    if (generation === null) return null;
+    return this.bindingUpgradeMaterial(session, generation, input, binding);
+  }
+
+  private bindingUpgradeMaterial(
+    session: BindingUpgradeSessionRow,
+    generation: number,
+    input: DeviceBindingUpgradeInput,
+    binding: Pick<IssuedBindingRow, 'issued_at' | 'absolute_expires_at'>,
+  ): DeviceBindingUpgradeMaterial {
+    return {
+      sessionId: session.id,
+      refreshFamilyId: session.refresh_family_id,
+      refreshGeneration: generation,
+      transportClass: 'web_bff',
+      bindingId: input.newBinding.bindingId,
+      bindingGeneration: input.newBinding.generation,
+      bindingIssuedAt: binding.issued_at.toISOString(),
+      bindingAbsoluteExpiresAt: binding.absolute_expires_at.toISOString(),
+      refreshTokenExpiresAt: session.expires_at.toISOString(),
+      user: {
+        id: session.user_id,
+        publicHandle: session.public_handle,
+        phoneVerified: session.phone_verified_at !== null,
+        restrictions: session.restriction_flags,
+      },
+    };
+  }
+
+  private throwExpiredBindingUpgrade(): never {
+    throw new DomainError('TOKEN_EXPIRED', '登录已过期，请重新登录。', 401, {
+      retryable: false,
+    });
   }
 
   private validBootstrapState(

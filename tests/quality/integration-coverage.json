@@ -32,6 +32,11 @@
       "kind": "database-replay"
     },
     {
+      "path": "services/api/src/modules/auth/auth.device-binding.integration.spec.ts",
+      "gate": "postgres-integration",
+      "kind": "service-integration"
+    },
+    {
       "path": "services/api/src/modules/auth/auth.session-migration.integration.spec.ts",
       "gate": "postgres-integration",
       "kind": "service-integration"

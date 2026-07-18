@@ -12,12 +12,13 @@ import type {
   SessionTransportClass,
 } from '../../platform/web-bff-authority.js';
 import { AuthService } from './auth.service.js';
+import { isCanonicalPersistentDeviceBindingProof } from './session-token.service.js';
 
 const persistentDeviceBindingProofSchema = z
   .object({
     bindingId: z.string().uuid(),
     generation: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-    proof: z.string().min(32).max(1_024),
+    proof: z.string().refine(isCanonicalPersistentDeviceBindingProof),
     proofClass: z.literal('persistent'),
   })
   .strict();
@@ -108,6 +109,26 @@ export class AuthController {
       input.refreshToken,
       input.deviceId,
       input.deviceBindingProof,
+      request.verifiedBFFAuthority,
+      this.requestChannel(request),
+    );
+  }
+
+  @Public()
+  @Post('auth/device-binding/upgrade')
+  @HttpCode(200)
+  upgradeDeviceBinding(@Req() request: SpottRequest, @Body() body: unknown) {
+    const input = z
+      .object({
+        refreshToken: z.string(),
+        deviceId: z.string().uuid(),
+        attemptId: z.string().uuid(),
+        newBinding: persistentDeviceBindingProofSchema.extend({ generation: z.literal(0) }),
+      })
+      .strict()
+      .parse(body);
+    return this.auth.upgradeDeviceBinding(
+      input,
       request.verifiedBFFAuthority,
       this.requestChannel(request),
     );

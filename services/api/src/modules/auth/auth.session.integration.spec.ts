@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import {
   Client,
   type PoolClient,
@@ -10,6 +10,7 @@ import type { SessionRequestChannel } from '../../platform/web-bff-authority.js'
 import { AuthService, type SessionResponse } from './auth.service.js';
 import {
   SessionTokenService,
+  persistentDeviceBindingHash,
   type DeviceBindingProof,
   type RefreshMutationInput,
   type RefreshMutationOutcome,
@@ -140,8 +141,23 @@ function refreshHash(secret: string): Buffer {
   return createHmac('sha256', refreshHmacKey).update(secret).digest();
 }
 
-function bindingHash(secret: string): Buffer {
-  return createHash('sha256').update(secret).digest();
+function bindingHash(
+  secret: string,
+  context: {
+    userId: string;
+    deviceId: string;
+    sessionId: string;
+    bindingId: string;
+    generation: number;
+  },
+): Buffer {
+  const hash = persistentDeviceBindingHash({
+    proof: secret,
+    kid: derivationKid,
+    ...context,
+  });
+  if (!hash) throw new Error('Integration persistent binding hash was not derived');
+  return hash;
 }
 
 async function seedSession(options: { familySibling?: boolean } = {}): Promise<SeededSession> {
@@ -174,7 +190,20 @@ async function seedSession(options: { familySibling?: boolean } = {}): Promise<S
        id, user_id, device_id, session_id, generation, current_hash, current_kid,
        absolute_expires_at
      ) VALUES ($1, $2, $3, $4, 3, $5, $6, clock_timestamp() + interval '1 day')`,
-    [bindingId, userId, deviceId, sessionId, bindingHash(bindingSecret), derivationKid],
+    [
+      bindingId,
+      userId,
+      deviceId,
+      sessionId,
+      bindingHash(bindingSecret, {
+        userId,
+        deviceId,
+        sessionId,
+        bindingId,
+        generation: 3,
+      }),
+      derivationKid,
+    ],
   );
   await setup.query(
     `UPDATE identity.sessions

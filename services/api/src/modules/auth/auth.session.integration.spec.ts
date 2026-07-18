@@ -63,6 +63,24 @@ interface Task5RefreshContract {
   ): Promise<SessionResponse>;
 }
 
+interface DeviceSessionUser {
+  readonly id: string;
+  readonly public_handle: string;
+  status: string;
+  readonly phone_verified_at: Date | null;
+  readonly restriction_flags: string[];
+}
+
+interface DeviceSessionContract {
+  createSession(
+    client: PoolClient,
+    user: DeviceSessionUser,
+    deviceId: string,
+    platform: 'ios' | 'web',
+    transportClass: 'native' | 'web_bff',
+  ): Promise<SessionResponse>;
+}
+
 class TwoPartyBarrier {
   private arrivals = 0;
   private readonly opened: Promise<void>;
@@ -225,7 +243,52 @@ function authService(database: ClientDatabaseAdapter): Task5RefreshContract {
   ]) as Task5RefreshContract;
 }
 
-describe('committed stable refresh reuse handling on PostgreSQL', () => {
+async function seedDeviceSessionUser(prefix: string): Promise<DeviceSessionUser> {
+  const userId = randomUUID();
+  seededUserIds.push(userId);
+  const publicHandle = `${prefix}_${userId.replaceAll('-', '').slice(0, 12)}`;
+  await setup.query('INSERT INTO identity.users(id, public_handle) VALUES ($1, $2)', [
+    userId,
+    publicHandle,
+  ]);
+  return {
+    id: userId,
+    public_handle: publicHandle,
+    status: 'active',
+    phone_verified_at: null,
+    restriction_flags: [],
+  };
+}
+
+async function createDeviceSession(
+  client: Client,
+  user: DeviceSessionUser,
+  deviceId: string,
+  platform: 'ios' | 'web',
+  transportClass: 'native' | 'web_bff',
+  barrier: { wait(): Promise<void> } = { wait: () => Promise.resolve() },
+): Promise<SessionResponse> {
+  await client.query('BEGIN');
+  await client.query("SET LOCAL TIME ZONE 'UTC'");
+  await barrier.wait();
+  try {
+    const service = new AuthService({} as never, {} as never, {} as never, {} as never);
+    const response = await (service as unknown as DeviceSessionContract).createSession(
+      client as unknown as PoolClient,
+      user,
+      deviceId,
+      platform,
+      transportClass,
+    );
+    await client.query('COMMIT');
+    return response;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  }
+}
+
+describe('auth session mutation invariants on PostgreSQL', () => {
   beforeAll(async () => {
     setup = new Client({
       connectionString: databaseURL,
@@ -243,6 +306,7 @@ describe('committed stable refresh reuse handling on PostgreSQL', () => {
        WHERE user_id = ANY($1::uuid[])`,
       [ids],
     );
+    await setup.query('DELETE FROM sync.pending_operations WHERE user_id = ANY($1::uuid[])', [ids]);
     await setup.query('DELETE FROM identity.device_bindings WHERE user_id = ANY($1::uuid[])', [ids]);
     await setup.query('DELETE FROM identity.sessions WHERE user_id = ANY($1::uuid[])', [ids]);
     await setup.query('DELETE FROM identity.devices WHERE user_id = ANY($1::uuid[])', [ids]);
@@ -251,6 +315,172 @@ describe('committed stable refresh reuse handling on PostgreSQL', () => {
 
   afterAll(async () => {
     await setup?.end();
+  });
+
+  it('allows exactly one owner when two users concurrently claim a new device UUID', async () => {
+    const firstUser = await seedDeviceSessionUser('device_race_a');
+    const secondUser = await seedDeviceSessionUser('device_race_b');
+    const deviceId = randomUUID();
+    const firstClient = new Client({ connectionString: databaseURL });
+    const secondClient = new Client({ connectionString: databaseURL });
+    const barrier = new TwoPartyBarrier();
+    await Promise.all([firstClient.connect(), secondClient.connect()]);
+    try {
+      const results = await Promise.allSettled([
+        createDeviceSession(firstClient, firstUser, deviceId, 'ios', 'native', barrier),
+        createDeviceSession(secondClient, secondUser, deviceId, 'web', 'web_bff', barrier),
+      ]);
+
+      const fulfilled = results.filter(
+        (result): result is PromiseFulfilledResult<SessionResponse> => result.status === 'fulfilled',
+      );
+      const rejected = results.filter(
+        (result): result is PromiseRejectedResult => result.status === 'rejected',
+      );
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]?.reason).toMatchObject({
+        code: 'DEVICE_OWNERSHIP_CONFLICT',
+        status: 409,
+      });
+
+      const winnerId = fulfilled[0]?.value.user.id;
+      const loserId = winnerId === firstUser.id ? secondUser.id : firstUser.id;
+      const state = await setup.query<{
+        user_id: string;
+        session_count: string;
+        history_count: string;
+        binding_count: string;
+        pending_count: string;
+        loser_session_count: string;
+      }>(
+        `SELECT device.user_id,
+                count(DISTINCT session.id)::text AS session_count,
+                count(history.session_id)::text AS history_count,
+                (SELECT count(*) FROM identity.device_bindings binding
+                 WHERE binding.device_id = device.id)::text AS binding_count,
+                (SELECT count(*) FROM sync.pending_operations operation
+                 WHERE operation.device_id = device.id)::text AS pending_count,
+                (SELECT count(*) FROM identity.sessions loser_session
+                 WHERE loser_session.device_id = device.id
+                   AND loser_session.user_id = $2)::text AS loser_session_count
+         FROM identity.devices device
+         LEFT JOIN identity.sessions session ON session.device_id = device.id
+         LEFT JOIN identity.session_refresh_history history ON history.session_id = session.id
+         WHERE device.id = $1
+         GROUP BY device.id, device.user_id`,
+        [deviceId, loserId],
+      );
+      expect(state.rows).toEqual([
+        {
+          user_id: winnerId,
+          session_count: '1',
+          history_count: '1',
+          binding_count: '0',
+          pending_count: '0',
+          loser_session_count: '0',
+        },
+      ]);
+    } finally {
+      await Promise.all([firstClient.end(), secondClient.end()]);
+    }
+  }, 30_000);
+
+  it('rejects takeover of a victim device without changing owner session history or pending operations', async () => {
+    const victim = await seedDeviceSessionUser('device_victim');
+    const attacker = await seedDeviceSessionUser('device_attacker');
+    const deviceId = randomUUID();
+    const client = new Client({ connectionString: databaseURL });
+    await client.connect();
+    try {
+      await createDeviceSession(client, victim, deviceId, 'ios', 'native');
+      await setup.query(
+        `INSERT INTO sync.pending_operations(
+           operation_id, device_id, user_id, entity_type, action, request_hash, state
+         ) VALUES ($1, $2, $3, 'profile', 'update', $4, 'received')`,
+        [randomUUID(), deviceId, victim.id, randomBytes(32)],
+      );
+      const before = await setup.query(
+        `SELECT device.user_id, device.platform, device.last_seen_at,
+                (SELECT count(*) FROM identity.sessions session
+                 WHERE session.device_id = device.id)::text AS session_count,
+                (SELECT count(*) FROM identity.session_refresh_history history
+                 JOIN identity.sessions session ON session.id = history.session_id
+                 WHERE session.device_id = device.id)::text AS history_count,
+                (SELECT count(*) FROM identity.device_bindings binding
+                 WHERE binding.device_id = device.id)::text AS binding_count,
+                (SELECT count(*) FROM sync.pending_operations operation
+                 WHERE operation.device_id = device.id)::text AS pending_count
+         FROM identity.devices device WHERE device.id = $1`,
+        [deviceId],
+      );
+
+      await expect(
+        createDeviceSession(client, attacker, deviceId, 'web', 'web_bff'),
+      ).rejects.toMatchObject({ code: 'DEVICE_OWNERSHIP_CONFLICT', status: 409 });
+
+      const after = await setup.query(
+        `SELECT device.user_id, device.platform, device.last_seen_at,
+                (SELECT count(*) FROM identity.sessions session
+                 WHERE session.device_id = device.id)::text AS session_count,
+                (SELECT count(*) FROM identity.session_refresh_history history
+                 JOIN identity.sessions session ON session.id = history.session_id
+                 WHERE session.device_id = device.id)::text AS history_count,
+                (SELECT count(*) FROM identity.device_bindings binding
+                 WHERE binding.device_id = device.id)::text AS binding_count,
+                (SELECT count(*) FROM sync.pending_operations operation
+                 WHERE operation.device_id = device.id)::text AS pending_count
+         FROM identity.devices device WHERE device.id = $1`,
+        [deviceId],
+      );
+      expect(after.rows).toEqual(before.rows);
+      expect(after.rows[0]).toMatchObject({ user_id: victim.id, pending_count: '1' });
+    } finally {
+      await client.end();
+    }
+  });
+
+  it('allows the same owner to refresh device metadata and create another session', async () => {
+    const owner = await seedDeviceSessionUser('device_same_owner');
+    const deviceId = randomUUID();
+    const client = new Client({ connectionString: databaseURL });
+    await client.connect();
+    try {
+      await createDeviceSession(client, owner, deviceId, 'ios', 'native');
+      const before = await setup.query<{ last_seen_at: Date }>(
+        'SELECT last_seen_at FROM identity.devices WHERE id = $1',
+        [deviceId],
+      );
+      await setup.query('SELECT pg_sleep(0.01)');
+
+      await createDeviceSession(client, owner, deviceId, 'web', 'web_bff');
+
+      const after = await setup.query<{
+        user_id: string;
+        platform: string;
+        last_seen_at: Date;
+        session_count: string;
+      }>(
+        `SELECT device.user_id, device.platform, device.last_seen_at,
+                count(session.id)::text AS session_count
+         FROM identity.devices device
+         JOIN identity.sessions session ON session.device_id = device.id
+         WHERE device.id = $1
+         GROUP BY device.id, device.user_id, device.platform, device.last_seen_at`,
+        [deviceId],
+      );
+      expect(after.rows).toHaveLength(1);
+      expect(after.rows[0]).toMatchObject({
+        user_id: owner.id,
+        platform: 'web',
+        session_count: '2',
+      });
+      expect(after.rows[0]?.last_seen_at.getTime()).toBeGreaterThan(
+        before.rows[0]?.last_seen_at.getTime() ?? Number.POSITIVE_INFINITY,
+      );
+    } finally {
+      await client.end();
+    }
   });
 
   it('serializes two same-attempt AuthService clients as rotated plus recovered with one generation advance', async () => {

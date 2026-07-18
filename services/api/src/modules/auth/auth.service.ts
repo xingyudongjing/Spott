@@ -1595,6 +1595,39 @@ export class AuthService {
     platform: 'ios' | 'web' | 'ops',
     transportClass: SessionTransportClass,
   ): Promise<SessionResponse> {
+    await client.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text, 0))',
+      [deviceId],
+    );
+    const existingDevice = await client.query<{ user_id: string | null }>(
+      `SELECT user_id
+       FROM identity.devices
+       WHERE id = $1
+       FOR UPDATE`,
+      [deviceId],
+    );
+    const device = existingDevice.rows[0];
+    if (!device) {
+      await client.query(
+        `INSERT INTO identity.devices(id, user_id, platform)
+         VALUES ($1, $2, $3)`,
+        [deviceId, user.id, platform],
+      );
+    } else if (device.user_id !== user.id) {
+      throw new DomainError(
+        'DEVICE_OWNERSHIP_CONFLICT',
+        '该设备已绑定其他账号，不能直接接管。',
+        409,
+        { retryable: false },
+      );
+    } else {
+      await client.query(
+        `UPDATE identity.devices
+         SET platform = $2, last_seen_at = clock_timestamp()
+         WHERE id = $1`,
+        [deviceId, platform],
+      );
+    }
     if (user.status === 'deletion_pending') {
       await client.query(
         `UPDATE identity.users SET status = 'active', deletion_requested_at = NULL,
@@ -1606,13 +1639,6 @@ export class AuthService {
         deletionPending: false,
       });
     }
-    await client.query(
-      `INSERT INTO identity.devices(id, user_id, platform)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (id) DO UPDATE SET user_id = EXCLUDED.user_id,
-         platform = EXCLUDED.platform, last_seen_at = clock_timestamp()`,
-      [deviceId, user.id, platform],
-    );
     const refreshSecret = randomBytes(32).toString('base64url');
     const session = await client.query<{ id: string }>(
       `INSERT INTO identity.sessions(

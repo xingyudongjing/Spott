@@ -783,6 +783,10 @@ describe('AuthService read-only session bootstrap', () => {
   it('marks an initially issued full AuthSession as refresh generation zero', async () => {
     const client = {
       query: vi.fn(async (sql: string) => {
+        if (sql.includes('pg_advisory_xact_lock')) return { rows: [], rowCount: 1 };
+        if (sql.includes('FROM identity.devices') && sql.includes('FOR UPDATE')) {
+          return { rows: [], rowCount: 0 };
+        }
         if (sql.includes('INSERT INTO identity.devices')) return { rows: [], rowCount: 1 };
         if (sql.includes('INSERT INTO identity.sessions')) {
           return { rows: [{ id: currentSessionId }], rowCount: 1 };
@@ -828,6 +832,124 @@ describe('AuthService read-only session bootstrap', () => {
       sessionId: currentSessionId,
       refreshGeneration: 0,
     });
+  });
+});
+
+describe('AuthService device ownership isolation', () => {
+  const deviceId = '019b0000-0000-7000-8000-000000000060';
+  const user = {
+    id: currentUserId,
+    public_handle: 'spott_device_owner',
+    status: 'active',
+    phone_verified_at: null,
+    restriction_flags: [],
+  };
+
+  function createSessionWith(client: { query: ReturnType<typeof vi.fn> }) {
+    const service = new AuthService({} as never, {} as never, {} as never, {} as never);
+    return (
+      service as unknown as {
+        createSession(
+          transactionClient: typeof client,
+          sessionUser: typeof user,
+          sessionDeviceId: string,
+          platform: 'ios' | 'web',
+          transport: 'native' | 'web_bff',
+        ): Promise<SessionResponse>;
+      }
+    ).createSession.bind(service);
+  }
+
+  it('locks and rejects an existing device owned by another user before any mutation', async () => {
+    const queries: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        queries.push(sql);
+        if (sql.includes('pg_advisory_xact_lock')) return { rows: [], rowCount: 1 };
+        if (sql.includes('FROM identity.devices') && sql.includes('FOR UPDATE')) {
+          return { rows: [{ user_id: secondUserId }], rowCount: 1 };
+        }
+        if (sql.includes('INSERT INTO identity.devices')) return { rows: [], rowCount: 1 };
+        if (sql.includes('INSERT INTO identity.sessions')) {
+          return { rows: [{ id: currentSessionId }], rowCount: 1 };
+        }
+        if (sql.includes('FROM admin.admin_users')) return { rows: [], rowCount: 0 };
+        throw new Error(`Unexpected device ownership query: ${sql}`);
+      }),
+    };
+
+    await expect(
+      createSessionWith(client)(client, user, deviceId, 'ios', 'native'),
+    ).rejects.toMatchObject({ code: 'DEVICE_OWNERSHIP_CONFLICT', status: 409 });
+    expect(queries[0]).toMatch(/SELECT\s+pg_advisory_xact_lock/iu);
+    expect(queries[1]).toMatch(/FROM\s+identity\.devices[\s\S]*FOR\s+UPDATE/iu);
+    expect(queries.some((sql) => /INSERT\s+INTO\s+identity\.(?:devices|sessions)/iu.test(sql))).toBe(
+      false,
+    );
+    expect(queries.some((sql) => /UPDATE\s+identity\.devices/iu.test(sql))).toBe(false);
+  });
+
+  it('updates only non-owner device fields for the same owner and creates a new session', async () => {
+    const queries: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        queries.push(sql);
+        if (sql.includes('pg_advisory_xact_lock')) return { rows: [], rowCount: 1 };
+        if (sql.includes('FROM identity.devices') && sql.includes('FOR UPDATE')) {
+          return { rows: [{ user_id: currentUserId }], rowCount: 1 };
+        }
+        if (sql.includes('UPDATE identity.devices')) return { rows: [], rowCount: 1 };
+        if (sql.includes('INSERT INTO identity.devices')) return { rows: [], rowCount: 1 };
+        if (sql.includes('INSERT INTO identity.sessions')) {
+          return { rows: [{ id: currentSessionId }], rowCount: 1 };
+        }
+        if (sql.includes('FROM admin.admin_users')) return { rows: [], rowCount: 0 };
+        throw new Error(`Unexpected same-owner session query: ${sql}`);
+      }),
+    };
+
+    await expect(
+      createSessionWith(client)(client, user, deviceId, 'web', 'web_bff'),
+    ).resolves.toMatchObject({ sessionId: currentSessionId });
+    expect(queries.slice(0, 3)).toEqual([
+      expect.stringMatching(/SELECT\s+pg_advisory_xact_lock/iu),
+      expect.stringMatching(/FROM\s+identity\.devices[\s\S]*FOR\s+UPDATE/iu),
+      expect.stringMatching(/UPDATE\s+identity\.devices/iu),
+    ]);
+    expect(queries).not.toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/ON\s+CONFLICT\s*\(id\)[\s\S]*user_id\s*=\s*EXCLUDED\.user_id/iu),
+      ]),
+    );
+  });
+
+  it('inserts an unclaimed device only after locking and checking ownership', async () => {
+    const queries: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        queries.push(sql);
+        if (sql.includes('pg_advisory_xact_lock')) return { rows: [], rowCount: 1 };
+        if (sql.includes('FROM identity.devices') && sql.includes('FOR UPDATE')) {
+          return { rows: [], rowCount: 0 };
+        }
+        if (sql.includes('INSERT INTO identity.devices')) return { rows: [], rowCount: 1 };
+        if (sql.includes('INSERT INTO identity.sessions')) {
+          return { rows: [{ id: currentSessionId }], rowCount: 1 };
+        }
+        if (sql.includes('FROM admin.admin_users')) return { rows: [], rowCount: 0 };
+        throw new Error(`Unexpected new-device session query: ${sql}`);
+      }),
+    };
+
+    await expect(
+      createSessionWith(client)(client, user, deviceId, 'ios', 'native'),
+    ).resolves.toMatchObject({ sessionId: currentSessionId });
+    expect(queries.slice(0, 3)).toEqual([
+      expect.stringMatching(/SELECT\s+pg_advisory_xact_lock/iu),
+      expect.stringMatching(/FROM\s+identity\.devices[\s\S]*FOR\s+UPDATE/iu),
+      expect.stringMatching(/INSERT\s+INTO\s+identity\.devices/iu),
+    ]);
+    expect(queries[2]).not.toMatch(/ON\s+CONFLICT/iu);
   });
 });
 

@@ -202,3 +202,27 @@ describe('draftSchema locale fields', () => {
     expect(draftSchema.safeParse({ coordinate }).success).toBe(false);
   });
 });
+
+describe('draftSchema organizer contact', () => {
+  it.each([
+    { kind: 'email', label: 'Email', value: 'host@example.jp' },
+    { kind: 'line', label: 'LINE', value: 'spott_host-01' },
+    { kind: 'website', label: 'Event desk', value: 'https://example.jp/contact' },
+  ])('accepts a bounded supported contact channel %#', (organizerContact) => {
+    expect(draftSchema.parse({ organizerContact })).toEqual({ organizerContact });
+  });
+
+  it('accepts null as an explicit encrypted-contact removal', () => {
+    expect(draftSchema.parse({ organizerContact: null })).toEqual({ organizerContact: null });
+  });
+
+  it.each([
+    { kind: 'email', value: 'not-an-email' },
+    { kind: 'line', value: 'contains spaces' },
+    { kind: 'website', value: 'javascript:alert(1)' },
+    { kind: 'website', value: 'http://example.jp/contact' },
+    { kind: 'phone', value: '+819012345678' },
+  ])('rejects unsafe or unsupported contact input %#', (organizerContact) => {
+    expect(draftSchema.safeParse({ organizerContact }).success).toBe(false);
+  });
+});

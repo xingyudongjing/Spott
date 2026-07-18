@@ -1,5 +1,7 @@
+import { createHmac } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Pool, type PoolClient } from 'pg';
+import { IdempotencyService } from '../../platform/idempotency.js';
 import { RegistrationsService } from '../registrations/registrations.service.js';
 import { EventsService } from './events.service.js';
 
@@ -14,6 +16,7 @@ const publicEventId = '20000000-0000-7000-8000-000000000002';
 const noPointEventId = '20000000-0000-7000-8000-000000000003';
 const coordinateDraftId = '20000000-0000-7000-8000-000000000004';
 const fullEventId = '20000000-0000-7000-8000-000000000005';
+const contactEventId = '20000000-0000-7000-8000-000000000006';
 const completedEventId = '20000000-0000-7000-8000-000000000010';
 const cancelledEventId = '20000000-0000-7000-8000-000000000011';
 const legacyArchivedEventId = '20000000-0000-7000-8000-000000000012';
@@ -25,6 +28,11 @@ const paginationEventIds = [
 
 const databaseURL = process.env.SPOTT_TEST_DATABASE_URL;
 if (!databaseURL) throw new Error('SPOTT_TEST_DATABASE_URL is required');
+
+const integrationLookupHash = (value: string) => createHmac(
+  'sha256',
+  'events-integration-private-fingerprint-pepper',
+).update(value).digest();
 
 let pool: Pool;
 let client: PoolClient;
@@ -188,6 +196,45 @@ beforeAll(async () => {
   await insertFee(publicEventId, true);
 
   await insertEvent({
+    id: contactEventId,
+    slug: 'integration-contact',
+    title: 'Encrypted organizer contact integration',
+    category: 'contact',
+    startsAt: '2030-08-11T06:00:00.000Z',
+  });
+  await insertLocation(contactEventId, 'confirmed', 139.712345, 35.623456);
+  await insertFee(contactEventId, true);
+  await client.query(
+    `INSERT INTO events.event_contact_channels(
+       event_id,kind,label_cipher,value_cipher,updated_by
+     ) VALUES ($1,'email',$2,$3,$4)`,
+    [
+      contactEventId,
+      Buffer.from('encrypted:Private event desk'),
+      Buffer.from('encrypted:host@example.jp'),
+      hostId,
+    ],
+  );
+  await client.query(
+    `INSERT INTO events.registrations(
+       id,event_id,user_id,status,party_size,waitlist_joined_at,confirmed_at
+     ) VALUES
+       ('30000000-0000-7000-8000-000000000020',$1,$2,'pending',1,NULL,NULL),
+       ('30000000-0000-7000-8000-000000000021',$1,$3,'waitlisted',1,clock_timestamp(),NULL),
+       ('30000000-0000-7000-8000-000000000022',$1,$4,'offered',1,clock_timestamp(),NULL),
+       ('30000000-0000-7000-8000-000000000023',$1,$5,'confirmed',1,NULL,clock_timestamp()),
+       ('30000000-0000-7000-8000-000000000024',$1,$6,'checked_in',1,NULL,clock_timestamp())`,
+    [
+      contactEventId,
+      pendingViewerId,
+      deletedRegistrationViewerId,
+      offeredViewerId,
+      confirmedViewerId,
+      unrelatedViewerId,
+    ],
+  );
+
+  await insertEvent({
     id: noPointEventId,
     slug: 'integration-unconfirmed-no-point',
     startsAt: '2030-08-12T03:00:00.000Z',
@@ -257,12 +304,19 @@ beforeAll(async () => {
       client.query<T>(text, [...values])
     ),
   };
+  const fieldCrypto = {
+    encrypt: (value: string) => Buffer.from(`encrypted:${value}`),
+    decrypt: (cipher: Buffer) => {
+      const value = cipher.toString('utf8');
+      return value.startsWith('encrypted:')
+        ? value.slice('encrypted:'.length)
+        : '東京都渋谷区1-2-3';
+    },
+    lookupHash: integrationLookupHash,
+  };
   service = new EventsService(
     database as never,
-    {
-      encrypt: () => Buffer.from('cipher'),
-      decrypt: () => '東京都渋谷区1-2-3',
-    } as never,
+    fieldCrypto as never,
     {} as never,
     {} as never,
   );
@@ -487,6 +541,172 @@ describe('PostGIS discovery integration', () => {
       exactAddress: null,
       viewerRegistration: null,
     });
+  });
+
+  it('enforces the real PostgreSQL organizer-contact disclosure matrix and strips discovery output', async () => {
+    const internals = service as unknown as {
+      loadEvent: (db: PoolClient, id: string, viewerId?: string) => Promise<Record<string, unknown>>;
+      toView: (row: Record<string, unknown>, viewerValue: ReturnType<typeof viewer> | undefined, detail: boolean) => Record<string, unknown>;
+    };
+    const detailFor = async (viewerId?: string) => {
+      const row = await internals.loadEvent(client, contactEventId, viewerId);
+      return internals.toView(row, viewerId ? viewer(viewerId) : undefined, true);
+    };
+
+    await expect(detailFor()).resolves.toMatchObject({ organizerContact: null });
+    await expect(detailFor(pendingViewerId)).resolves.toMatchObject({ organizerContact: null });
+    await expect(detailFor(deletedRegistrationViewerId)).resolves.toMatchObject({ organizerContact: null });
+    await expect(detailFor(offeredViewerId)).resolves.toMatchObject({ organizerContact: null });
+    await expect(detailFor(confirmedViewerId)).resolves.toMatchObject({
+      organizerContact: { kind: 'email', label: 'Private event desk', value: 'host@example.jp' },
+    });
+    await expect(detailFor(unrelatedViewerId)).resolves.toMatchObject({
+      organizerContact: { kind: 'email', label: 'Private event desk', value: 'host@example.jp' },
+    });
+    await expect(detailFor(hostId)).resolves.toMatchObject({
+      organizerContact: { kind: 'email', label: 'Private event desk', value: 'host@example.jp' },
+    });
+
+    const discovery = await service.discovery(undefined, {
+      category: 'contact',
+      startsAfter: new Date('2030-08-11T00:00:00.000Z'),
+      startsBefore: new Date('2030-08-12T00:00:00.000Z'),
+      limit: 20,
+    }) as { items: Array<Record<string, unknown>> };
+    expect(discovery.items).toHaveLength(1);
+    expect(discovery.items[0]).not.toHaveProperty('organizerContact');
+
+    const columns = await client.query<{ column_name: string; data_type: string }>(
+      `SELECT column_name,data_type FROM information_schema.columns
+       WHERE table_schema='events' AND table_name='event_contact_channels'
+       ORDER BY column_name`,
+    );
+    expect(columns.rows).toEqual(expect.arrayContaining([
+      { column_name: 'label_cipher', data_type: 'bytea' },
+      { column_name: 'value_cipher', data_type: 'bytea' },
+    ]));
+    expect(columns.rows).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ column_name: 'label' }),
+      expect.objectContaining({ column_name: 'value_hash' }),
+    ]));
+  });
+
+  it('keeps private contact and exact address plaintext out of real revision and idempotency JSON', async () => {
+    const database = {
+      transaction: async <T>(work: (db: PoolClient) => Promise<T>) => work(client),
+    };
+    const fieldCrypto = {
+      encrypt: (value: string) => Buffer.from(`encrypted:${value}`),
+      decrypt: (cipher: Buffer) => {
+        const value = cipher.toString('utf8');
+        return value.startsWith('encrypted:')
+          ? value.slice('encrypted:'.length)
+          : '東京都渋谷区1-2-3';
+      },
+      lookupHash: integrationLookupHash,
+    };
+    const mutatingService = new EventsService(
+      database as never,
+      fieldCrypto as never,
+      new IdempotencyService(),
+      {} as never,
+    );
+    const version = await client.query<{ version: string }>(
+      'SELECT version FROM events.events WHERE id=$1',
+      [contactEventId],
+    );
+    const idempotencyKey = '50000000-0000-7000-8000-000000000020';
+    const contactUpdate = {
+      organizerContact: {
+        kind: 'email' as const,
+        label: 'Updated private event desk',
+        value: 'updated-host@example.jp',
+      },
+    };
+
+    const response = await mutatingService.update(
+      viewer(hostId),
+      contactEventId,
+      idempotencyKey,
+      Number(version.rows[0]!.version),
+      contactUpdate,
+    ) as Record<string, unknown>;
+
+    expect(response).toMatchObject({ exactAddress: null, organizerContact: null });
+    const revision = await client.query<{ before_json: unknown; after_json: unknown }>(
+      `SELECT before_json,after_json FROM events.event_revisions
+       WHERE event_id=$1 ORDER BY created_at DESC LIMIT 1`,
+      [contactEventId],
+    );
+    const replay = await client.query<{ request_hash: Buffer; response_body: unknown }>(
+      'SELECT request_hash,response_body FROM sync.idempotency_keys WHERE user_id=$1 AND key=$2',
+      [hostId, idempotencyKey],
+    );
+    for (const persisted of [revision.rows[0], replay.rows[0]]) {
+      const serialized = JSON.stringify(persisted);
+      expect(serialized).not.toContain('updated-host@example.jp');
+      expect(serialized).not.toContain('Updated private event desk');
+      expect(serialized).not.toContain('東京都渋谷区1-2-3');
+    }
+    const publicDictionaryHash = new IdempotencyService().requestHash(
+      'PATCH',
+      `/events/${contactEventId}`,
+      contactUpdate,
+    );
+    expect(replay.rows[0]!.request_hash).not.toEqual(publicDictionaryHash);
+    expect(replay.rows[0]!.request_hash).toHaveLength(32);
+
+    const encrypted = await client.query<{
+      label_cipher: Buffer;
+      value_cipher: Buffer;
+    }>(
+      'SELECT label_cipher,value_cipher FROM events.event_contact_channels WHERE event_id=$1',
+      [contactEventId],
+    );
+    expect(encrypted.rows[0]?.label_cipher.toString('utf8')).toBe('encrypted:Updated private event desk');
+    expect(encrypted.rows[0]?.value_cipher.toString('utf8')).toBe('encrypted:updated-host@example.jp');
+
+    const liveVersion = await client.query<{ version: string }>(
+      'SELECT version FROM events.events WHERE id=$1',
+      [contactEventId],
+    );
+    const secondIdempotencyKey = '50000000-0000-7000-8000-000000000022';
+    await mutatingService.update(
+      viewer(hostId),
+      contactEventId,
+      secondIdempotencyKey,
+      Number(liveVersion.rows[0]!.version),
+      contactUpdate,
+    );
+    const fingerprints = await client.query<{ request_hash: Buffer }>(
+      `SELECT request_hash FROM sync.idempotency_keys
+       WHERE user_id=$1 AND key = ANY($2::uuid[]) ORDER BY key`,
+      [hostId, [idempotencyKey, secondIdempotencyKey]],
+    );
+    expect(fingerprints.rows).toHaveLength(2);
+    expect(fingerprints.rows[0]!.request_hash).not.toEqual(fingerprints.rows[1]!.request_hash);
+
+    const removalVersion = await client.query<{ version: string }>(
+      'SELECT version FROM events.events WHERE id=$1',
+      [contactEventId],
+    );
+    await expect(mutatingService.update(
+      viewer(hostId),
+      contactEventId,
+      '50000000-0000-7000-8000-000000000021',
+      Number(removalVersion.rows[0]!.version),
+      { organizerContact: null },
+    )).rejects.toMatchObject({
+      code: 'VALIDATION_FAILED',
+      status: 422,
+      fieldErrors: [expect.objectContaining({ field: 'organizerContact' })],
+    });
+    const preserved = await client.query<{ label_cipher: Buffer; value_cipher: Buffer }>(
+      'SELECT label_cipher,value_cipher FROM events.event_contact_channels WHERE event_id=$1',
+      [contactEventId],
+    );
+    expect(preserved.rows[0]?.label_cipher.toString('utf8')).toBe('encrypted:Updated private event desk');
+    expect(preserved.rows[0]?.value_cipher.toString('utf8')).toBe('encrypted:updated-host@example.jp');
   });
 
   it('writes a real point and preserves it when a later draft update omits coordinates', async () => {

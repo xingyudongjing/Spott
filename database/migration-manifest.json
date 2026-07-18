@@ -141,6 +141,11 @@
       "sequence": 28,
       "filename": "0028_achievement_definitions.sql",
       "sha256": "ab7a4279eaf7b46d5a0009bea98cfe0e0b597d317d7c07ea5747e0deb0b903b2"
+    },
+    {
+      "sequence": 29,
+      "filename": "0029_event_contact_channels.sql",
+      "sha256": "4894428662b180d32d878070f1048161ddda0a38490dee94d47395e4d7778c49"
     }
   ]
 }

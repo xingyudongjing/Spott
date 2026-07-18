@@ -4692,6 +4692,157 @@ components:
           type: boolean
         trust:
           $ref: '#/components/schemas/OrganizerTrust'
+    OrganizerEmailContact:
+      type: object
+      additionalProperties: false
+      required:
+        - kind
+        - label
+        - value
+      properties:
+        kind:
+          type: string
+          const: email
+        label:
+          type:
+            - string
+            - 'null'
+          minLength: 1
+          maxLength: 80
+        value:
+          type: string
+          format: email
+          maxLength: 254
+    OrganizerLineContact:
+      type: object
+      additionalProperties: false
+      required:
+        - kind
+        - label
+        - value
+      properties:
+        kind:
+          type: string
+          const: line
+        label:
+          type:
+            - string
+            - 'null'
+          minLength: 1
+          maxLength: 80
+        value:
+          type: string
+          minLength: 2
+          maxLength: 64
+          pattern: ^[A-Za-z0-9._-]{2,64}$
+    OrganizerWebsiteContact:
+      type: object
+      additionalProperties: false
+      required:
+        - kind
+        - label
+        - value
+      properties:
+        kind:
+          type: string
+          const: website
+        label:
+          type:
+            - string
+            - 'null'
+          minLength: 1
+          maxLength: 80
+        value:
+          type: string
+          format: uri
+          maxLength: 500
+          pattern: ^https://
+    OrganizerEmailContactInput:
+      type: object
+      additionalProperties: false
+      required:
+        - kind
+        - value
+      properties:
+        kind:
+          type: string
+          const: email
+        label:
+          type:
+            - string
+            - 'null'
+          minLength: 1
+          maxLength: 80
+        value:
+          type: string
+          format: email
+          maxLength: 254
+    OrganizerLineContactInput:
+      type: object
+      additionalProperties: false
+      required:
+        - kind
+        - value
+      properties:
+        kind:
+          type: string
+          const: line
+        label:
+          type:
+            - string
+            - 'null'
+          minLength: 1
+          maxLength: 80
+        value:
+          type: string
+          minLength: 2
+          maxLength: 64
+          pattern: ^[A-Za-z0-9._-]{2,64}$
+    OrganizerWebsiteContactInput:
+      type: object
+      additionalProperties: false
+      required:
+        - kind
+        - value
+      properties:
+        kind:
+          type: string
+          const: website
+        label:
+          type:
+            - string
+            - 'null'
+          minLength: 1
+          maxLength: 80
+        value:
+          type: string
+          format: uri
+          maxLength: 500
+          pattern: ^https://
+    OrganizerContactInput:
+      description: HTTPS, email, or LINE contact encrypted at rest.
+      oneOf:
+        - $ref: '#/components/schemas/OrganizerEmailContactInput'
+        - $ref: '#/components/schemas/OrganizerLineContactInput'
+        - $ref: '#/components/schemas/OrganizerWebsiteContactInput'
+      discriminator:
+        propertyName: kind
+        mapping:
+          email: '#/components/schemas/OrganizerEmailContactInput'
+          line: '#/components/schemas/OrganizerLineContactInput'
+          website: '#/components/schemas/OrganizerWebsiteContactInput'
+    OrganizerContact:
+      description: Encrypted at rest and disclosed only to the organizer or a confirmed/checked-in participant.
+      oneOf:
+        - $ref: '#/components/schemas/OrganizerEmailContact'
+        - $ref: '#/components/schemas/OrganizerLineContact'
+        - $ref: '#/components/schemas/OrganizerWebsiteContact'
+      discriminator:
+        propertyName: kind
+        mapping:
+          email: '#/components/schemas/OrganizerEmailContact'
+          line: '#/components/schemas/OrganizerLineContact'
+          website: '#/components/schemas/OrganizerWebsiteContact'
     ViewerRegistration:
       type: object
       required:
@@ -4890,6 +5041,7 @@ components:
           required:
             - coordinate
             - exactAddress
+            - organizerContact
             - attendeeRequirements
             - riskFlags
             - riskDetails
@@ -4908,6 +5060,11 @@ components:
                 - string
                 - 'null'
               description: Null unless policy authorizes the viewer.
+            organizerContact:
+              description: Null unless the viewer owns the event or has a confirmed/checked-in registration.
+              oneOf:
+                - type: 'null'
+                - $ref: '#/components/schemas/OrganizerContact'
             attendeeRequirements:
               type:
                 - string
@@ -5304,6 +5461,10 @@ components:
               format: double
               minimum: -180
               maximum: 180
+        organizerContact:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/OrganizerContactInput'
         fee:
           type: object
           additionalProperties: true

@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { EventsService, serializeRegistrationQuestionOptions } from './events.service.js';
 
@@ -7,6 +8,10 @@ const publisher = {
   phoneVerified: true,
   restrictions: [],
   roles: ['host'],
+};
+
+const draftFingerprintCrypto = {
+  lookupHash: (value: string) => createHmac('sha256', 'unit-test-draft-pepper').update(value).digest(),
 };
 
 function eventRow(overrides: Record<string, unknown> = {}) {
@@ -72,6 +77,9 @@ function eventRow(overrides: Record<string, unknown> = {}) {
     media_count: '1',
     media_items: [],
     organizer_followed: false,
+    contact_kind: null,
+    contact_label_cipher: null,
+    contact_value_cipher: null,
     ...overrides,
   };
 }
@@ -92,6 +100,63 @@ describe('serializeRegistrationQuestionOptions', () => {
 });
 
 describe('EventsService event contract', () => {
+  it('uses an unlinkable keyed fingerprint for private draft idempotency', async () => {
+    const secret = 'event-draft-idempotency-test-pepper';
+    const legacyHash = Buffer.alloc(32, 0x11);
+    const idempotency = {
+      requestHash: vi.fn().mockReturnValue(legacyHash),
+      claim: vi.fn().mockResolvedValue({ status: 201, body: { id: 'replayed' } }),
+      complete: vi.fn(),
+    };
+    const fieldCrypto = {
+      lookupHash: vi.fn((value: string) => createHmac('sha256', secret).update(value).digest()),
+    };
+    const database = {
+      transaction: vi.fn(async (work: (client: { query: ReturnType<typeof vi.fn> }) => Promise<unknown>) => (
+        work({ query: vi.fn() })
+      )),
+    };
+    const service = new EventsService(
+      database as never,
+      fieldCrypto as never,
+      idempotency as never,
+      {} as never,
+    );
+    const input = {
+      exactAddress: '東京都渋谷区1-2-3',
+      organizerContact: {
+        kind: 'email' as const,
+        label: 'Private host desk',
+        value: 'victim@example.jp',
+      },
+    };
+    const firstKey = '019b0000-0000-7000-9000-000000000041';
+    const secondKey = '019b0000-0000-7000-9000-000000000042';
+
+    await service.createDraft(publisher, firstKey, input);
+    await service.createDraft(publisher, firstKey, input);
+    await service.createDraft(publisher, secondKey, input);
+    await service.createDraft(
+      { ...publisher, id: '019b0000-0000-7000-8000-000000000099' },
+      firstKey,
+      input,
+    );
+
+    const firstHash = idempotency.claim.mock.calls[0]?.[3] as Buffer;
+    const retryHash = idempotency.claim.mock.calls[1]?.[3] as Buffer;
+    const secondHash = idempotency.claim.mock.calls[2]?.[3] as Buffer;
+    const otherUserHash = idempotency.claim.mock.calls[3]?.[3] as Buffer;
+    expect(firstHash).toEqual(retryHash);
+    expect(firstHash).not.toEqual(secondHash);
+    expect(firstHash).not.toEqual(otherUserHash);
+    expect(firstHash).not.toEqual(legacyHash);
+    expect(firstHash).toHaveLength(32);
+    expect(firstHash.toString('utf8')).not.toContain('victim@example.jp');
+    expect(idempotency.claim.mock.calls[0]?.[4]).toEqual([legacyHash]);
+    expect(fieldCrypto.lookupHash).toHaveBeenCalledWith(expect.stringContaining(firstKey));
+    expect(fieldCrypto.lookupHash).toHaveBeenCalledWith(expect.stringContaining(publisher.id));
+  });
+
   it('allows an untitled cloud draft to be saved before submission validation', async () => {
     const replayedDraft = { id: '019b0000-0000-7000-8100-000000000001', title: '', status: 'draft' };
     const client = { query: vi.fn() };
@@ -103,7 +168,12 @@ describe('EventsService event contract', () => {
       claim: vi.fn().mockResolvedValue({ status: 201, body: replayedDraft }),
       complete: vi.fn(),
     };
-    const service = new EventsService(database as never, {} as never, idempotency as never, {} as never);
+    const service = new EventsService(
+      database as never,
+      draftFingerprintCrypto as never,
+      idempotency as never,
+      {} as never,
+    );
 
     await expect(service.createDraft(
       publisher,
@@ -125,10 +195,11 @@ describe('EventsService event contract', () => {
       offer_expires_at: null,
     });
     const release = vi.fn();
+    const query = vi.fn().mockResolvedValue({ rows: [row] });
     const database = {
       pool: {
         connect: vi.fn().mockResolvedValue({
-          query: vi.fn().mockResolvedValue({ rows: [row] }),
+          query,
           release,
         }),
       },
@@ -142,6 +213,12 @@ describe('EventsService event contract', () => {
       waitlistEnabled: true,
       deadlineAt: deadline.toISOString(),
     });
+    expect(query.mock.calls[0]?.[0]).toContain(
+      'contact.kind AS contact_kind, contact.label_cipher AS contact_label_cipher',
+    );
+    expect(query.mock.calls[0]?.[0]).toContain(
+      'LEFT JOIN events.event_contact_channels contact ON contact.event_id = e.id',
+    );
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -223,6 +300,180 @@ describe('EventsService event contract', () => {
       coordinate: { latitude: 35.681236, longitude: 139.767125, precision: 'exact' },
       exactAddress: '東京都渋谷区1-2-3',
     });
+  });
+
+  it('discloses the encrypted organizer contact only to the organizer or a confirmed participant', () => {
+    const fieldCrypto = {
+      decrypt: vi.fn((cipher: Buffer) => (
+        cipher.equals(Buffer.from('encrypted-contact-label'))
+          ? '活动联络邮箱'
+          : 'host@example.jp'
+      )),
+    };
+    const service = new EventsService({} as never, fieldCrypto as never, {} as never, {} as never);
+    const mapper = service as unknown as {
+      toView: (
+        row: ReturnType<typeof eventRow>,
+        viewer: typeof publisher | undefined,
+        includeDetail: boolean,
+      ) => Record<string, unknown>;
+    };
+    const attendee = { ...publisher, id: '019b0000-0000-7000-8000-000000000099' };
+    const contact = {
+      contact_kind: 'email',
+      contact_label_cipher: Buffer.from('encrypted-contact-label'),
+      contact_value_cipher: Buffer.from('encrypted-contact'),
+      exact_address_cipher: null,
+    };
+
+    expect(mapper.toView(eventRow({ ...contact, registration_status: null }), undefined, true))
+      .toMatchObject({ organizerContact: null });
+    expect(mapper.toView(eventRow({ ...contact, registration_status: 'pending' }), attendee, true))
+      .toMatchObject({ organizerContact: null });
+    expect(mapper.toView(eventRow({ ...contact, registration_status: 'waitlisted' }), attendee, true))
+      .toMatchObject({ organizerContact: null });
+    expect(mapper.toView(eventRow({ ...contact, registration_status: 'offered' }), attendee, true))
+      .toMatchObject({ organizerContact: null });
+    expect(mapper.toView(eventRow({ ...contact, registration_status: 'confirmed' }), attendee, true))
+      .toMatchObject({
+        organizerContact: { kind: 'email', label: '活动联络邮箱', value: 'host@example.jp' },
+      });
+    expect(mapper.toView(eventRow({ ...contact, registration_status: null }), publisher, true))
+      .toMatchObject({
+        organizerContact: { kind: 'email', label: '活动联络邮箱', value: 'host@example.jp' },
+      });
+    expect(mapper.toView(eventRow({ ...contact, registration_status: 'checked_in' }), attendee, true))
+      .toMatchObject({
+        organizerContact: { kind: 'email', label: '活动联络邮箱', value: 'host@example.jp' },
+      });
+    expect(mapper.toView(eventRow({ ...contact, registration_status: 'confirmed' }), attendee, false))
+      .not.toHaveProperty('organizerContact');
+    expect(fieldCrypto.decrypt).toHaveBeenCalledTimes(6);
+  });
+
+  it('requires an encrypted organizer contact before server-side submission', () => {
+    const service = new EventsService({} as never, {} as never, {} as never, {} as never);
+    const validator = service as unknown as {
+      validateSubmission: (row: ReturnType<typeof eventRow>) => void;
+    };
+    const publishable = eventRow({
+      title: '完整活动标题',
+      description: '这是完整的活动说明，包含流程、集合方式、注意事项和所需携带物品。'.repeat(3),
+      contact_kind: null,
+      contact_value_cipher: null,
+    });
+
+    let missingContact: unknown;
+    try {
+      validator.validateSubmission(publishable);
+    } catch (error) {
+      missingContact = error;
+    }
+    expect(missingContact).toMatchObject({
+      code: 'VALIDATION_FAILED',
+      fieldErrors: [expect.objectContaining({ field: 'organizerContact' })],
+    });
+
+    expect(() => validator.validateSubmission(eventRow({
+      ...publishable,
+      contact_kind: 'email',
+      contact_value_cipher: Buffer.from('encrypted-contact'),
+    }))).not.toThrow();
+  });
+
+  it('never decrypts private event details for mutation bodies persisted by idempotency or revisions', () => {
+    const fieldCrypto = { decrypt: vi.fn().mockReturnValue('host@example.jp') };
+    const service = new EventsService({} as never, fieldCrypto as never, {} as never, {} as never);
+    const mapper = service as unknown as {
+      toView: (
+        row: ReturnType<typeof eventRow>,
+        viewer: typeof publisher,
+        includeDetail: boolean,
+        includePrivateDetails: boolean,
+      ) => Record<string, unknown>;
+    };
+
+    const view = mapper.toView(eventRow({
+      contact_kind: 'email',
+      contact_label_cipher: Buffer.from('encrypted-contact-label'),
+      contact_value_cipher: Buffer.from('encrypted-contact'),
+    }), publisher, true, false);
+
+    expect(view).toMatchObject({ exactAddress: null, organizerContact: null });
+    expect(JSON.stringify(view)).not.toContain('host@example.jp');
+    expect(fieldCrypto.decrypt).not.toHaveBeenCalled();
+  });
+
+  it('redacts private event details from version-conflict comparison metadata', async () => {
+    const client = { query: vi.fn() };
+    const database = {
+      transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const idempotency = {
+      requestHash: vi.fn().mockReturnValue(Buffer.alloc(32)),
+      claim: vi.fn().mockResolvedValue(null),
+      complete: vi.fn(),
+    };
+    const fieldCrypto = {
+      decrypt: vi.fn((cipher: Buffer) => (
+        cipher.equals(Buffer.from('encrypted-contact'))
+          ? 'current-host@example.jp'
+          : '東京都渋谷区1-2-3'
+      )),
+      lookupHash: draftFingerprintCrypto.lookupHash,
+    };
+    const service = new EventsService(
+      database as never,
+      fieldCrypto as never,
+      idempotency as never,
+      {} as never,
+    );
+    Object.assign(service, {
+      loadEvent: vi.fn().mockResolvedValue(eventRow({
+        status: 'draft',
+        version: '9',
+        contact_kind: 'email',
+        contact_value_cipher: Buffer.from('encrypted-contact'),
+      })),
+    });
+
+    let conflict: unknown;
+    try {
+      await service.update(
+        publisher,
+        '019b0000-0000-7000-8100-000000000001',
+        '019b0000-0000-7000-9000-000000000032',
+        8,
+        {
+          exactAddress: '東京都新宿区1-2-3',
+          coordinate: { latitude: 35.689487, longitude: 139.691711 },
+          organizerContact: {
+            kind: 'email',
+            label: 'Private host desk',
+            value: 'attempted-host@example.jp',
+          },
+        },
+      );
+    } catch (error) {
+      conflict = error;
+    }
+
+    expect(conflict).toMatchObject({
+      code: 'VERSION_CONFLICT',
+      meta: {
+        current: { exactAddress: null, organizerContact: null },
+        attempted: { exactAddress: null, coordinate: null, organizerContact: null },
+      },
+    });
+    const serialized = JSON.stringify((conflict as { meta?: unknown }).meta);
+    expect(serialized).not.toContain('current-host@example.jp');
+    expect(serialized).not.toContain('attempted-host@example.jp');
+    expect(serialized).not.toContain('Private host desk');
+    expect(serialized).not.toContain('東京都渋谷区1-2-3');
+    expect(serialized).not.toContain('東京都新宿区1-2-3');
+    expect(serialized).not.toContain('35.689487');
+    expect(serialized).not.toContain('139.691711');
+    expect(fieldCrypto.decrypt).not.toHaveBeenCalled();
   });
 
   it('returns null rather than fabricating a coordinate when an event has no point', () => {
@@ -321,6 +572,91 @@ describe('EventsService event contract', () => {
     expect(locationCall?.[0]).toContain('events.event_locations.point');
     expect(locationCall?.[0]).not.toContain("COALESCE($2, 'tokyo')");
     expect(locationCall?.[0]).not.toContain("COALESCE($3, '地点待定')");
+  });
+
+  it('encrypts organizer contact at rest without a stable cross-event fingerprint and supports draft removal', async () => {
+    const client = {
+      query: vi.fn(async (...args: [sql: string, values?: readonly unknown[]]) => {
+        void args;
+        return { rows: [], rowCount: 1 };
+      }),
+    };
+    const fieldCrypto = {
+      encrypt: vi.fn((value: string) => Buffer.from(`ciphertext:${value}`)),
+      lookupHash: vi.fn().mockReturnValue(Buffer.from('lookup-hash')),
+    };
+    const service = new EventsService({} as never, fieldCrypto as never, {} as never, {} as never);
+    const details = service as unknown as {
+      upsertDetails: (
+        transactionClient: typeof client,
+        eventId: string,
+        input: { organizerContact: { kind: 'email'; label: string; value: string } | null },
+      ) => Promise<void>;
+    };
+    const eventId = '019b0000-0000-7000-8100-000000000001';
+
+    await details.upsertDetails(client, eventId, {
+      organizerContact: { kind: 'email', label: 'Contact', value: 'HOST@EXAMPLE.JP' },
+    });
+
+    expect(fieldCrypto.encrypt).toHaveBeenCalledWith('host@example.jp');
+    expect(fieldCrypto.encrypt).toHaveBeenCalledWith('Contact');
+    expect(fieldCrypto.lookupHash).not.toHaveBeenCalled();
+    const write = client.query.mock.calls.find(([sql]) => sql.includes('events.event_contact_channels('));
+    expect(write?.[1]).toEqual([
+      eventId,
+      'email',
+      Buffer.from('ciphertext:Contact'),
+      Buffer.from('ciphertext:host@example.jp'),
+    ]);
+    expect(JSON.stringify(write?.[1])).not.toContain('HOST@EXAMPLE.JP');
+    expect(JSON.stringify(write?.[1])).not.toContain('host@example.jp');
+
+    client.query.mockClear();
+    await details.upsertDetails(client, eventId, { organizerContact: null });
+    expect(client.query).toHaveBeenCalledWith(
+      'DELETE FROM events.event_contact_channels WHERE event_id = $1',
+      [eventId],
+    );
+  });
+
+  it('rejects removing the required organizer contact from a published event before mutation', async () => {
+    const id = '019b0000-0000-7000-8100-000000000001';
+    const before = eventRow({ id, status: 'published', version: '7' });
+    const client = { query: vi.fn() };
+    const database = {
+      transaction: vi.fn(async (work: (transactionClient: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const idempotency = {
+      requestHash: vi.fn().mockReturnValue(Buffer.alloc(32)),
+      claim: vi.fn().mockResolvedValue(null),
+      complete: vi.fn(),
+    };
+    const service = new EventsService(
+      database as never,
+      draftFingerprintCrypto as never,
+      idempotency as never,
+      {} as never,
+    );
+    const upsertDetails = vi.fn();
+    Object.assign(service, {
+      loadEvent: vi.fn().mockResolvedValue(before),
+      upsertDetails,
+    });
+
+    await expect(service.update(
+      publisher,
+      id,
+      '019b0000-0000-7000-9000-000000000031',
+      7,
+      { organizerContact: null },
+    )).rejects.toMatchObject({
+      code: 'VALIDATION_FAILED',
+      status: 422,
+      fieldErrors: [expect.objectContaining({ field: 'organizerContact' })],
+    });
+    expect(upsertDetails).not.toHaveBeenCalled();
+    expect(client.query).not.toHaveBeenCalled();
   });
 
   it('keeps incomplete draft facts null and rejects incomplete published views', () => {
@@ -531,12 +867,18 @@ describe('EventsService event contract', () => {
       claim: vi.fn().mockResolvedValue(null),
       complete: vi.fn(),
     };
-    const service = new EventsService(database as never, {} as never, idempotency as never, {} as never);
+    const service = new EventsService(
+      database as never,
+      draftFingerprintCrypto as never,
+      idempotency as never,
+      {} as never,
+    );
+    const toView = vi.fn().mockReturnValue({ id });
     Object.assign(service, {
       upsertDetails: vi.fn(),
       recordChange: vi.fn(),
       loadEvent: vi.fn().mockResolvedValue({ id }),
-      toView: vi.fn().mockReturnValue({ id }),
+      toView,
     });
 
     await service.createDraft(
@@ -556,6 +898,7 @@ describe('EventsService event contract', () => {
     expect(insert?.[0]).toContain('locale_confirmed_at');
     expect(insert?.[0]).toContain('clock_timestamp()');
     expect(insert?.[1]).toEqual(expect.arrayContaining(['hybrid', 'ja', ['ja', 'en']]));
+    expect(toView).toHaveBeenCalledWith({ id }, publisher, true, false);
 
     client.query.mockClear();
     await service.createDraft(
@@ -594,13 +937,19 @@ describe('EventsService event contract', () => {
       claim: vi.fn().mockResolvedValue(null),
       complete: vi.fn(),
     };
-    const service = new EventsService(database as never, {} as never, idempotency as never, {} as never);
+    const service = new EventsService(
+      database as never,
+      draftFingerprintCrypto as never,
+      idempotency as never,
+      {} as never,
+    );
     const loadEvent = vi.fn().mockResolvedValueOnce(before).mockResolvedValueOnce(after);
+    const toView = vi.fn().mockReturnValue({ id });
     Object.assign(service, {
       upsertDetails: vi.fn(),
       recordChange: vi.fn(),
       loadEvent,
-      toView: vi.fn().mockReturnValue({ id }),
+      toView,
     });
 
     await service.update(
@@ -616,6 +965,8 @@ describe('EventsService event contract', () => {
     expect(update?.[0]).toContain('supported_locales =');
     expect(update?.[0]).toContain('locale_confirmed_at = clock_timestamp()');
     expect(update?.[1]).toEqual(expect.arrayContaining(['ja', ['ja', 'en']]));
+    expect(toView).toHaveBeenCalledWith(before, publisher, true, false);
+    expect(toView).toHaveBeenCalledWith(after, publisher, true, false);
 
     client.query.mockClear();
     loadEvent.mockReset().mockResolvedValueOnce(before).mockResolvedValueOnce(after);

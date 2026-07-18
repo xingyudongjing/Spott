@@ -60,6 +60,29 @@ export const draftSchema = z.object({
     required: z.boolean().default(false),
     options: z.array(z.string().min(1).max(120)).max(12).default([]),
   })).max(10).optional(),
+  organizerContact: z.discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('email'),
+      label: z.string().trim().min(1).max(80).nullable().optional(),
+      value: z.email().max(254),
+    }).strict(),
+    z.object({
+      kind: z.literal('line'),
+      label: z.string().trim().min(1).max(80).nullable().optional(),
+      value: z.string().trim().regex(/^[A-Za-z0-9._-]{2,64}$/),
+    }).strict(),
+    z.object({
+      kind: z.literal('website'),
+      label: z.string().trim().min(1).max(80).nullable().optional(),
+      value: z.url().max(500).refine((value) => {
+        try {
+          return value.startsWith('https://') && new URL(value).protocol === 'https:';
+        } catch {
+          return false;
+        }
+      }, 'website contact must use HTTPS'),
+    }).strict(),
+  ]).nullable().optional(),
   fee: z
     .object({
       isFree: z.boolean(),

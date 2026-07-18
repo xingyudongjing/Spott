@@ -21,7 +21,21 @@ export class IdempotencyService {
     userId: string,
     key: string,
     requestHash: Buffer,
+    compatibleRequestHashes: readonly Buffer[] = [],
   ): Promise<StoredResponse<T> | null> {
+    // Generic receipts are short-lived. Bound opportunistic cleanup prevents
+    // expired legacy fingerprints from becoming an indefinite privacy log
+    // without turning a request transaction into an unbounded table sweep.
+    await client.query(
+      `DELETE FROM sync.idempotency_keys
+       WHERE ctid IN (
+         SELECT ctid FROM sync.idempotency_keys
+         WHERE expires_at <= clock_timestamp()
+         ORDER BY expires_at
+         LIMIT 128
+         FOR UPDATE SKIP LOCKED
+       )`,
+    );
     const inserted = await client.query(
       `INSERT INTO sync.idempotency_keys(key, user_id, request_hash, expires_at)
        VALUES ($1, $2, $3, clock_timestamp() + interval '48 hours')
@@ -41,7 +55,8 @@ export class IdempotencyService {
       [userId, key],
     );
     const row = existing.rows[0];
-    if (!row || !row.request_hash.equals(requestHash)) {
+    const acceptedHashes = [requestHash, ...compatibleRequestHashes];
+    if (!row || !acceptedHashes.some((candidate) => row.request_hash.equals(candidate))) {
       throw new DomainError('IDEMPOTENCY_KEY_REUSED', '该幂等键已用于不同请求。', 409);
     }
     if (row.response_code === null || row.response_body === null) {

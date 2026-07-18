@@ -106,6 +106,11 @@ export interface EventDraftInput {
     required: boolean;
     options: string[];
   }> | undefined;
+  organizerContact?: {
+    kind: 'email' | 'line' | 'website';
+    label?: string | null | undefined;
+    value: string;
+  } | null | undefined;
   fee?: {
     isFree: boolean;
     amountJPY?: number | undefined;
@@ -193,6 +198,9 @@ interface EventRow {
     url: string | null;
   }>;
   organizer_followed: boolean;
+  contact_kind: 'email' | 'line' | 'website' | null;
+  contact_label_cipher: Buffer | null;
+  contact_value_cipher: Buffer | null;
   group_followed?: boolean;
   interest_overlap?: number;
   distance_km?: number | null;
@@ -520,6 +528,8 @@ export class EventsService {
          false AS favorited,
          false AS organizer_followed,
          l.exact_address_visibility,
+         contact.kind AS contact_kind, contact.label_cipher AS contact_label_cipher,
+         contact.value_cipher AS contact_value_cipher,
          CASE WHEN l.point IS NULL THEN NULL ELSE ST_Y(ST_SnapToGrid(l.point::geometry, 0.01)) END AS latitude,
          CASE WHEN l.point IS NULL THEN NULL ELSE ST_X(ST_SnapToGrid(l.point::geometry, 0.01)) END AS longitude,
          CASE WHEN l.point IS NULL THEN NULL ELSE ST_Y(l.point::geometry) END AS exact_latitude,
@@ -539,6 +549,7 @@ export class EventsService {
        LEFT JOIN identity.profiles p ON p.user_id = e.organizer_id AND p.deleted_at IS NULL
        LEFT JOIN events.event_locations l ON l.event_id = e.id
        LEFT JOIN events.event_fees f ON f.event_id = e.id
+       LEFT JOIN events.event_contact_channels contact ON contact.event_id = e.id
        LEFT JOIN events.event_capacity c ON c.event_id = e.id
        LEFT JOIN LATERAL (
          SELECT count(DISTINCT completed.id)::int AS completed_event_count,
@@ -817,8 +828,20 @@ export class EventsService {
     this.requirePublisher(user);
     const title = input.title?.trim() ?? '';
     return this.database.transaction(async (client) => {
-      const requestHash = this.idempotency.requestHash('POST', '/events/drafts', input);
-      const replay = await this.idempotency.claim<unknown>(client, user.id, key, requestHash);
+      const requestHashes = this.privateDraftRequestHashes(
+        'POST',
+        '/events/drafts',
+        user.id,
+        key,
+        input,
+      );
+      const replay = await this.idempotency.claim<unknown>(
+        client,
+        user.id,
+        key,
+        requestHashes.current,
+        [requestHashes.legacy],
+      );
       if (replay) return replay.body;
       const idResult = await client.query<{ id: string }>('SELECT uuidv7() AS id');
       const id = idResult.rows[0]!.id;
@@ -877,7 +900,7 @@ export class EventsService {
       await this.upsertDetails(client, id, input);
       await this.recordChange(client, user.id, id, 1, 'event.draft_created', Object.keys(input));
       const row = await this.loadEvent(client, id, user.id);
-      const body = this.toView(row, user, true);
+      const body = this.toView(row, user, true, false);
       await this.idempotency.complete(client, user.id, key, { status: 201, body }, { type: 'event', id });
       return body;
     });
@@ -891,8 +914,21 @@ export class EventsService {
     input: EventDraftInput,
   ): Promise<unknown> {
     return this.database.transaction(async (client) => {
-      const requestHash = this.idempotency.requestHash('PATCH', `/events/${identifier}`, input);
-      const replay = await this.idempotency.claim<unknown>(client, user.id, key, requestHash);
+      const path = `/events/${identifier}`;
+      const requestHashes = this.privateDraftRequestHashes(
+        'PATCH',
+        path,
+        user.id,
+        key,
+        input,
+      );
+      const replay = await this.idempotency.claim<unknown>(
+        client,
+        user.id,
+        key,
+        requestHashes.current,
+        [requestHashes.legacy],
+      );
       if (replay) return replay.body;
       const before = await this.loadEvent(client, identifier, user.id, true);
       if (before.organizer_id !== user.id) throw new DomainError('EVENT_FORBIDDEN', '无权编辑此活动。', 403);
@@ -902,8 +938,24 @@ export class EventsService {
       if (Number(before.version) !== baseVersion) {
         throw new DomainError('VERSION_CONFLICT', '云端草稿已更新，请比较后再保存。', 409, {
           actions: [{ type: 'compareDraft', label: '查看差异' }],
-          meta: { current: this.toView(before, user, true), attempted: input },
+          meta: {
+            current: this.toView(before, user, true, false),
+            attempted: this.redactPrivateDraftFields(input),
+          },
         });
+      }
+      if (before.status === 'published' && input.organizerContact === null) {
+        throw new DomainError(
+          'VALIDATION_FAILED',
+          '已发布活动必须保留确认后可见的主办方联系方式。',
+          422,
+          {
+            fieldErrors: [{
+              field: 'organizerContact',
+              message: '已发布活动不能删除主办方联系方式。',
+            }],
+          },
+        );
       }
       const eventColumns: Record<keyof EventDraftInput, string> = {
         title: 'title',
@@ -932,6 +984,7 @@ export class EventsService {
         supportedLocales: '',
         coordinate: '',
         registrationQuestions: '',
+        organizerContact: '',
         fee: '',
       };
       const sets: string[] = [];
@@ -1020,8 +1073,8 @@ export class EventsService {
           baseVersion,
           after.version,
           changedFields,
-          this.toView(before, user, true),
-          this.toView(after, user, true),
+          this.toView(before, user, true, false),
+          this.toView(after, user, true, false),
           before.status === 'published' ? '已发布活动关键字段发生变化，需通知参与者。' : null,
           user.id,
         ],
@@ -1034,10 +1087,32 @@ export class EventsService {
           [before.id, { changedFields, version: Number(after.version) }],
         );
       }
-      const body = this.toView(after, user, true);
+      const body = this.toView(after, user, true, false);
       await this.idempotency.complete(client, user.id, key, { status: 200, body }, { type: 'event', id: before.id });
       return body;
     });
+  }
+
+  private privateDraftRequestHashes(
+    method: 'POST' | 'PATCH',
+    path: string,
+    userId: string,
+    idempotencyKey: string,
+    input: EventDraftInput,
+  ): { current: Buffer; legacy: Buffer } {
+    const legacy = this.idempotency.requestHash(method, path, input);
+    const privateEnvelope = [
+      'spott.event-draft-idempotency.v1',
+      method,
+      path,
+      userId,
+      idempotencyKey,
+      JSON.stringify(input ?? null),
+    ].join('\n');
+    return {
+      current: this.fieldCrypto.lookupHash(privateEnvelope),
+      legacy,
+    };
   }
 
   async submit(
@@ -1123,7 +1198,7 @@ export class EventsService {
         ],
       );
       const body = {
-        ...this.toView(after, user, true),
+        ...this.toView(after, user, true, false),
         submissionId: event.id,
         holdId,
         riskRoute: assessment.route,
@@ -1234,7 +1309,7 @@ export class EventsService {
            ('event', $1, 'event.registration_refunds_requested', $3)`,
         [event.id, { reason, cancelledBy: user.id }, { eventId: event.id }],
       );
-      const body = this.toView(after, user, true);
+      const body = this.toView(after, user, true, false);
       await this.idempotency.complete(client, user.id, key, { status: 200, body }, { type: 'event', id: event.id });
       return body;
     });
@@ -1293,6 +1368,8 @@ export class EventsService {
            WHERE follow.follower_id = $2 AND follow.target_type = 'user'
              AND follow.target_id = e.organizer_id AND follow.deleted_at IS NULL) AS organizer_followed,
          l.exact_address_visibility,
+         contact.kind AS contact_kind, contact.label_cipher AS contact_label_cipher,
+         contact.value_cipher AS contact_value_cipher,
          CASE WHEN l.point IS NULL THEN NULL ELSE ST_Y(ST_SnapToGrid(l.point::geometry, 0.01)) END AS latitude,
          CASE WHEN l.point IS NULL THEN NULL ELSE ST_X(ST_SnapToGrid(l.point::geometry, 0.01)) END AS longitude,
          CASE WHEN l.point IS NULL THEN NULL ELSE ST_Y(l.point::geometry) END AS exact_latitude,
@@ -1312,6 +1389,7 @@ export class EventsService {
        LEFT JOIN identity.profiles p ON p.user_id = e.organizer_id AND p.deleted_at IS NULL
        LEFT JOIN events.event_locations l ON l.event_id = e.id
        LEFT JOIN events.event_fees f ON f.event_id = e.id
+       LEFT JOIN events.event_contact_channels contact ON contact.event_id = e.id
        LEFT JOIN events.event_capacity c ON c.event_id = e.id
        LEFT JOIN events.registrations r ON r.event_id = e.id AND r.user_id = $2
          AND r.deleted_at IS NULL
@@ -1347,7 +1425,12 @@ export class EventsService {
     return row;
   }
 
-  private toView(row: EventRow, viewer: AuthenticatedUser | undefined, includeDetail: boolean): Record<string, unknown> {
+  private toView(
+    row: EventRow,
+    viewer: AuthenticatedUser | undefined,
+    includeDetail: boolean,
+    includePrivateDetails = true,
+  ): Record<string, unknown> {
     if (
       ['published', 'registration_closed', 'in_progress'].includes(row.status)
       && (!row.region_id || !row.public_area || row.is_free === null || row.is_free === undefined)
@@ -1388,11 +1471,45 @@ export class EventsService {
       eventStatus: row.status,
     });
     let exactAddress: string | null = null;
-    if (includeDetail && canSeeAddress && row.exact_address_cipher) {
+    if (includeDetail && includePrivateDetails && canSeeAddress && row.exact_address_cipher) {
       try {
         exactAddress = this.fieldCrypto.decrypt(row.exact_address_cipher);
       } catch {
         exactAddress = null;
+      }
+    }
+    const canSeeOrganizerContact = Boolean(
+      includeDetail
+      && includePrivateDetails
+      && viewer
+      && (
+        viewer.id === row.organizer_id
+        || row.registration_status === 'confirmed'
+        || row.registration_status === 'checked_in'
+      ),
+    );
+    let organizerContact: {
+      kind: 'email' | 'line' | 'website';
+      label: string | null;
+      value: string;
+    } | null = null;
+    if (canSeeOrganizerContact && row.contact_kind && row.contact_value_cipher) {
+      try {
+        let label: string | null = null;
+        if (row.contact_label_cipher) {
+          try {
+            label = this.fieldCrypto.decrypt(row.contact_label_cipher);
+          } catch {
+            label = null;
+          }
+        }
+        organizerContact = {
+          kind: row.contact_kind,
+          label,
+          value: this.fieldCrypto.decrypt(row.contact_value_cipher),
+        };
+      } catch {
+        organizerContact = null;
       }
     }
     const approximateCoordinate = row.latitude === null || row.latitude === undefined
@@ -1403,7 +1520,7 @@ export class EventsService {
       || row.exact_longitude === null || row.exact_longitude === undefined
       ? null
       : { latitude: row.exact_latitude, longitude: row.exact_longitude, precision: 'exact' as const };
-    const coordinate = includeDetail && canSeeAddress && exactCoordinate
+    const coordinate = includeDetail && includePrivateDetails && canSeeAddress && exactCoordinate
       ? exactCoordinate
       : approximateCoordinate;
     const fee = row.is_free === null || row.is_free === undefined
@@ -1472,6 +1589,7 @@ export class EventsService {
     if (includeDetail) {
       Object.assign(view, {
         exactAddress,
+        organizerContact,
         attendeeRequirements: row.attendee_requirements,
         riskFlags: row.risk_flags,
         riskDetails: row.risk_details,
@@ -1486,6 +1604,14 @@ export class EventsService {
       });
     }
     return view;
+  }
+
+  private redactPrivateDraftFields(input: EventDraftInput): Record<string, unknown> {
+    const safe: Record<string, unknown> = { ...input };
+    if (Object.hasOwn(input, 'exactAddress')) safe.exactAddress = null;
+    if (Object.hasOwn(input, 'coordinate')) safe.coordinate = null;
+    if (Object.hasOwn(input, 'organizerContact')) safe.organizerContact = null;
+    return safe;
   }
 
   private async upsertDetails(client: PoolClient, eventId: string, input: EventDraftInput): Promise<void> {
@@ -1525,6 +1651,36 @@ export class EventsService {
     }
     if (input.registrationQuestions) {
       await this.reconcileRegistrationQuestions(client, eventId, input.registrationQuestions);
+    }
+    if (input.organizerContact !== undefined) {
+      if (input.organizerContact === null) {
+        await client.query('DELETE FROM events.event_contact_channels WHERE event_id = $1', [eventId]);
+      } else {
+        const contact = input.organizerContact;
+        const normalizedValue = contact.kind === 'email'
+          ? contact.value.trim().toLowerCase()
+          : contact.value.trim();
+        await client.query(
+          `INSERT INTO events.event_contact_channels(
+             event_id, kind, label_cipher, value_cipher, updated_by
+           )
+           SELECT event.id, $2, $3, $4, event.organizer_id
+           FROM events.events event WHERE event.id = $1
+           ON CONFLICT (event_id) DO UPDATE SET
+             kind = EXCLUDED.kind,
+             label_cipher = EXCLUDED.label_cipher,
+             value_cipher = EXCLUDED.value_cipher,
+             updated_by = EXCLUDED.updated_by,
+             version = events.event_contact_channels.version + 1,
+             updated_at = clock_timestamp()`,
+          [
+            eventId,
+            contact.kind,
+            contact.label ? this.fieldCrypto.encrypt(contact.label) : null,
+            this.fieldCrypto.encrypt(normalizedValue),
+          ],
+        );
+      }
     }
     if (input.fee) {
       const fee = input.fee;
@@ -1671,6 +1827,7 @@ export class EventsService {
     if (!event.region_id || !event.public_area) missing.push('location');
     if (!event.capacity) missing.push('capacity');
     if (event.is_free === null) missing.push('fee');
+    if (!event.contact_kind || !event.contact_value_cipher) missing.push('organizerContact');
     if (event.risk_flags.length > 0 && Object.keys(event.risk_details).length === 0) missing.push('riskDetails');
     const mediaCount = Number(event.media_count);
     if (mediaCount < 1 || mediaCount > 6) missing.push('media');

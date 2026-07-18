@@ -2488,6 +2488,68 @@ export interface components {
             viewerFollowing: boolean;
             trust: components["schemas"]["OrganizerTrust"];
         };
+        OrganizerEmailContact: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "email";
+            label: string | null;
+            /** Format: email */
+            value: string;
+        };
+        OrganizerLineContact: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "line";
+            label: string | null;
+            value: string;
+        };
+        OrganizerWebsiteContact: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "website";
+            label: string | null;
+            /** Format: uri */
+            value: string;
+        };
+        OrganizerEmailContactInput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "email";
+            label?: string | null;
+            /** Format: email */
+            value: string;
+        };
+        OrganizerLineContactInput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "line";
+            label?: string | null;
+            value: string;
+        };
+        OrganizerWebsiteContactInput: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "website";
+            label?: string | null;
+            /** Format: uri */
+            value: string;
+        };
+        /** @description HTTPS, email, or LINE contact encrypted at rest. */
+        OrganizerContactInput: components["schemas"]["OrganizerEmailContactInput"] | components["schemas"]["OrganizerLineContactInput"] | components["schemas"]["OrganizerWebsiteContactInput"];
+        /** @description Encrypted at rest and disclosed only to the organizer or a confirmed/checked-in participant. */
+        OrganizerContact: components["schemas"]["OrganizerEmailContact"] | components["schemas"]["OrganizerLineContact"] | components["schemas"]["OrganizerWebsiteContact"];
         ViewerRegistration: {
             id: components["schemas"]["UUID"];
             /** @enum {string} */
@@ -2551,6 +2613,8 @@ export interface components {
             coordinate: null | components["schemas"]["EventCoordinate"];
             /** @description Null unless policy authorizes the viewer. */
             exactAddress: string | null;
+            /** @description Null unless the viewer owns the event or has a confirmed/checked-in registration. */
+            organizerContact: null | components["schemas"]["OrganizerContact"];
             attendeeRequirements: string | null;
             riskFlags: string[];
             riskDetails: {
@@ -2687,6 +2751,7 @@ export interface components {
                 /** Format: double */
                 longitude: number;
             };
+            organizerContact?: null | components["schemas"]["OrganizerContactInput"];
             fee?: {
                 [key: string]: unknown;
             };

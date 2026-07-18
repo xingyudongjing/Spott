@@ -199,7 +199,15 @@ function updateHarness(before: Record<string, unknown>, after: Record<string, un
     claim: vi.fn().mockResolvedValue(null),
     complete: vi.fn(),
   };
-  const service = new EventsService(database as never, {} as never, idempotency as never, {} as never);
+  const fieldCrypto = {
+    lookupHash: vi.fn().mockReturnValue(Buffer.alloc(32, 0x31)),
+  };
+  const service = new EventsService(
+    database as never,
+    fieldCrypto as never,
+    idempotency as never,
+    {} as never,
+  );
   Object.assign(service, {
     loadEvent: vi.fn().mockResolvedValueOnce(before).mockResolvedValue(after),
     upsertDetails: vi.fn(),

@@ -21,6 +21,7 @@ export interface RefreshEnvelopeClaims {
   readonly generation: number;
   readonly transportClass: "web_bff";
   readonly persistentBindingId: string;
+  readonly persistentBindingGeneration: number;
   readonly bffAttemptKid: string;
   readonly issuedAt: number;
   readonly expiresAt: number;
@@ -58,7 +59,8 @@ export interface LogoutIntent {
 
 const refreshKeys = [
   "purpose", "audience", "refreshToken", "sessionId", "familyId", "generation",
-  "transportClass", "persistentBindingId", "bffAttemptKid", "issuedAt", "expiresAt",
+  "transportClass", "persistentBindingId", "persistentBindingGeneration", "bffAttemptKid",
+  "issuedAt", "expiresAt",
 ] as const;
 const deviceBindingKeys = [
   "purpose", "audience", "bindingId", "deviceId", "userId", "sessionId", "generation",
@@ -223,6 +225,7 @@ function validateRefresh(
     && validSafeInteger(value.generation)
     && value.transportClass === "web_bff"
     && validUUID(value.persistentBindingId)
+    && validSafeInteger(value.persistentBindingGeneration)
     && typeof value.bffAttemptKid === "string"
     && keyIdPattern.test(value.bffAttemptKid)
     && config.bffKeys.getKey(value.bffAttemptKid) !== undefined
@@ -274,6 +277,7 @@ export function encodeRefreshEnvelope(claims: RefreshEnvelopeClaims, config: Ses
     generation: claims.generation,
     transportClass: claims.transportClass,
     persistentBindingId: claims.persistentBindingId,
+    persistentBindingGeneration: claims.persistentBindingGeneration,
     bffAttemptKid: claims.bffAttemptKid,
     issuedAt: claims.issuedAt,
     expiresAt: claims.expiresAt,

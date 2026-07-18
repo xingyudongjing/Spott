@@ -41,6 +41,7 @@ const refreshClaims = {
   generation: 3,
   transportClass: "web_bff" as const,
   persistentBindingId: "33333333-3333-4333-8333-333333333333",
+  persistentBindingGeneration: 2,
   bffAttemptKid: "cookie-2026-07",
   issuedAt: now,
   expiresAt: future,
@@ -131,7 +132,7 @@ describe("purpose-separated HttpOnly envelopes", () => {
     const binding = encodeDeviceBindingEnvelope(bindingClaims, config);
     const migration = encodeMigrationIntentEnvelope(migrationClaims, config);
 
-    expect(refresh).toBe("v1.cookie-2026-07.eyJwdXJwb3NlIjoicmVmcmVzaCIsImF1ZGllbmNlIjoiaHR0cHM6Ly9zcG90dC5leGFtcGxlIiwicmVmcmVzaFRva2VuIjoiczIuMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExLjMuQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsInNlc3Npb25JZCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImZhbWlseUlkIjoiMjIyMjIyMjItMjIyMi00MjIyLTgyMjItMjIyMjIyMjIyMjIyIiwiZ2VuZXJhdGlvbiI6MywidHJhbnNwb3J0Q2xhc3MiOiJ3ZWJfYmZmIiwicGVyc2lzdGVudEJpbmRpbmdJZCI6IjMzMzMzMzMzLTMzMzMtNDMzMy04MzMzLTMzMzMzMzMzMzMzMyIsImJmZkF0dGVtcHRLaWQiOiJjb29raWUtMjAyNi0wNyIsImlzc3VlZEF0IjoxNzg0MjQ2NDAwMDAwLCJleHBpcmVzQXQiOjE3ODQyNDcwMDAwMDB9.4jMOnzlTNiB8Q0LGBo1fw9iRbPlPyAmr3UmgsPitC88");
+    expect(refresh).toBe("v1.cookie-2026-07.eyJwdXJwb3NlIjoicmVmcmVzaCIsImF1ZGllbmNlIjoiaHR0cHM6Ly9zcG90dC5leGFtcGxlIiwicmVmcmVzaFRva2VuIjoiczIuMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExLjMuQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsInNlc3Npb25JZCI6IjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsImZhbWlseUlkIjoiMjIyMjIyMjItMjIyMi00MjIyLTgyMjItMjIyMjIyMjIyMjIyIiwiZ2VuZXJhdGlvbiI6MywidHJhbnNwb3J0Q2xhc3MiOiJ3ZWJfYmZmIiwicGVyc2lzdGVudEJpbmRpbmdJZCI6IjMzMzMzMzMzLTMzMzMtNDMzMy04MzMzLTMzMzMzMzMzMzMzMyIsInBlcnNpc3RlbnRCaW5kaW5nR2VuZXJhdGlvbiI6MiwiYmZmQXR0ZW1wdEtpZCI6ImNvb2tpZS0yMDI2LTA3IiwiaXNzdWVkQXQiOjE3ODQyNDY0MDAwMDAsImV4cGlyZXNBdCI6MTc4NDI0NzAwMDAwMH0.B-l7qx-RvfYBzXYd1BZBEiLeGyfQ7nVWhLQlESgXuC0");
     expect(binding).toBe("v1.cookie-2026-07.eyJwdXJwb3NlIjoiZGV2aWNlX2JpbmRpbmciLCJhdWRpZW5jZSI6Imh0dHBzOi8vc3BvdHQuZXhhbXBsZSIsImJpbmRpbmdJZCI6IjMzMzMzMzMzLTMzMzMtNDMzMy04MzMzLTMzMzMzMzMzMzMzMyIsImRldmljZUlkIjoiNDQ0NDQ0NDQtNDQ0NC00NDQ0LTg0NDQtNDQ0NDQ0NDQ0NDQ0IiwidXNlcklkIjoiNTU1NTU1NTUtNTU1NS00NTU1LTg1NTUtNTU1NTU1NTU1NTU1Iiwic2Vzc2lvbklkIjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiZ2VuZXJhdGlvbiI6Miwic2VjcmV0IjoiV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdscGFXbHBhV2xwYVdsbyIsImlzc3VlZEF0IjoxNzg0MjQ2NDAwMDAwLCJleHBpcmVzQXQiOjE3ODQyNDcwMDAwMDB9.vXjLdFTTwc_zU46SI_EClsETRqlRhNBDdBZseHF26C4");
     expect(migration).toBe("v1.cookie-2026-07.eyJwdXJwb3NlIjoibWlncmF0aW9uX2ludGVudCIsImF1ZGllbmNlIjoiaHR0cHM6Ly9zcG90dC5leGFtcGxlIiwiaW50ZW50SWQiOiI2NjY2NjY2Ni02NjY2LTQ2NjYtODY2Ni02NjY2NjY2NjY2NjYiLCJhdHRlbXB0SWQiOiI3Nzc3Nzc3Ny03Nzc3LTQ3NzctODc3Ny03Nzc3Nzc3Nzc3NzciLCJ0ZW1wb3JhcnlTZWNyZXQiOiJhMnRyYTJ0cmEydHJhMnRyYTJ0cmEydHJhMnRyYTJ0cmEydHJhMnRyYTJzIiwiaXNzdWVkQXQiOjE3ODQyNDY0MDAwMDAsImV4cGlyZXNBdCI6MTc4NDI0NzAwMDAwMH0.NJiBeKER-xqyC_r6kAU4MyipMBYbhBH3SjFnp5JZIYA");
     expect(parseRefreshEnvelope(refresh, config, now)).toEqual(refreshClaims);
@@ -167,7 +168,19 @@ describe("purpose-separated HttpOnly envelopes", () => {
   });
 
   test("rejects unknown, missing, duplicate, noncanonical, and unsafe payload fields", () => {
+    const missingBindingGeneration = { ...refreshClaims } as Record<string, unknown>;
+    delete missingBindingGeneration.persistentBindingGeneration;
+
+    expect(() => encodeRefreshEnvelope(
+      missingBindingGeneration as unknown as typeof refreshClaims,
+      config,
+    )).toThrow();
+    expect(() => encodeRefreshEnvelope({
+      ...refreshClaims,
+      unexpected: true,
+    } as typeof refreshClaims, config)).toThrow();
     expect(() => encodeRefreshEnvelope({ ...refreshClaims, generation: -1 }, config)).toThrow();
+    expect(() => encodeRefreshEnvelope({ ...refreshClaims, persistentBindingGeneration: -1 }, config)).toThrow();
     expect(() => encodeDeviceBindingEnvelope({ ...bindingClaims, secret: "short" }, config)).toThrow();
     expect(() => encodeMigrationIntentEnvelope({ ...migrationClaims, audience: "https://evil.example" }, config)).toThrow();
     expect(() => encodeRefreshEnvelope({ ...refreshClaims, transportClass: "native" as "web_bff" }, config)).toThrow();

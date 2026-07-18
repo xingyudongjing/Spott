@@ -12,6 +12,7 @@ import {
 } from "../../lib/format";
 import { EventCover } from "../EventCover";
 import { useI18n } from "../I18nProvider";
+import { usePreviewMode } from "../PreviewModeProvider";
 import {
   BuildingIcon,
   ChevronIcon,
@@ -56,11 +57,14 @@ export function EventResultCard({
   selected?: boolean;
 }) {
   const { locale, t } = useI18n();
+  const isReadOnly = usePreviewMode() === "read-only";
   const area = event.publicArea || t("event.areaTBA");
   const fee = eventFeeLabel(event.fee, locale);
   const format = eventFormatLabel(event.format, locale);
   const language = eventLanguageLabel(event.primaryLocale, locale);
-  const attendance = attendanceLabel(event.organizer.trust.attendanceRateBand, t);
+  const attendance = event.organizer.trust.completedEventCount > 0
+    ? attendanceLabel(event.organizer.trust.attendanceRateBand, t)
+    : null;
   const capacity = capacityLabel(event, t);
   const capacityIsTight = event.capacity > 0 && event.availableCapacity <= 2;
 
@@ -71,7 +75,11 @@ export function EventResultCard({
       data-selected={selected || undefined}
       data-testid="discovery-event"
     >
-      <Link className={styles.eventLink} href={`/e/${event.publicSlug}`}>
+      <Link
+        className={styles.eventLink}
+        href={`/e/${event.publicSlug}`}
+        prefetch={isReadOnly ? false : undefined}
+      >
         <div className={styles.coverFrame}>
           <EventCover
             event={event}
@@ -100,7 +108,9 @@ export function EventResultCard({
             {event.organizer.trust.phoneVerified ? (
               <span data-tone="verified"><ShieldCheckIcon />{t("event.phoneVerified")}</span>
             ) : null}
-            <span>{t("event.completedEvents", { count: event.organizer.trust.completedEventCount })}</span>
+            <span>{event.organizer.trust.completedEventCount === 0
+              ? t("event.newHost")
+              : t("event.completedEvents", { count: event.organizer.trust.completedEventCount })}</span>
             {attendance ? <span>{attendance}</span> : null}
           </div>
         </div>

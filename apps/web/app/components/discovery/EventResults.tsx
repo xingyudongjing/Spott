@@ -6,6 +6,7 @@ import Link from "next/link";
 import type { MapBounds } from "../../lib/discovery-query";
 import type { EventPage, EventSummary } from "../../lib/event-contract";
 import { useI18n } from "../I18nProvider";
+import { usePreviewMode } from "../PreviewModeProvider";
 import { DiscoveryEmpty, DiscoveryError, DiscoveryLoading } from "./DiscoveryState";
 import { EventList } from "./EventList";
 import styles from "./DiscoveryShell.module.css";
@@ -124,6 +125,7 @@ export function EventResults({
 
 export function MapEventPreview({ event }: { event: EventSummary }) {
   const { t } = useI18n();
+  const isReadOnly = usePreviewMode() === "read-only";
   const label = t("discover.mapPreview", { title: event.title });
   return (
     <section
@@ -137,7 +139,9 @@ export function MapEventPreview({ event }: { event: EventSummary }) {
         <strong>{event.title}</strong>
         <span>{event.publicArea || t("event.areaTBA")}</span>
       </div>
-      <Link href={`/e/${event.publicSlug}`}>{t("discover.viewDetails")}</Link>
+      <Link href={`/e/${event.publicSlug}`} prefetch={isReadOnly ? false : undefined}>
+        {t("discover.viewDetails")}
+      </Link>
     </section>
   );
 }

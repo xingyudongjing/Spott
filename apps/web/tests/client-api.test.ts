@@ -4,6 +4,7 @@ import {
   APIError,
   apiRequest,
   clearSession,
+  deviceId,
   errorMessage,
   readSession,
   refreshCurrentSession,
@@ -69,6 +70,27 @@ beforeEach(() => {
   window.localStorage.setItem("spott.web.device.v1", "019b0000-0000-7000-8100-000000000099");
   vi.unstubAllGlobals();
   document.documentElement.lang = "zh-Hans";
+});
+
+describe("browser device identity", () => {
+  test("keeps public HTTP previews usable when randomUUID is unavailable", () => {
+    window.localStorage.removeItem("spott.web.device.v1");
+    const getRandomValues = vi.fn((target: Uint8Array) => {
+      target.set([
+        0x00, 0x11, 0x22, 0x33,
+        0x44, 0x55, 0xff, 0x77,
+        0xff, 0x99, 0xaa, 0xbb,
+        0xcc, 0xdd, 0xee, 0xff,
+      ]);
+      return target;
+    });
+    vi.stubGlobal("crypto", { getRandomValues });
+
+    expect(deviceId()).toBe("00112233-4455-4f77-bf99-aabbccddeeff");
+    expect(window.localStorage.getItem("spott.web.device.v1"))
+      .toBe("00112233-4455-4f77-bf99-aabbccddeeff");
+    expect(getRandomValues).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("localized client failure copy", () => {

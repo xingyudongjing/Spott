@@ -28,6 +28,7 @@ export function SiteHeader() {
   const region = t("nav.regionValue");
   const registrationRoute = pathname.startsWith("/register/");
   const ownsMobileAction = registrationRoute || pathname.startsWith("/e/");
+  const routePrefetch = isReadOnly ? false : undefined;
 
   if (registrationRoute && !isReadOnly) return null;
 
@@ -38,13 +39,14 @@ export function SiteHeader() {
     <>
       <header className={`${styles.header} site-header`}>
         <div className={styles.identity}>
-          <Link className={styles.wordmark} href="/discover" aria-label="Spott">
+          <Link className={styles.wordmark} href="/discover" aria-label="Spott" prefetch={routePrefetch}>
             Spott
           </Link>
           <Link
             className={styles.region}
             href="/discover"
             aria-label={t("nav.region", { region })}
+            prefetch={routePrefetch}
           >
             {region}
           </Link>
@@ -56,6 +58,7 @@ export function SiteHeader() {
               key={destination.href}
               href={destination.href}
               aria-current={routeIsActive(pathname, destination.href) ? "page" : undefined}
+              prefetch={routePrefetch}
             >
               {t(destination.key)}
             </Link>
@@ -79,8 +82,8 @@ export function SiteHeader() {
       {isReadOnly ? <ReadOnlyBanner /> : null}
 
       {!ownsMobileAction ? <nav className={`${styles.mobileDock} ${isReadOnly ? `${styles.mobileDockReadonly} mobile-dock--readonly` : ""} mobile-dock`} aria-label={t("nav.mobile")}>
-        <DockLink pathname={pathname} href="/discover" label={t("nav.discover")} icon={<SearchIcon />} />
-        <DockLink pathname={pathname} href="/groups" label={t("nav.groups")} icon={<UsersIcon />} />
+        <DockLink pathname={pathname} href="/discover" label={t("nav.discover")} icon={<SearchIcon />} prefetch={routePrefetch} />
+        <DockLink pathname={pathname} href="/groups" label={t("nav.groups")} icon={<UsersIcon />} prefetch={routePrefetch} />
         {!isReadOnly ? (
           <>
             <Link
@@ -116,16 +119,19 @@ function DockLink({
   href,
   label,
   icon,
+  prefetch,
 }: {
   pathname: string;
   href: string;
   label: string;
   icon: React.ReactNode;
+  prefetch?: boolean;
 }) {
   return (
     <Link
       href={href}
       aria-current={routeIsActive(pathname, href) ? "page" : undefined}
+      prefetch={prefetch}
     >
       {icon}
       <span>{label}</span>

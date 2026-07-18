@@ -40,7 +40,7 @@ export function GroupsDirectory() {
     <div className="standard-shell groups-directory">
       <section className="directory-hero">
         <div>
-          <span className="eyebrow-text">COMMUNITIES / SYNCED</span>
+          <span className="eyebrow-text">{t("group.directoryEyebrow")}</span>
           <h1>{t("group.directory")}</h1>
           <p>{t("group.directoryBody")}</p>
         </div>
@@ -53,7 +53,7 @@ export function GroupsDirectory() {
       {isReadOnly ? <ReadOnlyCommunityNotice /> : null}
       <div className="section-heading">
         <div>
-          <span className="section-number">{isReadOnly ? "PUBLIC NETWORK" : "YOUR NETWORK"}</span>
+          <span className="section-number">{isReadOnly ? t("group.publicDirectory") : t("group.myGroups")}</span>
           <h2>{isReadOnly ? t("group.directory") : t("group.myGroups")}</h2>
         </div>
         <p>{items.length}</p>
@@ -80,8 +80,12 @@ export function GroupsDirectory() {
               <div>
                 <span className="eyebrow-text">
                   {!isReadOnly && mine.has(group.id)
-                    ? locale === "ja" ? "参加中" : locale === "en" ? "JOINED" : "已加入"
-                    : "COMMUNITY"}
+                    ? t("group.joined")
+                    : group.joinMode === "approval"
+                      ? t("group.joinModeApproval")
+                      : group.joinMode === "invite_only"
+                        ? t("group.joinModeInvite")
+                        : t("group.joinModeOpen")}
                 </span>
                 <h2>{group.name}</h2>
                 <p>
@@ -96,7 +100,11 @@ export function GroupsDirectory() {
                   <span>{t("group.capacity", { count: group.capacity })}</span>
                 </div>
               </div>
-              <Link href={`/g/${group.slug}`} aria-label={`${t("common.open")} ${group.name}`}>
+              <Link
+                href={`/g/${group.slug}`}
+                aria-label={`${t("common.open")} ${group.name}`}
+                prefetch={isReadOnly ? false : undefined}
+              >
                 <ArrowIcon />
               </Link>
             </article>
@@ -107,7 +115,9 @@ export function GroupsDirectory() {
           <span className="spotlight-empty" />
           <h2>{t("group.empty")}</h2>
           <p>{t("group.emptyBody")}</p>
-          <Link className="primary-action compact" href="/discover">{t("nav.discover")}</Link>
+          <Link className="primary-action compact" href="/discover" prefetch={isReadOnly ? false : undefined}>
+            {t("nav.discover")}
+          </Link>
         </div>
       )}
     </div>

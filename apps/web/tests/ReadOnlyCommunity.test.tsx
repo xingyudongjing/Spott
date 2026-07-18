@@ -69,6 +69,7 @@ const announcement: GroupAnnouncement = {
   commentCount: 1,
   version: 1,
   createdAt: "2026-07-17T00:00:00.000Z",
+  pinnedAt: "2026-07-17T00:00:00.000Z",
 };
 
 const comment: GroupComment = {
@@ -127,6 +128,11 @@ describe("public read-only community surfaces", () => {
     renderReadOnly(<GroupsDirectory />);
 
     expect(await screen.findByRole("heading", { name: group.name })).toBeInTheDocument();
+    expect(screen.getByText("东京 · 兴趣社区")).toBeInTheDocument();
+    expect(screen.getByText("公开社区")).toBeInTheDocument();
+    expect(screen.getByText("公开加入")).toBeInTheDocument();
+    expect(screen.queryByText("COMMUNITIES / SYNCED")).not.toBeInTheDocument();
+    expect(screen.queryByText("PUBLIC NETWORK")).not.toBeInTheDocument();
     expect(screen.getByRole("note")).toHaveTextContent("此页面仅展示公开内容");
     expect(screen.queryByRole("link", { name: /创建群组/ })).not.toBeInTheDocument();
     expect(apiRequestMock).toHaveBeenCalledTimes(1);
@@ -149,6 +155,10 @@ describe("public read-only community surfaces", () => {
     renderReadOnly(<GroupExperience slug={group.slug} />);
 
     expect(await screen.findByRole("heading", { name: group.name })).toBeInTheDocument();
+    expect(screen.getByText("兴趣社区 · 东京")).toBeInTheDocument();
+    expect(screen.getByText("即将开始")).toBeInTheDocument();
+    expect(screen.getByText(/置顶 ·/)).toBeInTheDocument();
+    expect(screen.queryByText(/COMMUNITY \/|UP NEXT|^COMMUNITY$|PINNED/)).not.toBeInTheDocument();
     expect(screen.getByRole("note")).toHaveTextContent("创建、加入、关注、点赞、评论、举报和拉黑");
     expect(screen.queryByRole("button", { name: "加入群组" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "关注群组" })).not.toBeInTheDocument();

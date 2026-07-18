@@ -9,7 +9,7 @@ import {
   validateDiscoveryQuery,
 } from "../../lib/discovery-query";
 import { useI18n } from "../I18nProvider";
-import { GlobeIcon, PinIcon, SlidersIcon, TicketIcon } from "../icons";
+import { CalendarIcon, GlobeIcon, PinIcon, SlidersIcon, TicketIcon, UsersIcon } from "../icons";
 import styles from "./DiscoveryShell.module.css";
 
 const categories = [
@@ -88,14 +88,14 @@ export function DiscoveryFilters({
     <div className={styles.filters}>
       <div className={styles.filterRail} role="group" aria-label={t("discover.when")}>
         <button type="button" aria-pressed={weekendSelected} onClick={toggleWeekend}>
-          <span aria-hidden="true">▣</span>{t("discover.weekend")}
+          <CalendarIcon size={17} />{t("discover.weekend")}
         </button>
         <button
           type="button"
           aria-pressed={query.availableOnly === true}
           onClick={() => onPatch({ availableOnly: query.availableOnly ? undefined : true })}
         >
-          <span aria-hidden="true">♙</span>{t("discover.availability")}
+          <UsersIcon size={17} />{t("discover.availability")}
         </button>
         <label>
           <PinIcon />
@@ -243,6 +243,44 @@ export function DiscoveryFilters({
                 {categories.map(([value, key]) => (
                   <option key={value || "all"} value={value}>{t(key)}</option>
                 ))}
+              </select>
+            </label>
+            <label>
+              <span>{t("discover.format")}</span>
+              <select
+                value={query.format ?? ""}
+                aria-label={t("discover.format")}
+                onChange={(event) => onPatch({ format: event.target.value as EventDiscoveryQuery["format"] || undefined })}
+              >
+                <option value="">{t("filter.allFormats")}</option>
+                <option value="in_person">{t("event.formatInPerson")}</option>
+                <option value="online">{t("event.formatOnline")}</option>
+                <option value="hybrid">{t("event.formatHybrid")}</option>
+              </select>
+            </label>
+            <label>
+              <span>{t("discover.price")}</span>
+              <select
+                value={query.price ?? ""}
+                aria-label={t("discover.price")}
+                onChange={(event) => onPatch({ price: event.target.value as EventDiscoveryQuery["price"] || undefined })}
+              >
+                <option value="">{t("filter.allPrices")}</option>
+                <option value="free">{t("common.free")}</option>
+                <option value="paid">{t("filter.paid")}</option>
+              </select>
+            </label>
+            <label>
+              <span>{t("discover.language")}</span>
+              <select
+                value={query.language ?? ""}
+                aria-label={t("discover.language")}
+                onChange={(event) => onPatch({ language: event.target.value as EventDiscoveryQuery["language"] || undefined })}
+              >
+                <option value="">{t("filter.allLanguages")}</option>
+                <option value="zh-Hans">{t("event.languageChinese")}</option>
+                <option value="ja">{t("event.languageJapanese")}</option>
+                <option value="en">{t("event.languageEnglish")}</option>
               </select>
             </label>
             <button type="button" onClick={resetFilters}>{t("common.clear")}</button>

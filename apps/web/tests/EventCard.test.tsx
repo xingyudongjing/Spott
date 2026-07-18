@@ -1,8 +1,17 @@
 import { screen, within } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import type { AnchorHTMLAttributes } from "react";
+import { describe, expect, test, vi } from "vitest";
 
 import { EventResultCard } from "../app/components/discovery/EventResultCard";
+import { PreviewModeProvider } from "../app/components/PreviewModeProvider";
 import { eventFixture, renderWithI18n } from "./event-fixtures";
+
+vi.mock("next/link", () => ({
+  default: ({ prefetch, ...props }: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
+    href: string;
+    prefetch?: boolean;
+  }) => <a {...props} data-prefetch={prefetch === false ? "false" : undefined} />,
+}));
 
 describe("premium event result", () => {
   test("uses one whole-item link and renders only structured event facts", () => {
@@ -44,6 +53,38 @@ describe("premium event result", () => {
     const card = screen.getByRole("article", { name: eventFixture.title });
     expect(card).toHaveTextContent("不限量");
     expect(card).not.toHaveTextContent("可候补");
+  });
+
+  test("describes a first-time organizer without presenting zero as a trust metric", () => {
+    renderWithI18n(
+      <EventResultCard
+        event={{
+          ...eventFixture,
+          organizer: {
+            ...eventFixture.organizer,
+            trust: { ...eventFixture.organizer.trust, completedEventCount: 0 },
+          },
+        }}
+      />,
+    );
+
+    const card = screen.getByRole("article", { name: eventFixture.title });
+    expect(card).toHaveTextContent("Spott 新主办方");
+    expect(card).not.toHaveTextContent("已完成 0 场活动");
+    expect(card).not.toHaveTextContent("历史到场率");
+  });
+
+  test("disables Vinext RSC prefetch for event cards on the public read-only surface", () => {
+    renderWithI18n(
+      <PreviewModeProvider initialMode="read-only">
+        <EventResultCard event={eventFixture} />
+      </PreviewModeProvider>,
+    );
+
+    expect(within(screen.getByRole("article", { name: eventFixture.title })).getByRole("link")).toHaveAttribute(
+      "data-prefetch",
+      "false",
+    );
   });
 
   test("shows waitlist only when a full event exposes the joinWaitlist action", () => {

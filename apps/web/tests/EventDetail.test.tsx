@@ -49,6 +49,28 @@ beforeEach(() => {
 });
 
 describe("premium event detail", () => {
+  test("uses an editorial section heading instead of repeating the event title", () => {
+    const event = makeDetail();
+    renderWithI18n(<EventDetailView event={event} locale="zh-Hans" actions={null} />);
+
+    expect(screen.getAllByRole("heading", { name: event.title })).toHaveLength(1);
+    expect(screen.getByRole("heading", { level: 2, name: "活动内容" })).toBeInTheDocument();
+  });
+
+  test("gives a first-time organizer a truthful welcome instead of a zero-history badge", () => {
+    const event = makeDetail({
+      organizer: {
+        ...makeDetail().organizer,
+        trust: { ...makeDetail().organizer.trust, completedEventCount: 0 },
+      },
+    });
+    renderWithI18n(<EventDetailView event={event} locale="zh-Hans" actions={null} />);
+
+    expect(screen.getAllByText("Spott 新主办方").length).toBeGreaterThan(0);
+    expect(screen.queryByText("已完成 0 场活动")).not.toBeInTheDocument();
+    expect(screen.queryByText(/历史到场率/)).not.toBeInTheDocument();
+  });
+
   test("hydrates anonymous SSR actions with the signed-in viewer event before choosing the CTA", async () => {
     const anonymousEvent = makeDetail({ availableActions: [], registrationMode: "approval" });
     const viewerEvent = makeDetail({ availableActions: ["register"], registrationMode: "approval" });

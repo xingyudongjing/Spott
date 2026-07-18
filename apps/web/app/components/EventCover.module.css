@@ -39,15 +39,17 @@
 }
 
 .fallback svg { width: 100%; height: 100%; }
-.horizon,
-.orbit,
-.trace {
+.line,
+.fine,
+.route {
   fill: none;
   stroke: color-mix(in srgb, var(--spott-twilight) 62%, var(--spott-muted));
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.horizon { stroke-width: 2.4; }
-.orbit { stroke-width: 1.6; stroke-dasharray: 4 7; opacity: .58; }
-.trace { stroke-width: 1.2; opacity: .36; }
-.sun { fill: color-mix(in srgb, var(--spott-coral) 38%, transparent); stroke: var(--spott-coral); stroke-width: 1.5; }
+.line { stroke-width: 2; }
+.fine { stroke-width: 1.2; opacity: .42; }
+.route { stroke-width: 2; stroke-dasharray: 4 7; opacity: .76; }
+.wash { fill: color-mix(in srgb, var(--spott-twilight) 8%, transparent); stroke: none; }
+.accent,
+.routePoint { fill: color-mix(in srgb, var(--spott-coral) 38%, transparent); stroke: var(--spott-coral); stroke-width: 1.5; }

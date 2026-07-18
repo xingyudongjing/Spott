@@ -37,6 +37,25 @@ afterEach(() => {
 });
 
 describe("URL-authoritative discovery", () => {
+  test("keeps mobile quick filters editorial and moves detailed facets into the sheet", async () => {
+    const user = userEvent.setup();
+    searchEventsMock.mockResolvedValue(makePage());
+    renderWithI18n(<DiscoveryShell initialQuery={{}} initialPage={makePage()} />);
+
+    const weekend = screen.getByRole("button", { name: "本周末" });
+    const availability = screen.getByRole("button", { name: "只看有名额" });
+    expect(weekend.querySelector("svg")).not.toBeNull();
+    expect(availability.querySelector("svg")).not.toBeNull();
+    expect(weekend).not.toHaveTextContent("▣");
+    expect(availability).not.toHaveTextContent("♙");
+
+    await user.click(screen.getByRole("button", { name: "更多筛选" }));
+    const sheet = screen.getByRole("dialog", { name: "更多筛选" });
+    expect(within(sheet).getByRole("combobox", { name: "活动形式" })).toBeInTheDocument();
+    expect(within(sheet).getByRole("combobox", { name: "费用" })).toBeInTheDocument();
+    expect(within(sheet).getByRole("combobox", { name: "语言" })).toBeInTheDocument();
+  });
+
   test("keeps analytics off and exposes region inside the filter dialog at 390px in read-only mode", async () => {
     const user = userEvent.setup();
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });

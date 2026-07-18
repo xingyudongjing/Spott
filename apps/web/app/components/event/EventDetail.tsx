@@ -38,7 +38,7 @@ export function EventDetailView({
     <main className={styles.page}>
       <section className={styles.firstViewport} data-testid="event-first-viewport">
         <div className={styles.shell}>
-          <Link className={styles.back} href="/discover">← {t("detail.back")}</Link>
+          <Link className={styles.back} href="/discover" prefetch={false}>← {t("detail.back")}</Link>
           <div className={styles.heroGrid}>
             <EventCover
               event={event}
@@ -79,8 +79,7 @@ export function EventDetailView({
       <div className={`${styles.shell} ${styles.bodyGrid}`}>
         <div className={styles.content}>
           <section className={styles.section}>
-            <p className={styles.eyebrow}>{t("detail.about")}</p>
-            <h2>{event.title}</h2>
+            <h2>{t("detail.about")}</h2>
             <p>{event.description}</p>
             {event.attendeeRequirements ? (
               <aside className={styles.requirements}>
@@ -135,7 +134,7 @@ export function EventDetailView({
               <p>{t("detail.safetyBody")}</p>
               <small>{t("detail.locationPrivacy")}</small>
             </div>
-            <Link href={`/reports/new?targetType=event&targetId=${event.id}`}>{t("detail.report")}</Link>
+            <Link href={`/reports/new?targetType=event&targetId=${event.id}`} prefetch={false}>{t("detail.report")}</Link>
           </section>
         </div>
 
@@ -145,7 +144,7 @@ export function EventDetailView({
           <h2>{event.organizer.name}</h2>
           <span>@{event.organizer.handle}</span>
           <ul>{trust.map((fact) => <li key={fact}>{fact}</li>)}</ul>
-          <Link href={`/u/${event.organizer.handle}`}>{t("detail.profile")} →</Link>
+          <Link href={`/u/${event.organizer.handle}`} prefetch={false}>{t("detail.profile")} →</Link>
         </aside>
       </div>
     </main>
@@ -205,13 +204,17 @@ function eventAvailability(event: EventDetail, locale: Locale) {
 function organizerTrustFacts(event: EventDetail, locale: Locale) {
   const facts: string[] = [];
   if (event.organizer.trust.phoneVerified) facts.push(formatMessage(locale, "event.phoneVerified"));
-  facts.push(formatMessage(locale, "event.completedEvents", { count: event.organizer.trust.completedEventCount }));
+  facts.push(event.organizer.trust.completedEventCount === 0
+    ? formatMessage(locale, "event.newHost")
+    : formatMessage(locale, "event.completedEvents", { count: event.organizer.trust.completedEventCount }));
   const attendanceKey: Partial<Record<EventDetail["organizer"]["trust"]["attendanceRateBand"], MessageKey>> = {
     under_70: "event.attendanceUnder70",
     "70_89": "event.attendance70to89",
     "90_plus": "event.attendance90plus",
   };
-  const key = attendanceKey[event.organizer.trust.attendanceRateBand];
+  const key = event.organizer.trust.completedEventCount > 0
+    ? attendanceKey[event.organizer.trust.attendanceRateBand]
+    : undefined;
   if (key) facts.push(formatMessage(locale, key));
   return facts;
 }

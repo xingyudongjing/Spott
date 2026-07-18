@@ -373,13 +373,38 @@ test('OTP helper extracts only the latest exact email or phone match', () => {
 test('preview seed is synthetic, future-relative, and creates no privileged or account state', () => {
   const seed = readFileSync(join(repositoryRoot, 'database/seeds/ip-preview.sql'), 'utf8');
   assert.match(seed, /interval '8 days'/u);
-  assert.match(seed, /Synthetic preview organizer/u);
+  assert.match(seed, /Synthetic public-preview data only/u);
   assert.match(seed, /primary_locale/u);
   assert.match(seed, /supported_locales/u);
   assert.match(seed, /locale_confirmed_at/u);
-  assert.doesNotMatch(seed, /ON CONFLICT[^;]+DO UPDATE/su);
+  assert.match(seed, /ON CONFLICT \(user_id\) DO UPDATE/su);
+  assert.match(seed, /ON CONFLICT \(id\) DO UPDATE/su);
+  assert.match(seed, /preview_event\.organizer_id = EXCLUDED\.organizer_id/u);
+  assert.match(seed, /md5\(preview_profile\.bio\) IN/u);
+  assert.match(seed, /md5\(preview_event\.description\) IN/u);
+  const capacitySeed = seed.slice(
+    seed.indexOf('INSERT INTO events.event_capacity'),
+    seed.indexOf('INSERT INTO events.event_locations'),
+  );
+  assert.match(capacitySeed, /ON CONFLICT \(event_id\) DO NOTHING;/u);
+  assert.doesNotMatch(capacitySeed, /DO UPDATE/u);
+  assert.doesNotMatch(
+    seed,
+    /'[^']*(?:Synthetic preview|合成预览|界面预览|プレビュー専用)[^']*'/u,
+  );
   assert.doesNotMatch(
     seed,
     /admin\.|identity\.(?:sessions|devices|auth_identities|phone_bindings)|commerce\.(?:wallets|point_)/u,
   );
+});
+
+test('preview seed gives the public community routes substantive read-only content', () => {
+  const seed = readFileSync(join(repositoryRoot, 'database/seeds/ip-preview.sql'), 'utf8');
+  assert.match(seed, /INSERT INTO community\.groups AS preview_group/u);
+  assert.match(seed, /INSERT INTO community\.group_memberships AS preview_membership/u);
+  assert.match(seed, /INSERT INTO community\.announcements AS preview_announcement/u);
+  assert.match(seed, /'东京慢走与光线观察'/u);
+  assert.match(seed, /'下北沢一枚聴く会'/u);
+  assert.match(seed, /'public'/u);
+  assert.match(seed, /group_id = EXCLUDED\.group_id/u);
 });

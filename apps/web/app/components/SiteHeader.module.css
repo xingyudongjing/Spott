@@ -34,6 +34,7 @@
 .region {
   display: inline-flex;
   align-items: center;
+  min-width: 44px;
   min-height: 44px;
   gap: 7px;
   padding-inline: 13px;
@@ -198,8 +199,9 @@
   .mobileDockReadonly { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .previewBanner {
     align-items: flex-start;
-    gap: 6px;
-    padding: 9px 16px;
+    flex-direction: column;
+    gap: 2px;
+    padding: 7px 16px 8px;
     font-size: 12px;
     text-align: left;
   }

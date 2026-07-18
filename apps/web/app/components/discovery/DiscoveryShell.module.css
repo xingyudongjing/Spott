@@ -13,6 +13,7 @@
   font-weight: 780;
   letter-spacing: -.035em;
   line-height: 1.15;
+  text-wrap: balance;
 }
 .intro p {
   margin: 8px 0 0;
@@ -593,6 +594,7 @@
     scroll-padding-inline: 2px;
     -webkit-overflow-scrolling: touch;
   }
+  .filterRail > label { display: none; }
   .filterRail > button,
   .filterRail > label,
   .moreFilters > button {
@@ -600,7 +602,6 @@
     padding-inline: 11px;
     font-size: 12px;
   }
-  .filterRail > label { padding-right: 7px; }
   .filterRail select { max-width: 95px; }
   .filterDialog {
     inset: auto 10px calc(80px + env(safe-area-inset-bottom));

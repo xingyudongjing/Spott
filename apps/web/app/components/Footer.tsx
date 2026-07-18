@@ -12,11 +12,11 @@ export function Footer() {
         <p>{t("footer.tagline")}</p>
       </div>
       <div className="footer-links">
-        <Link href="/discover">{t("nav.discover")}</Link>
-        <Link href="/groups">{t("nav.groups")}</Link>
-        <Link href="/safety">{t("footer.safety")}</Link>
-        <Link href="/privacy">{t("footer.privacy")}</Link>
-        <Link href="/terms">{t("footer.terms")}</Link>
+        <Link href="/discover" prefetch={false}>{t("nav.discover")}</Link>
+        <Link href="/groups" prefetch={false}>{t("nav.groups")}</Link>
+        <Link href="/safety" prefetch={false}>{t("footer.safety")}</Link>
+        <Link href="/privacy" prefetch={false}>{t("footer.privacy")}</Link>
+        <Link href="/terms" prefetch={false}>{t("footer.terms")}</Link>
       </div>
       <div className="footer-meta"><LanguageSwitcher /><p>Tokyo · 2026</p></div>
     </footer>

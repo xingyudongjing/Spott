@@ -51,7 +51,7 @@ test("serves indexable Tokyo discovery URLs with matching language and metadata"
   assert.match(ja, /<html[^>]+lang="ja"/);
   assert.match(ja, /<title>東京のイベント · Spott<\/title>/);
   assert.match(ja, /<link rel="canonical" href="https:\/\/spott\.jp\/ja\/tokyo"/);
-  assert.match(ja, /東京で、本当に参加したいイベントに出会う/);
+  assert.match(ja, /東京で、心から参加したいイベントに出会う/);
 
   assert.match(en, /<html[^>]+lang="en"/);
   assert.match(en, /<title>Tokyo events · Spott<\/title>/);

@@ -25,7 +25,7 @@ test.describe("rendered discovery safeguards", () => {
 
     await language.selectOption("ja");
     await expect(page).toHaveURL(`${baseURL}/ja/tokyo`);
-    await expect(page.getByRole("heading", { level: 1, name: "東京で、本当に参加したいイベントに出会う" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "東京で、心から参加したいイベントに出会う" })).toBeVisible();
     await expect(page.locator("html")).toHaveAttribute("lang", "ja");
 
     await banner.getByRole("combobox", { name: "言語" }).selectOption("en");

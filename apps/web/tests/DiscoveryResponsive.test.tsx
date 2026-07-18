@@ -19,6 +19,8 @@ describe("responsive discovery safeguards", () => {
     expect(styles).toMatch(/\.mapMarker\s*\{[\s\S]*?width:\s*46px;[\s\S]*?height:\s*46px;/);
     expect(styles).toMatch(/\.filterDialog::backdrop/);
     expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.regionField\s*\{\s*display:\s*none;/);
+    expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.filterRail\s*>\s*label\s*\{\s*display:\s*none;/);
+    expect(styles).toMatch(/\.intro h1\s*\{[\s\S]*?text-wrap:\s*balance;/);
     expect(globals).not.toMatch(/body\s*\{[\s\S]*?min-width:\s*320px/);
   });
 

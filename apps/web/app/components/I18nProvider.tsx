@@ -56,6 +56,14 @@ export function LanguageSwitcher({ compact = false }: { compact?: boolean }) {
   const { locale, setLocale, t } = useI18n();
   return <label className={`language-switcher${compact ? " compact-language" : ""}`}>
     <span className="sr-only">{t("nav.language")}</span>
+    {compact ? (
+      <span className="compact-language-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="8.25" stroke="currentColor" strokeWidth="1.6" />
+          <path d="M3.9 12h16.2M12 3.75c2.1 2.2 3.2 4.95 3.2 8.25S14.1 18.05 12 20.25C9.9 18.05 8.8 15.3 8.8 12S9.9 5.95 12 3.75Z" stroke="currentColor" strokeLinecap="round" strokeWidth="1.45" />
+        </svg>
+      </span>
+    ) : null}
     <select value={locale} onChange={(event) => setLocale(event.target.value as Locale)} aria-label={t("nav.language")}>
       {locales.map((value) => <option key={value} value={value}>{localeNames[value]}</option>)}
     </select>

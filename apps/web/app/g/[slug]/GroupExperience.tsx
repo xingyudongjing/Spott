@@ -141,7 +141,7 @@ export function GroupExperience({ slug }: { slug: string }) {
                 : '群组不存在'}
           </h1>
           <p>{message}</p>
-          <Link className="primary-action compact" href="/groups">
+          <Link className="primary-action compact" href="/groups" prefetch={isReadOnly ? false : undefined}>
             {t('group.directory')}
           </Link>
         </div>
@@ -161,7 +161,9 @@ export function GroupExperience({ slug }: { slug: string }) {
             <div className="group-mark">{Array.from(group.name).slice(0, 2).join('')}</div>
           )}
           <div>
-            <span className="eyebrow-text">COMMUNITY / {group.regionId ?? 'JAPAN'}</span>
+            <span className="eyebrow-text">
+              {t('group.detailEyebrow', { region: t(regionMessageKey(group.regionId)) })}
+            </span>
             <h1>{group.name}</h1>
             <p>
               {group.description ||
@@ -228,7 +230,7 @@ export function GroupExperience({ slug }: { slug: string }) {
         <section className="event-section group-events">
           <div className="section-heading">
             <div>
-              <span className="section-number">UP NEXT</span>
+              <span className="section-number">{t('group.upNext')}</span>
               <h2>{t('group.events')}</h2>
             </div>
           </div>
@@ -270,4 +272,16 @@ function joinModeLabel(mode: GroupView['joinMode'], locale: 'zh-Hans' | 'ja' | '
   if (mode === 'invite_only')
     return locale === 'ja' ? '招待のみ' : locale === 'en' ? 'Invite only' : '仅限邀请';
   return locale === 'ja' ? '誰でも参加' : locale === 'en' ? 'Open to join' : '公开加入';
+}
+
+function regionMessageKey(regionId: string | null | undefined) {
+  switch (regionId) {
+    case 'tokyo': return 'region.tokyo' as const;
+    case 'kanagawa': return 'region.kanagawa' as const;
+    case 'saitama': return 'region.saitama' as const;
+    case 'chiba': return 'region.chiba' as const;
+    case 'osaka': return 'region.osaka' as const;
+    case 'kyoto': return 'region.kyoto' as const;
+    default: return 'region.all' as const;
+  }
 }

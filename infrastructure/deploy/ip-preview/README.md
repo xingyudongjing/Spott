@@ -29,11 +29,12 @@ It is not the final domain/TLS production topology.
 - API still runs with `NODE_ENV=production`. The internal override selects the
   console OTP adapter because no email/SMS provider credential has been supplied;
   codes are available only to an SSH user with passwordless sudo.
-- The seed inserts fixed synthetic organizers and future-dated preview events
-  once. A later deployment never rewrites event state, dates or capacity
-  counters, so internal-test registrations are preserved. It creates no
-  administrator, session, registration, device, wallet, point, phone or email
-  data.
+- The seed inserts fixed synthetic organizers, public groups and future-dated
+  preview events once. Exact legacy-copy hashes may receive a one-time
+  presentation-only upgrade; a later deployment never rewrites event state,
+  dates or capacity counters, so internal-test registrations are preserved. It
+  creates no administrator, session, registration, device, wallet, point,
+  phone or email data.
 - The preview build enables MapLibre with MapLibre's public demo style. This is
   suitable for the internal preview only; select a production tile provider,
   license and availability target before a public production launch.

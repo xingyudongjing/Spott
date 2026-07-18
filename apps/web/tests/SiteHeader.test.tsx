@@ -1,4 +1,5 @@
 import { screen, waitFor } from "@testing-library/react";
+import type { AnchorHTMLAttributes } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { SiteHeader } from "../app/components/SiteHeader";
@@ -7,6 +8,12 @@ import { renderWithI18n } from "./event-fixtures";
 
 const navigation = vi.hoisted(() => ({ pathname: "/discover" }));
 vi.mock("next/navigation", () => ({ usePathname: () => navigation.pathname }));
+vi.mock("next/link", () => ({
+  default: ({ prefetch, ...props }: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
+    href: string;
+    prefetch?: boolean;
+  }) => <a {...props} data-prefetch={prefetch === false ? "false" : undefined} />,
+}));
 
 beforeEach(() => {
   navigation.pathname = "/discover";
@@ -104,5 +111,6 @@ describe("responsive site navigation", () => {
     expect(screen.queryByRole("link", { name: "通知" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "我的活动" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "主办方工作台" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link").every((link) => link.dataset.prefetch === "false")).toBe(true);
   });
 });

@@ -622,6 +622,22 @@ enum EventCancellationSyncPolicy {
     }
 }
 
+enum EventPosterSurfaceRole: Sendable {
+    case previewContent
+    case interactiveControl
+}
+
+enum EventPosterSurfacePolicy {
+    static func usesLiquidGlass(for role: EventPosterSurfaceRole) -> Bool {
+        switch role {
+        case .previewContent:
+            false
+        case .interactiveControl:
+            true
+        }
+    }
+}
+
 struct EventPosterPresentation: Sendable {
     let backendLocaleIdentifier: String
     private let locale: Locale

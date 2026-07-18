@@ -1615,6 +1615,11 @@ final class EventDetailStoreTests: XCTestCase {
         }
     }
 
+    func testPosterPreviewUsesSolidContentSurfaceAndKeepsGlassForControls() {
+        XCTAssertFalse(EventPosterSurfacePolicy.usesLiquidGlass(for: .previewContent))
+        XCTAssertTrue(EventPosterSurfacePolicy.usesLiquidGlass(for: .interactiveControl))
+    }
+
     func testEveryServerActionHasLocalizedNativeCopyInThreeLanguages() {
         let registrationID = UUID(uuidString: "019b0000-0000-7000-8100-000000000099")!
         let groupID = UUID(uuidString: "019b0000-0000-7000-8100-000000000066")!

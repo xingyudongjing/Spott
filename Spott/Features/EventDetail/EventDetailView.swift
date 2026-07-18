@@ -540,7 +540,7 @@ struct PosterGeneratorView: View {
                             systemImage: "square.and.arrow.up"
                         )
                     }
-                    .buttonStyle(PrimaryButtonStyle())
+                    .spottProminentActionStyle()
                 } else {
                     Picker(presentation.text("journey.poster.style"), selection: $template) {
                         Text(presentation.text("journey.poster.template.tokyo_afterglow"))
@@ -561,10 +561,18 @@ struct PosterGeneratorView: View {
                         if busy { ProgressView() }
                     }
                     .frame(maxWidth: .infinity, minHeight: 260)
-                    .spottGlassPanel(shape: RoundedRectangle(cornerRadius: 26, style: .continuous), interactive: false)
+                    .background(
+                        SpottColor.surface,
+                        in: RoundedRectangle(cornerRadius: 26, style: .continuous)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 26, style: .continuous)
+                            .stroke(SpottColor.hairline)
+                    }
+                    .shadow(color: SpottColor.ink.opacity(0.045), radius: 18, y: 8)
 
                     Button(presentation.text("journey.poster.generate")) { create() }
-                        .buttonStyle(PrimaryButtonStyle())
+                        .spottProminentActionStyle()
                         .disabled(busy)
                 }
 

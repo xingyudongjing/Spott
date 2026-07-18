@@ -673,6 +673,9 @@ struct GroupDetailView: View {
             }
         }
         .task(id: model.session?.sessionId) { await loadAll() }
+        .onChange(of: model.groupMutationRevision) { _, _ in
+            Task { await loadAll() }
+        }
         .refreshable { await loadAll() }
         .sheet(item: $sheet) { destination in
             switch destination {
@@ -1091,7 +1094,7 @@ struct GroupDetailView: View {
     }
 
     private func performJoin(_ group: GroupSummary, inviteCode: String?) {
-        model.requireTrust(for: .joinGroup) {
+        model.requireGroupJoinTrust(for: group, inviteCode: inviteCode) {
             mutating = true
             error = nil
             Task {
@@ -1860,17 +1863,18 @@ private struct JoinGroupView: View {
     }
 
     private func join() {
-        guard model.session != nil else {
-            dismiss()
-            model.presentedGate = .login
-            return
-        }
-        guard model.session?.user.phoneVerified == true else {
-            dismiss()
-            model.presentedGate = .phoneVerification
-            return
-        }
         guard case .ready(let code) = readiness else { return }
+        var authorizedImmediately = false
+        model.requireGroupJoinTrust(for: group, inviteCode: code) {
+            authorizedImmediately = true
+            submit(code: code)
+        }
+        if !authorizedImmediately {
+            dismiss()
+        }
+    }
+
+    private func submit(code: String?) {
         busy = true
         error = nil
         Task {

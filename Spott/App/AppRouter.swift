@@ -110,12 +110,39 @@ struct DeferredRegistrationIntent: Identifiable, Hashable, Sendable {
     }
 }
 
+struct DeferredGroupJoinIntent: Identifiable, Hashable, Sendable {
+    let id: UUID
+    let groupID: UUID
+    let inviteCode: String?
+    let sourceTab: AppTab
+    let sourcePath: [AppRoute]
+    var requiredGate: AppGate
+
+    init(
+        id: UUID = UUID(),
+        groupID: UUID,
+        inviteCode: String?,
+        sourceTab: AppTab,
+        sourcePath: [AppRoute],
+        requiredGate: AppGate
+    ) {
+        self.id = id
+        self.groupID = groupID
+        let normalizedCode = inviteCode?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.inviteCode = normalizedCode?.isEmpty == false ? normalizedCode : nil
+        self.sourceTab = sourceTab
+        self.sourcePath = sourcePath
+        self.requiredGate = requiredGate
+    }
+}
+
 @MainActor
 @Observable
 final class AppRouter {
     var selectedTab: AppTab = .discovery
     private(set) var paths: [AppTab: [AppRoute]]
     private(set) var deferredRegistrationIntent: DeferredRegistrationIntent?
+    private(set) var deferredGroupJoinIntent: DeferredGroupJoinIntent?
     private(set) var pendingRegistrationPresentation: DeferredRegistrationIntent?
     private(set) var pendingItineraryRegistrationID: UUID?
     private var eventSnapshots: [EventRouteReference: EventSummary] = [:]
@@ -210,6 +237,7 @@ final class AppRouter {
         draft: DeferredRegistrationDraft = .init(),
         requiring gate: AppGate
     ) {
+        deferredGroupJoinIntent = nil
         let reference = EventRouteReference(event: event)
         eventSnapshots[reference] = event.discoverySafeSummary
         deferredRegistrationIntent = .init(
@@ -225,6 +253,32 @@ final class AppRouter {
 
     func transitionDeferredIntent(to gate: AppGate) {
         deferredRegistrationIntent?.requiredGate = gate
+        deferredGroupJoinIntent?.requiredGate = gate
+    }
+
+    func deferGroupJoin(
+        groupID: UUID,
+        inviteCode: String?,
+        requiring gate: AppGate
+    ) {
+        deferredRegistrationIntent = nil
+        pendingRegistrationPresentation = nil
+        deferredGroupJoinIntent = .init(
+            groupID: groupID,
+            inviteCode: inviteCode,
+            sourceTab: selectedTab,
+            sourcePath: path(for: selectedTab),
+            requiredGate: gate
+        )
+    }
+
+    @discardableResult
+    func takeDeferredGroupJoinIntent(after gate: AppGate) -> DeferredGroupJoinIntent? {
+        guard let intent = deferredGroupJoinIntent, intent.requiredGate == gate else { return nil }
+        deferredGroupJoinIntent = nil
+        selectedTab = intent.sourceTab
+        paths[intent.sourceTab] = intent.sourcePath
+        return intent
     }
 
     @discardableResult
@@ -250,6 +304,7 @@ final class AppRouter {
 
     func cancelDeferredIntent() {
         deferredRegistrationIntent = nil
+        deferredGroupJoinIntent = nil
         pendingRegistrationPresentation = nil
     }
 
@@ -257,6 +312,7 @@ final class AppRouter {
         selectedTab = .discovery
         paths = Dictionary(uniqueKeysWithValues: AppTab.allCases.map { ($0, []) })
         deferredRegistrationIntent = nil
+        deferredGroupJoinIntent = nil
         pendingRegistrationPresentation = nil
         pendingItineraryRegistrationID = nil
         eventSnapshots.removeAll()

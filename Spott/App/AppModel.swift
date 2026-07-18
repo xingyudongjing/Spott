@@ -30,6 +30,7 @@ final class AppModel {
     var presentedGate: AppGate?
     var session: UserSession?
     var banner: SyncBannerState?
+    private(set) var groupMutationRevision: UInt64 = 0
 
     let api: SpottAPIClient
     let analytics: AnalyticsClient
@@ -41,9 +42,11 @@ final class AppModel {
     @ObservationIgnored private let sessionEnder: any SessionEnding
     @ObservationIgnored private let syncLifecycle: any SyncLifecycleManaging
     @ObservationIgnored private let syncPuller: any SyncPulling
+    @ObservationIgnored private let groupJoinService: any GroupJoinServing
     @ObservationIgnored private let ownerWriteLeaseAuthority: OwnerWriteLeaseAuthority
     @ObservationIgnored private var authGeneration: UInt64 = 0
     @ObservationIgnored private var authTask: Task<Void, Never>?
+    @ObservationIgnored private var deferredGroupJoinTask: Task<Void, Never>?
 
     var region: String {
         get { discovery.region }
@@ -61,6 +64,7 @@ final class AppModel {
         syncLifecycle: (any SyncLifecycleManaging)? = nil,
         syncPuller: (any SyncPulling)? = nil,
         ownerWriteLeaseAuthority: OwnerWriteLeaseAuthority? = nil,
+        groupJoinService: (any GroupJoinServing)? = nil,
         discovery injectedDiscovery: DiscoveryStore? = nil
     ) {
         self.api = api
@@ -72,6 +76,7 @@ final class AppModel {
         self.sessionEnder = sessionEnder ?? api
         self.syncLifecycle = syncLifecycle ?? sync
         self.syncPuller = syncPuller ?? sync
+        self.groupJoinService = groupJoinService ?? api
         self.ownerWriteLeaseAuthority = ownerWriteLeaseAuthority ?? sync.ownerWriteLeaseAuthority
         discovery = injectedDiscovery ?? DiscoveryStore(service: api, cache: persistence)
         api.setAuthenticationExpirationHandler { [weak self] sessionID in
@@ -232,6 +237,32 @@ final class AppModel {
         destination()
     }
 
+    func requireGroupJoinTrust(
+        for group: GroupSummary,
+        inviteCode: String?,
+        destination: () -> Void
+    ) {
+        guard session != nil else {
+            router.deferGroupJoin(
+                groupID: group.id,
+                inviteCode: inviteCode,
+                requiring: .login
+            )
+            presentedGate = .login
+            return
+        }
+        guard session?.user.phoneVerified == true else {
+            router.deferGroupJoin(
+                groupID: group.id,
+                inviteCode: inviteCode,
+                requiring: .phoneVerification
+            )
+            presentedGate = .phoneVerification
+            return
+        }
+        destination()
+    }
+
     func open(url: URL) {
         Task { @MainActor in
             do {
@@ -292,10 +323,10 @@ final class AppModel {
         if newSession.user.phoneVerified {
             presentedGate = nil
             if let completedGate {
-                router.resumeDeferredIntent(after: completedGate)
+                resumeDeferredIntents(after: completedGate)
             }
         } else {
-            if router.deferredRegistrationIntent != nil {
+            if router.deferredRegistrationIntent != nil || router.deferredGroupJoinIntent != nil {
                 router.transitionDeferredIntent(to: .phoneVerification)
             }
             presentedGate = .phoneVerification
@@ -369,7 +400,7 @@ final class AppModel {
             )
         )
         presentedGate = nil
-        router.resumeDeferredIntent(after: .phoneVerification)
+        resumeDeferredIntents(after: .phoneVerification)
     }
 
     func cancelPresentedGate() {
@@ -433,7 +464,65 @@ final class AppModel {
         authGeneration = ownerWriteLeaseAuthority.revoke()
         authTask?.cancel()
         authTask = nil
+        deferredGroupJoinTask?.cancel()
+        deferredGroupJoinTask = nil
         return authGeneration
+    }
+
+    private func resumeDeferredIntents(after gate: AppGate) {
+        router.resumeDeferredIntent(after: gate)
+        guard let intent = router.takeDeferredGroupJoinIntent(after: gate),
+              let sessionID = session?.sessionId
+        else { return }
+        resumeDeferredGroupJoin(
+            intent,
+            generation: authGeneration,
+            sessionID: sessionID
+        )
+    }
+
+    private func resumeDeferredGroupJoin(
+        _ intent: DeferredGroupJoinIntent,
+        generation: UInt64,
+        sessionID: UUID
+    ) {
+        deferredGroupJoinTask?.cancel()
+        deferredGroupJoinTask = Task { [weak self, groupJoinService] in
+            guard let self else { return }
+            do {
+                let latest = try await groupJoinService.group(
+                    identifier: intent.groupID.uuidString.lowercased()
+                )
+                guard isCurrentAuth(generation, sessionID: sessionID) else { return }
+                guard latest.id == intent.groupID,
+                      DeferredGroupJoinRecoveryPolicy.permitsJoin(
+                    latest,
+                    inviteCode: intent.inviteCode
+                ) else {
+                    groupMutationRevision &+= 1
+                    banner = .init(
+                        title: String(localized: "社群状态已更新，请确认后重试。"),
+                        tone: .warning
+                    )
+                    return
+                }
+                _ = try await groupJoinService.joinGroup(
+                    id: latest.id,
+                    inviteCode: intent.inviteCode
+                )
+                guard isCurrentAuth(generation, sessionID: sessionID) else { return }
+                groupMutationRevision &+= 1
+                banner = .init(
+                    title: String(localized: "已加入社群"),
+                    tone: .success
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                guard isCurrentAuth(generation, sessionID: sessionID) else { return }
+                banner = .init(title: Self.map(error).message, tone: .warning)
+            }
+        }
     }
 
     private func isCurrentAuth(_ generation: UInt64, sessionID: UUID) -> Bool {

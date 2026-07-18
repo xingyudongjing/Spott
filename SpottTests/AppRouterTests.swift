@@ -179,6 +179,45 @@ final class AppRouterTests: XCTestCase {
         XCTAssertNotNil(router.resumeDeferredIntent(after: .phoneVerification))
     }
 
+    func testDeferredGroupJoinPreservesInviteAndResumesExactlyOnceAfterMatchingGate() {
+        let router = AppRouter()
+        let groupID = UUID(uuidString: "019b0000-0000-7000-8200-000000000091")!
+        router.selectedTab = .groups
+        router.setPath([.group(groupID)], for: .groups)
+
+        router.deferGroupJoin(
+            groupID: groupID,
+            inviteCode: "  INVITE-42  ",
+            requiring: .login
+        )
+        router.transitionDeferredIntent(to: .phoneVerification)
+
+        XCTAssertNil(router.takeDeferredGroupJoinIntent(after: .login))
+        let resumed = router.takeDeferredGroupJoinIntent(after: .phoneVerification)
+        XCTAssertEqual(resumed?.groupID, groupID)
+        XCTAssertEqual(resumed?.inviteCode, "INVITE-42")
+        XCTAssertEqual(resumed?.sourceTab, .groups)
+        XCTAssertEqual(resumed?.sourcePath, [.group(groupID)])
+        XCTAssertNil(router.takeDeferredGroupJoinIntent(after: .phoneVerification))
+    }
+
+    func testNewestDestructiveIntentReplacesAnyPreviouslyDeferredAction() {
+        let router = AppRouter()
+        let groupID = UUID(uuidString: "019b0000-0000-7000-8200-000000000091")!
+
+        router.deferRegistration(for: firstEvent, action: .register, requiring: .login)
+        router.deferGroupJoin(groupID: groupID, inviteCode: nil, requiring: .login)
+
+        XCTAssertNil(router.deferredRegistrationIntent)
+        XCTAssertNotNil(router.deferredGroupJoinIntent)
+        XCTAssertNil(router.pendingRegistrationPresentation)
+
+        router.deferRegistration(for: firstEvent, action: .register, requiring: .login)
+
+        XCTAssertNotNil(router.deferredRegistrationIntent)
+        XCTAssertNil(router.deferredGroupJoinIntent)
+    }
+
     func testPendingRegistrationPresentationCanOnlyBeTakenFromItsSourceTab() {
         let router = AppRouter()
         router.selectedTab = .activities

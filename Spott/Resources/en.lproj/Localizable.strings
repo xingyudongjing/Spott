@@ -199,6 +199,7 @@
 "将由服务器验证活动、时间窗与重复签到状态。" = "The server will verify the event, check-in window, and duplicate check-ins.";
 "局头审核" = "Host approval";
 "已加入社群" = "Joined community";
+"社群状态已更新，请确认后重试。" = "This community has changed. Review the latest status and try again.";
 "已提交审核" = "Submitted for review";
 "已满员" = "Full";
 "已读取票码" = "Ticket scanned";

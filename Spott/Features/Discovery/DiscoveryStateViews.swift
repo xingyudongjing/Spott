@@ -81,30 +81,119 @@ struct DiscoveryErrorState: View {
 
 struct DiscoverySkeleton: View {
     var body: some View {
-        List(0 ..< 5, id: \.self) { _ in
-            DiscoverySkeletonRow()
+        ScrollView {
+            LazyVStack(spacing: 16) {
+                DiscoveryFeaturedSkeletonCard()
+
+                ForEach(0 ..< 3, id: \.self) { _ in
+                    DiscoveryCompactSkeletonCard()
+                }
+            }
+            .padding(.horizontal, SpottMetric.pageInset)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
         }
-        .listStyle(.plain)
+        .background(SpottColor.canvas)
+        .allowsHitTesting(false)
         .accessibilityLabel("正在加载活动")
         .accessibilityIdentifier("discovery.loading")
     }
 }
 
-private struct DiscoverySkeletonRow: View {
+private struct DiscoveryFeaturedSkeletonCard: View {
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            RoundedRectangle(cornerRadius: 14)
-                .fill(Color.secondary.opacity(0.12))
-                .frame(width: 112, height: 112)
-            VStack(alignment: .leading, spacing: 10) {
-                RoundedRectangle(cornerRadius: 4).frame(width: 92, height: 11)
-                RoundedRectangle(cornerRadius: 5).frame(height: 18)
-                RoundedRectangle(cornerRadius: 4).frame(maxWidth: 170).frame(height: 12)
-                RoundedRectangle(cornerRadius: 4).frame(maxWidth: 130).frame(height: 12)
+        VStack(alignment: .leading, spacing: 0) {
+            RoundedRectangle(cornerRadius: 0)
+                .fill(placeholderColor)
+                .aspectRatio(16 / 9, contentMode: .fit)
+
+            VStack(alignment: .leading, spacing: 13) {
+                placeholderLine(width: 230, height: 24, cornerRadius: 7)
+                placeholderLine(width: 188)
+                HStack(spacing: 14) {
+                    placeholderLine(width: 94)
+                    placeholderLine(width: 106)
+                }
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(placeholderColor)
+                        .frame(width: 34, height: 34)
+                    VStack(alignment: .leading, spacing: 5) {
+                        placeholderLine(width: 104, height: 11)
+                        placeholderLine(width: 76, height: 9)
+                    }
+                }
+                HStack(spacing: 7) {
+                    placeholderCapsule(width: 70)
+                    placeholderCapsule(width: 84)
+                    placeholderCapsule(width: 62)
+                }
             }
-            .foregroundStyle(Color.secondary.opacity(0.12))
+            .padding(18)
+        }
+        .background(SpottColor.surface)
+        .clipShape(RoundedRectangle(cornerRadius: SpottMetric.cardRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: SpottMetric.cardRadius, style: .continuous)
+                .stroke(SpottColor.hairline)
         }
         .redacted(reason: .placeholder)
-        .listRowInsets(.init(top: 12, leading: 16, bottom: 12, trailing: 16))
     }
+}
+
+private struct DiscoveryCompactSkeletonCard: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(placeholderColor)
+                .frame(width: 112, height: 168)
+
+            VStack(alignment: .leading, spacing: 8) {
+                placeholderLine(width: 92, height: 11)
+                placeholderLine(height: 18, cornerRadius: 5)
+                placeholderLine(width: 170)
+                placeholderLine(width: 130)
+                placeholderLine(width: 156)
+                Divider()
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(placeholderColor)
+                        .frame(width: 28, height: 28)
+                    placeholderLine(width: 112, height: 11)
+                }
+                HStack(spacing: 6) {
+                    placeholderCapsule(width: 62)
+                    placeholderCapsule(width: 72)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(14)
+        .background(SpottColor.surface)
+        .clipShape(RoundedRectangle(cornerRadius: SpottMetric.cardRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: SpottMetric.cardRadius, style: .continuous)
+                .stroke(SpottColor.hairline)
+        }
+        .redacted(reason: .placeholder)
+    }
+}
+
+private let placeholderColor = Color.secondary.opacity(0.12)
+
+private func placeholderLine(
+    width: CGFloat? = nil,
+    height: CGFloat = 12,
+    cornerRadius: CGFloat = 4
+) -> some View {
+    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        .fill(placeholderColor)
+        .frame(maxWidth: width ?? .infinity)
+        .frame(height: height)
+}
+
+private func placeholderCapsule(width: CGFloat) -> some View {
+    Capsule()
+        .fill(placeholderColor)
+        .frame(width: width, height: 24)
 }

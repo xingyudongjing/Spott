@@ -420,10 +420,11 @@ final class DiscoveryStoreTests: XCTestCase {
             title: "Osaka after reset",
             coordinate: ["latitude": 34.6937, "longitude": 135.5023, "precision": "approximate"]
         )
+        let firstResponse = ControlledDiscoveryPageResponse()
         let service = TestDiscoveryService { _, requestNumber in
             if requestNumber == 1 {
                 firstRequestStarted.fulfill()
-                try? await Task.sleep(for: .milliseconds(120))
+                return await firstResponse.value()
             }
             return Self.page(items: [osaka])
         }
@@ -434,11 +435,15 @@ final class DiscoveryStoreTests: XCTestCase {
         )
 
         store.selectRegion("osaka")
+        let oldRequest = Task { await store.refresh() }
         await fulfillment(of: [firstRequestStarted], timeout: 1)
         store.resetForSessionChange()
-        await store.refresh()
-        try await Task.sleep(for: .milliseconds(40))
+        let newReceipt = await store.refresh()
+        await firstResponse.resume(returning: Self.page(items: [osaka]))
+        let oldReceipt = await oldRequest.value
 
+        XCTAssertNotNil(newReceipt)
+        XCTAssertNil(oldReceipt)
         XCTAssertEqual(store.mapCameraRevision, 0)
         let queries = await service.recordedQueries()
         XCTAssertEqual(queries.count, 2)
@@ -457,10 +462,10 @@ final class DiscoveryStoreTests: XCTestCase {
             title: "Fixture Osaka",
             coordinate: ["latitude": 34.7000, "longitude": 135.4900, "precision": "approximate"]
         )
+        let firstResponse = ControlledDiscoveryPageResponse()
         let service = TestDiscoveryService { _, _ in
             firstRequestStarted.fulfill()
-            try? await Task.sleep(for: .milliseconds(120))
-            return Self.page(items: [stale])
+            return await firstResponse.value()
         }
         let store = DiscoveryStore(
             service: service,
@@ -469,11 +474,13 @@ final class DiscoveryStoreTests: XCTestCase {
         )
 
         store.selectRegion("osaka")
+        let oldRequest = Task { await store.refresh() }
         await fulfillment(of: [firstRequestStarted], timeout: 1)
         store.replaceWithFixture([fixture])
-        await store.refresh()
-        try await Task.sleep(for: .milliseconds(40))
+        await firstResponse.resume(returning: Self.page(items: [stale]))
+        let oldReceipt = await oldRequest.value
 
+        XCTAssertNil(oldReceipt)
         XCTAssertEqual(store.mapCameraRevision, 0)
         XCTAssertEqual(store.items.map(\.title), ["Fixture Osaka"])
         let queryCount = await service.recordedQueryCount()
@@ -877,6 +884,115 @@ final class DiscoveryStoreTests: XCTestCase {
         XCTAssertNil(summary.exactAddressVisibility)
     }
 
+    func testCanonicalHomeUsesServerRecommendationModuleOrderAndDeduplicatesEvents() async throws {
+        let first = try Self.event(id: 1, title: "First")
+        let second = try Self.event(id: 2, title: "Second")
+        let third = try Self.event(id: 3, title: "Third")
+        let service = TestDiscoveryFeedService(
+            page: Self.page(items: []),
+            feed: Self.feed(
+                modules: [
+                    .init(
+                        key: "interest",
+                        title: "For you",
+                        items: [Self.recommendation(second), Self.recommendation(third)]
+                    ),
+                    .init(
+                        key: "today",
+                        title: "Today",
+                        items: [Self.recommendation(first), Self.recommendation(second)]
+                    ),
+                ],
+                moduleOrder: ["today", "interest"]
+            )
+        )
+        let store = DiscoveryStore(service: service, cache: TestDiscoveryCache())
+
+        let receipt = await store.loadInitial()
+
+        XCTAssertEqual(store.recommendationModules.map(\.key), ["today", "interest"])
+        XCTAssertEqual(store.recommendationSections.map(\.key), ["today", "interest"])
+        XCTAssertEqual(store.recommendationSections.map { $0.events.map(\.title) }, [
+            ["First", "Second"],
+            ["Third"],
+        ])
+        XCTAssertEqual(store.items.map(\.title), ["First", "Second", "Third"])
+        XCTAssertEqual(receipt, .init(region: "tokyo", itemCount: 3))
+        XCTAssertFalse(store.hasMore)
+        let feedRequests = await service.feedRequestCount()
+        let searchRequests = await service.searchRequestCount()
+        XCTAssertEqual(feedRequests, 1)
+        XCTAssertEqual(searchRequests, 0)
+    }
+
+    func testSearchUsesLinearResultsAndClearsHomeRecommendationModules() async throws {
+        let home = try Self.event(id: 1, title: "Home")
+        let search = try Self.event(id: 2, title: "Search")
+        let service = TestDiscoveryFeedService(
+            page: Self.page(items: [search]),
+            feed: Self.feed(
+                modules: [.init(key: "new_events", title: "New", items: [Self.recommendation(home)])],
+                moduleOrder: ["new_events"]
+            )
+        )
+        let store = DiscoveryStore(
+            service: service,
+            cache: TestDiscoveryCache(),
+            debounce: .milliseconds(10)
+        )
+        await store.loadInitial()
+
+        store.searchText = "night walk"
+        store.searchDidChange()
+        try await Task.sleep(for: .milliseconds(80))
+
+        XCTAssertTrue(store.recommendationModules.isEmpty)
+        XCTAssertEqual(store.items.map(\.title), ["Search"])
+        let feedRequests = await service.feedRequestCount()
+        let searchRequests = await service.searchRequestCount()
+        XCTAssertEqual(feedRequests, 1)
+        XCTAssertEqual(searchRequests, 1)
+    }
+
+    func testDiscoveryFeedStripsExactLocationAndDetailOnlyFields() throws {
+        var unsafe = try Self.eventObject(
+            id: 1,
+            title: "Unsafe",
+            coordinate: ["latitude": 35.681236, "longitude": 139.767125, "precision": "exact"]
+        )
+        unsafe["exactAddress"] = "東京都千代田区1-1"
+        unsafe["attendeeRequirements"] = "Private joining instructions"
+        unsafe["recommendation"] = [
+            "score": 9.5,
+            "boosted": false,
+            "components": ["freshness": 9.5],
+        ]
+        let object: [String: Any] = [
+            "banner": NSNull(),
+            "modules": [["key": "today", "title": "Today", "items": [unsafe]]],
+            "moduleOrder": ["today"],
+            "weights": ["freshness": 1.0],
+            "scoringVersion": "v1",
+            "naturalResultsMinRatio": 0.6,
+            "serverTime": "2026-07-16T00:00:00Z",
+            "generatedAt": "2026-07-16T00:00:00Z",
+            "queryExplanationId": "feed-test",
+        ]
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let feed = try decoder.decode(
+            DiscoveryFeed.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+        let item = try XCTUnwrap(feed.modules.first?.items.first)
+
+        XCTAssertNil(item.event.coordinate)
+        XCTAssertNil(item.event.exactAddress)
+        XCTAssertNil(item.event.attendeeRequirements)
+        XCTAssertEqual(item.recommendation.score, 9.5)
+    }
+
     nonisolated private static func page(
         items: [EventSummary],
         nextCursor: String? = nil,
@@ -888,6 +1004,30 @@ final class DiscoveryStoreTests: XCTestCase {
             hasMore: hasMore,
             serverTime: Date(timeIntervalSince1970: 1_773_792_000),
             queryExplanationId: "test"
+        )
+    }
+
+    nonisolated private static func feed(
+        modules: [DiscoveryRecommendationModule],
+        moduleOrder: [String]
+    ) -> DiscoveryFeed {
+        DiscoveryFeed(
+            banner: nil,
+            modules: modules,
+            moduleOrder: moduleOrder,
+            weights: ["freshness": 1],
+            scoringVersion: "v1",
+            naturalResultsMinRatio: 0.6,
+            serverTime: Date(timeIntervalSince1970: 1_773_792_000),
+            generatedAt: Date(timeIntervalSince1970: 1_773_792_000),
+            queryExplanationId: "feed-test"
+        )
+    }
+
+    nonisolated private static func recommendation(_ event: EventSummary) -> DiscoveryRecommendationItem {
+        .init(
+            event: event,
+            recommendation: .init(score: 1, boosted: false, components: ["freshness": 1])
         )
     }
 
@@ -965,6 +1105,51 @@ private actor TestDiscoveryService: DiscoveryServing {
 
     func recordedQueries() -> [EventDiscoveryQuery] { queries }
     func recordedQueryCount() -> Int { queries.count }
+}
+
+private actor ControlledDiscoveryPageResponse {
+    private var response: DiscoveryPage?
+    private var waiters: [CheckedContinuation<DiscoveryPage, Never>] = []
+
+    func value() async -> DiscoveryPage {
+        if let response { return response }
+        return await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func resume(returning response: DiscoveryPage) {
+        guard self.response == nil else { return }
+        self.response = response
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume(returning: response) }
+    }
+}
+
+private actor TestDiscoveryFeedService: DiscoveryServing, DiscoveryFeedServing {
+    private let page: DiscoveryPage
+    private let feed: DiscoveryFeed
+    private var searchRequests = 0
+    private var feedRequests = 0
+
+    init(page: DiscoveryPage, feed: DiscoveryFeed) {
+        self.page = page
+        self.feed = feed
+    }
+
+    func discovery(_ query: EventDiscoveryQuery) async throws -> DiscoveryPage {
+        searchRequests += 1
+        return page
+    }
+
+    func discoveryFeed(_ query: EventDiscoveryQuery) async throws -> DiscoveryFeed {
+        feedRequests += 1
+        return feed
+    }
+
+    func searchRequestCount() -> Int { searchRequests }
+    func feedRequestCount() -> Int { feedRequests }
 }
 
 private actor TestDiscoveryCache: DiscoveryCaching {

@@ -9,17 +9,20 @@ struct EventDetailView: View {
     private let sourceTab: AppTab
     private let refreshOnAppear: Bool
     private let initialViewerSnapshotIsCurrent: Bool
+    private let actionRunner: EventDetailActionRunner?
 
     init(
         event: EventSummary,
         sourceTab: AppTab,
         refreshOnAppear: Bool = true,
-        initialViewerSnapshotIsCurrent: Bool = false
+        initialViewerSnapshotIsCurrent: Bool = false,
+        actionRunner: EventDetailActionRunner? = nil
     ) {
         self.event = event
         self.sourceTab = sourceTab
         self.refreshOnAppear = refreshOnAppear
         self.initialViewerSnapshotIsCurrent = initialViewerSnapshotIsCurrent
+        self.actionRunner = actionRunner
     }
 
     var body: some View {
@@ -30,7 +33,8 @@ struct EventDetailView: View {
             locale: locale,
             sourceTab: sourceTab,
             refreshOnAppear: refreshOnAppear,
-            initialViewerSnapshotIsCurrent: initialViewerSnapshotIsCurrent
+            initialViewerSnapshotIsCurrent: initialViewerSnapshotIsCurrent,
+            actionRunner: actionRunner
         )
         .id(
             "\(model.session?.sessionId.uuidString ?? "guest")-"
@@ -52,9 +56,10 @@ struct EventDetailView: View {
 }
 
 @MainActor
-private struct EventDetailNativeScreen: View {
+struct EventDetailNativeScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openURL) private var openURL
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @State private var store: EventDetailStore
     @State private var registrationPresented = false
@@ -67,6 +72,11 @@ private struct EventDetailNativeScreen: View {
     @State private var reportTarget: SafetyReportTarget?
     @State private var showBlockConfirmation = false
     @State private var feedbackSummary: FeedbackSummary?
+    @State private var shareItem: EventShareItem?
+    @State private var posterEvent: EventSummary?
+    @State private var checkInRegistration: Registration?
+    @State private var cancellationRegistrationID: UUID?
+    @State private var actionRunner: EventDetailActionRunner
 
     private let sourceTab: AppTab
     private let refreshOnAppear: Bool
@@ -79,7 +89,8 @@ private struct EventDetailNativeScreen: View {
         locale: Locale,
         sourceTab: AppTab,
         refreshOnAppear: Bool,
-        initialViewerSnapshotIsCurrent: Bool
+        initialViewerSnapshotIsCurrent: Bool,
+        actionRunner: EventDetailActionRunner? = nil
     ) {
         _store = State(
             initialValue: EventDetailStore(
@@ -91,6 +102,7 @@ private struct EventDetailNativeScreen: View {
             )
         )
         _favorited = State(initialValue: initialEvent.favorited)
+        _actionRunner = State(initialValue: actionRunner ?? EventDetailActionRunner())
         self.sourceTab = sourceTab
         self.refreshOnAppear = refreshOnAppear
         self.locale = locale
@@ -130,6 +142,29 @@ private struct EventDetailNativeScreen: View {
                         )
                     )
 
+                    if !actionBarLayoutPolicy.showsSupportingTextInBar {
+                        Text(actionPresentation.supportingText)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                Color(uiColor: .secondarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            )
+                            .accessibilityIdentifier("event.action.supporting-text")
+                    }
+
+                    if !actionBarLayoutPolicy.pinsActionBar {
+                        EventActionBar(
+                            presentation: actionPresentation,
+                            isBusy: isPrimaryActionBusy,
+                            action: performPrimaryAction
+                        )
+                        .padding(.horizontal, -12)
+                    }
+
                     EventSecondaryActions(
                         canOpenRoute: mapQuery != nil,
                         canAddCalendar: store.event.startsAt != nil,
@@ -138,6 +173,19 @@ private struct EventDetailNativeScreen: View {
                         openRoute: openRoute,
                         addToCalendar: addToCalendar
                     )
+
+                    let serverActions = EventDetailServerActionPolicy.resolve(
+                        event: store.event,
+                        viewerSnapshotIsCurrent: store.hasAuthoritativeViewerSnapshot
+                    )
+                    if !serverActions.isEmpty {
+                        EventDetailServerActionsView(
+                            actions: serverActions,
+                            busyAction: actionRunner.busyAction,
+                            locale: locale,
+                            action: performServerAction
+                        )
+                    }
 
                     NavigationLink {
                         PublicProfileView(identifier: store.event.organizerId.uuidString.lowercased())
@@ -218,11 +266,13 @@ private struct EventDetailNativeScreen: View {
         .background(Color(uiColor: .systemGroupedBackground))
         .refreshable { await refresh() }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            EventActionBar(
-                presentation: .init(state: store.ctaState, locale: locale),
-                isBusy: isPrimaryActionBusy,
-                action: performPrimaryAction
-            )
+            if actionBarLayoutPolicy.pinsActionBar {
+                EventActionBar(
+                    presentation: actionPresentation,
+                    isBusy: isPrimaryActionBusy,
+                    action: performPrimaryAction
+                )
+            }
         }
         .navigationTitle(store.event.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -238,6 +288,24 @@ private struct EventDetailNativeScreen: View {
         .sheet(item: $reportTarget) { target in
             NavigationStack { SafetyReportView(target: target) }
         }
+        .sheet(item: $checkInRegistration) { registration in
+            NavigationStack {
+                ParticipantCheckInView(event: store.event, registration: registration)
+            }
+        }
+        .sheet(item: $shareItem) { item in
+            ShareActivityView(items: [item.url], subject: item.subject)
+                .presentationDetents([.medium])
+        }
+        .sheet(item: $posterEvent) { event in
+            NavigationStack {
+                PosterGeneratorView(
+                    resourceType: "event",
+                    resourceID: event.id,
+                    title: event.title
+                )
+            }
+        }
         .alert(
             text("journey.detail.block_host"),
             isPresented: $showBlockConfirmation
@@ -247,6 +315,21 @@ private struct EventDetailNativeScreen: View {
         } message: {
             Text(text("journey.detail.block_message"))
         }
+        .alert(
+            text("journey.detail.action.cancel_title"),
+            isPresented: cancellationConfirmationBinding
+        ) {
+            Button(
+                text("journey.detail.action.cancel_confirm"),
+                role: .destructive,
+                action: confirmCancellation
+            )
+            Button(text("journey.common.cancel"), role: .cancel) {
+                cancellationRegistrationID = nil
+            }
+        } message: {
+            Text(text("journey.detail.action.cancel_message"))
+        }
         .task { await startIfNeeded() }
         .task(id: store.nextTemporalRefreshDate) {
             await refreshAtNextTemporalBoundary()
@@ -255,19 +338,37 @@ private struct EventDetailNativeScreen: View {
             await resumeDeferredRegistrationIfNeeded()
         }
         .onChange(of: sessionFingerprint) { _, _ in
+            actionRunner.identityDidChange()
+            resetServerActionPresentation()
             store.invalidateViewerSnapshot()
             store.session = ctaSession
             Task { await refresh() }
         }
+        .onChange(of: store.event.id) { _, _ in
+            actionRunner.eventDidChange()
+            resetServerActionPresentation()
+        }
         .onChange(of: store.event.version) { _, _ in
             favorited = store.event.favorited
         }
+        .onDisappear {
+            actionRunner.pageDidDisappear()
+            resetServerActionPresentation()
+        }
+    }
+
+    private var actionPresentation: EventDetailActionPresentation {
+        EventDetailActionPresentation(state: store.ctaState, locale: locale)
+    }
+
+    private var actionBarLayoutPolicy: EventActionBarLayoutPolicy {
+        EventActionBarLayoutPolicy(dynamicTypeSize: dynamicTypeSize)
     }
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
-            ShareLink(item: shareURL, subject: Text(store.event.title)) {
+            Button(action: prepareShare) {
                 Image(systemName: "square.and.arrow.up")
             }
             .accessibilityLabel(text("journey.common.share"))
@@ -280,6 +381,21 @@ private struct EventDetailNativeScreen: View {
             )
 
             Menu {
+                if EventDetailServerActionPolicy.canGeneratePoster(
+                    event: store.event,
+                    viewerID: model.session?.user.id
+                ) {
+                    Button {
+                        posterEvent = store.event
+                    } label: {
+                        Label(
+                            text("journey.poster.menu"),
+                            systemImage: "rectangle.portrait.on.rectangle.portrait"
+                        )
+                    }
+                    Divider()
+                }
+
                 Button {
                     reportTarget = .init(
                         type: .event,
@@ -351,9 +467,13 @@ private struct EventDetailNativeScreen: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var shareURL: URL {
-        URL(string: "https://spott.jp/e/\(store.event.publicSlug)")
-            ?? URL(string: "https://spott.jp")!
+    private var cancellationConfirmationBinding: Binding<Bool> {
+        Binding(
+            get: { cancellationRegistrationID != nil },
+            set: { isPresented in
+                if !isPresented { cancellationRegistrationID = nil }
+            }
+        )
     }
 
     private var sessionFingerprint: String {
@@ -497,6 +617,131 @@ private struct EventDetailNativeScreen: View {
         }
         registrationDraft = intent.draft
         registrationPresented = true
+    }
+
+    private func prepareShare() {
+        let event = store.event
+        Task { @MainActor in
+            let url = await EventShareDestinationPolicy.resolve(
+                event: event,
+                authenticated: model.session != nil
+            ) {
+                let receipt = try await model.api.createShareLink(
+                    resourceType: "event",
+                    resourceID: event.id,
+                    campaign: "ios_event_detail"
+                )
+                return receipt.url
+            }
+            shareItem = .init(url: url, subject: event.title)
+        }
+    }
+
+    private func performServerAction(_ action: EventDetailServerAction) {
+        guard actionRunner.busyAction == nil,
+              isCurrentlyAuthorized(action) else { return }
+        model.requireTrust(for: action.eventAction, event: store.event) {
+            guard isCurrentlyAuthorized(action) else { return }
+            switch action {
+            case .checkIn(let registrationID):
+                openCheckIn(registrationID: registrationID)
+            case .openGroup(let groupID):
+                model.router.push(
+                    .group(groupID),
+                    in: .groups,
+                    selectingExplicitTab: true
+                )
+            case .cancelRegistration(let registrationID):
+                cancellationRegistrationID = registrationID
+            }
+        }
+    }
+
+    private func openCheckIn(registrationID: UUID) {
+        actionRunner.startCheckIn(
+            registrationID: registrationID,
+            locale: locale,
+            snapshot: actionSnapshot,
+            load: { registrationID, eventID in
+                try await EventDetailRegistrationLookup.find(
+                    registrationID: registrationID,
+                    eventID: eventID,
+                    loadPage: { cursor, limit in
+                        let page = try await model.api.registrationItinerary(
+                            cursor: cursor,
+                            limit: limit
+                        )
+                        return CursorPage(
+                            items: page.items.map(\.registration),
+                            nextCursor: page.nextCursor,
+                            hasMore: page.hasMore
+                        )
+                    }
+                )
+            },
+            emit: handleActionEffect
+        )
+    }
+
+    private func confirmCancellation() {
+        guard let registrationID = cancellationRegistrationID else { return }
+        cancellationRegistrationID = nil
+        actionRunner.startCancellation(
+            registrationID: registrationID,
+            locale: locale,
+            snapshot: actionSnapshot,
+            mutate: {
+                _ = try await model.api.cancelRegistration(
+                    registrationID: registrationID
+                )
+            },
+            refresh: {
+                await refresh()
+                return EventCancellationSyncPolicy.outcome(
+                    viewerSnapshotIsCurrent: store.hasAuthoritativeViewerSnapshot,
+                    refreshError: store.error
+                )
+            },
+            emit: handleActionEffect
+        )
+    }
+
+    private func isCurrentlyAuthorized(_ action: EventDetailServerAction) -> Bool {
+        EventDetailActionAuthorizer.isAuthorized(
+            action,
+            event: store.event,
+            viewerSnapshotIsCurrent: store.hasAuthoritativeViewerSnapshot
+        )
+    }
+
+    private func actionSnapshot() -> EventDetailActionRunner.Snapshot {
+        .init(
+            sessionFingerprint: sessionFingerprint,
+            event: store.event,
+            viewerSnapshotIsCurrent: store.hasAuthoritativeViewerSnapshot
+        )
+    }
+
+    private func handleActionEffect(_ effect: EventDetailActionRunner.Effect) {
+        switch effect {
+        case .presentCheckIn(let registration):
+            checkInRegistration = registration
+        case .banner(let error):
+            model.banner = .init(title: error.message, tone: .warning)
+        case .cancellationFinished(.synced):
+            notice = text("journey.detail.action.cancelled")
+        case .cancellationFinished(.refreshFailed):
+            notice = nil
+            model.banner = .init(
+                title: text("journey.detail.action.cancelled_sync_failed"),
+                tone: .warning
+            )
+        }
+    }
+
+    private func resetServerActionPresentation() {
+        checkInRegistration = nil
+        cancellationRegistrationID = nil
     }
 
     private func toggleFavorite() {
@@ -719,6 +964,91 @@ private struct EventSecondaryActions: View {
         }
         .buttonStyle(.bordered)
         .buttonBorderShape(.capsule)
+    }
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        CoreJourneyLocalization.text(key, locale: locale)
+    }
+}
+
+private struct EventDetailServerActionsView: View {
+    let actions: [EventDetailServerAction]
+    let busyAction: EventDetailServerAction?
+    let locale: Locale
+    let action: (EventDetailServerAction) -> Void
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 145), spacing: 10, alignment: .leading),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            Text(text("journey.detail.action.section"))
+                .font(.title3.bold())
+                .accessibilityAddTraits(.isHeader)
+
+            if #available(iOS 26.0, *) {
+                GlassEffectContainer(spacing: 10) {
+                    actionGrid
+                }
+            } else {
+                actionGrid
+            }
+        }
+        .accessibilityIdentifier("event.detail.server_actions")
+    }
+
+    private var actionGrid: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+            ForEach(actions) { serverAction in
+                actionButton(serverAction)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(_ serverAction: EventDetailServerAction) -> some View {
+        let presentation = EventDetailServerActionPresentation(
+            action: serverAction,
+            locale: locale
+        )
+        let button = Button(
+            role: presentation.isDestructive ? .destructive : nil,
+            action: { action(serverAction) }
+        ) {
+            HStack(spacing: 8) {
+                if busyAction == serverAction {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: presentation.systemImage)
+                }
+                Text(presentation.title)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+            }
+            .font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        }
+        .buttonBorderShape(.roundedRectangle(radius: 15))
+        .disabled(busyAction != nil)
+        .accessibilityIdentifier(accessibilityIdentifier(for: serverAction))
+
+        if #available(iOS 26.0, *) {
+            button.buttonStyle(.glass)
+        } else {
+            button.buttonStyle(.bordered)
+        }
+    }
+
+    private func accessibilityIdentifier(
+        for action: EventDetailServerAction
+    ) -> String {
+        switch action {
+        case .checkIn: "event.detail.action.check_in"
+        case .openGroup: "event.detail.action.open_group"
+        case .cancelRegistration: "event.detail.action.cancel_registration"
+        }
     }
 
     private func text(_ key: String.LocalizationValue) -> String {

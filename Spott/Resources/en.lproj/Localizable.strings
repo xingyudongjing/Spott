@@ -1,8 +1,11 @@
 "发现" = "Discover";
 "行程" = "Plans";
+"我的活动" = "My Events";
 "创建" = "Create";
 "社群" = "Communities";
 "我的" = "Profile";
+"打开我的页面" = "Open profile";
+"无法读取这张图片。" = "This image could not be read.";
 "东京" = "Tokyo";
 "神奈川" = "Kanagawa";
 "大阪" = "Osaka";
@@ -390,6 +393,8 @@
 "正在同步…" = "Syncing…";
 "已是最新" = "Up to date";
 "暂时无法连接 Spott，请检查网络后重试。" = "Unable to connect to Spott. Check your network and try again.";
+"无法读取此设备上的登录信息。你仍可浏览公开活动，请稍后重试。" = "Unable to read sign-in information on this device. You can still browse public events. Try again later.";
+"此设备上的登录信息已失效。你仍可浏览公开活动，请重新登录。" = "Sign-in information on this device is no longer valid. You can still browse public events. Sign in again.";
 "验证码已过期，请重新获取。" = "That verification code has expired. Request a new code.";
 "尝试次数过多，请稍后再试。" = "Too many attempts. Wait a moment and try again.";
 "验证码或登录凭证不正确，请重新检查。" = "The verification code or sign-in credential is incorrect. Check it and try again.";
@@ -855,6 +860,13 @@
 "清除筛选" = "Clear filters";
 "加载更多活动…" = "Loading more events…";
 "地点待发布" = "Location pending";
+"今日活动" = "Today";
+"本周末" = "This weekend";
+"附近热门" = "Popular nearby";
+"为你推荐" = "For you";
+"新活动" = "New events";
+"可信主理人" = "Trusted hosts";
+"关注动态" = "Following";
 "费用待发布" = "Fee pending";
 "活动语言待确认" = "Language to be confirmed";
 "活动地图" = "Event map";
@@ -868,3 +880,11 @@
 "更新失败" = "Update failed";
 "重试" = "Retry";
 "更多活动暂时无法加载，请稍后重试。" = "More events could not be loaded. Try again shortly.";
+"埼玉" = "Saitama";
+"千叶" = "Chiba";
+"福冈" = "Fukuoka";
+"北海道" = "Hokkaido";
+"冲绳" = "Okinawa";
+"日本全国" = "All Japan";
+"其他地区" = "Other area";
+"状态更新中" = "Status updating";

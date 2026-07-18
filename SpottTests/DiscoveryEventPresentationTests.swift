@@ -1,4 +1,6 @@
 import Foundation
+import SwiftUI
+import UIKit
 import XCTest
 @testable import Spott
 
@@ -92,6 +94,83 @@ final class DiscoveryEventPresentationTests: XCTestCase {
         )
     }
 
+    func testRecommendationModuleTitlesUseTheServerKeyAndTheActiveAppLocale() {
+        XCTAssertEqual(
+            DiscoveryModulePresentation.title(
+                for: "new_events",
+                serverFallback: "服务器中文标题",
+                locale: Locale(identifier: "en")
+            ),
+            "New events"
+        )
+        XCTAssertEqual(
+            DiscoveryModulePresentation.title(
+                for: "nearby_hot",
+                serverFallback: "服务器中文标题",
+                locale: Locale(identifier: "ja")
+            ),
+            "近くで人気"
+        )
+        XCTAssertEqual(
+            DiscoveryModulePresentation.title(
+                for: "followed_updates",
+                serverFallback: "服务器中文标题",
+                locale: Locale(identifier: "zh-Hans")
+            ),
+            "关注动态"
+        )
+    }
+
+    func testUnknownRecommendationModuleKeepsTheServerTitleForForwardCompatibility() {
+        XCTAssertEqual(
+            DiscoveryModulePresentation.title(
+                for: "future_module",
+                serverFallback: "A future module",
+                locale: Locale(identifier: "en")
+            ),
+            "A future module"
+        )
+    }
+
+    @MainActor
+    func testLoadingSkeletonStartsWithAFullWidthEditorialCover() throws {
+        let controller = UIHostingController(rootView:
+            DiscoverySkeleton()
+                .frame(width: 390, height: 500)
+                .environment(\.colorScheme, .light)
+        )
+        controller.view.frame = CGRect(x: 0, y: 0, width: 390, height: 500)
+        controller.view.backgroundColor = .systemBackground
+        controller.view.layoutIfNeeded()
+        let rendererFormat = UIGraphicsImageRendererFormat()
+        rendererFormat.scale = 1
+        let rendered = UIGraphicsImageRenderer(
+            bounds: controller.view.bounds,
+            format: rendererFormat
+        ).image { _ in
+            controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true)
+        }
+        let image = try XCTUnwrap(rendered.cgImage)
+        let safeInsets = controller.view.safeAreaInsets
+        let leadingProbeX = Int(safeInsets.left + SpottMetric.pageInset + 24)
+        let trailingProbeX = Int(
+            controller.view.bounds.width - safeInsets.right - SpottMetric.pageInset - 24
+        )
+        XCTAssertGreaterThan(
+            trailingProbeX - leadingProbeX,
+            180,
+            "The skeleton test must sample two distant points inside the safe content width."
+        )
+        let leading = try pixelBytes(in: image, x: leadingProbeX, y: 140)
+        let trailing = try pixelBytes(in: image, x: trailingProbeX, y: 140)
+
+        XCTAssertLessThanOrEqual(
+            pixelDistance(leading, trailing),
+            12,
+            "The leading skeleton must be one full-width editorial cover, not a compact row."
+        )
+    }
+
     private func makeEvent(overrides: [String: Any]) throws -> EventSummary {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -103,5 +182,19 @@ final class DiscoveryEventPresentationTests: XCTestCase {
 
     private func normalizingSpaces(_ value: String) -> String {
         value.replacingOccurrences(of: "\u{202F}", with: " ")
+    }
+
+    private func pixelBytes(in image: CGImage, x: Int, y: Int) throws -> [UInt8] {
+        let data = try XCTUnwrap(image.dataProvider?.data)
+        let bytes = CFDataGetBytePtr(data)
+        let bytesPerPixel = image.bitsPerPixel / 8
+        let offset = y * image.bytesPerRow + x * bytesPerPixel
+        return Array(0..<min(4, bytesPerPixel)).map { bytes?[offset + $0] ?? 0 }
+    }
+
+    private func pixelDistance(_ lhs: [UInt8], _ rhs: [UInt8]) -> Int {
+        zip(lhs.prefix(3), rhs.prefix(3)).reduce(0) { partial, values in
+            partial + abs(Int(values.0) - Int(values.1))
+        }
     }
 }

@@ -76,6 +76,23 @@ enum DiscoveryLocalization {
     }
 }
 
+enum DiscoveryModulePresentation {
+    static func title(for key: String, serverFallback: String, locale: Locale) -> String {
+        let localizationKey: String.LocalizationValue? = switch key {
+        case "today": "今日活动"
+        case "weekend": "本周末"
+        case "nearby_hot": "附近热门"
+        case "interest": "为你推荐"
+        case "new_events": "新活动"
+        case "verified_hosts": "可信主理人"
+        case "followed_updates": "关注动态"
+        default: nil
+        }
+        guard let localizationKey else { return serverFallback }
+        return DiscoveryLocalization.text(localizationKey, locale: locale)
+    }
+}
+
 struct DiscoveryEventPresentation {
     let event: EventSummary
     let locale: Locale
@@ -122,8 +139,16 @@ struct DiscoveryEventPresentation {
     }
 
     var accessibilitySummary: String {
-        [event.title, dateText, locationText, formatText, feeText, capacityText]
-            .joined(separator: ", ")
+        ([
+            event.title,
+            dateText,
+            locationText,
+            formatText,
+            feeText,
+            capacityText,
+            event.organizer.name,
+        ] + Array(event.tags.prefix(3)))
+        .joined(separator: ", ")
     }
 
     var approximateLocationAccessibilityLabel: String {

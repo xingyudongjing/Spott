@@ -50,7 +50,11 @@ actor CredentialVault: CredentialStoring {
         let status = SecItemCopyMatching(query as CFDictionary, &value)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = value as? Data else { throw VaultError.status(status) }
-        return try decoder.decode(UserSession.self, from: data)
+        do {
+            return try decoder.decode(UserSession.self, from: data)
+        } catch {
+            throw VaultError.invalidSession
+        }
     }
 
     @discardableResult
@@ -63,4 +67,7 @@ actor CredentialVault: CredentialStoring {
     }
 }
 
-enum VaultError: Error, Sendable { case status(OSStatus) }
+enum VaultError: Error, Sendable {
+    case status(OSStatus)
+    case invalidSession
+}

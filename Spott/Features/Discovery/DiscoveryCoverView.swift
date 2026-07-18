@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DiscoveryEventCover: View {
     let event: EventSummary
+    var cornerRadius: CGFloat = 14
 
     var body: some View {
         Group {
@@ -10,33 +11,51 @@ struct DiscoveryEventCover: View {
                     if let image = phase.image {
                         image.resizable().scaledToFill()
                     } else {
-                        DiscoveryCoverFallback(category: event.category)
+                        DiscoveryCoverFallback(event: event)
                     }
                 }
             } else {
-                DiscoveryCoverFallback(category: event.category)
+                DiscoveryCoverFallback(event: event)
             }
         }
         .clipped()
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .accessibilityHidden(true)
     }
 }
 
 private struct DiscoveryCoverFallback: View {
-    let category: String
+    let event: EventSummary
 
     var body: some View {
         ZStack {
-            Color(uiColor: .secondarySystemBackground)
+            LinearGradient(colors: palette, startPoint: .topLeading, endPoint: .bottomTrailing)
+            Circle()
+                .fill(.white.opacity(0.24))
+                .frame(width: 170, height: 170)
+                .offset(x: 92, y: -58)
+            Circle()
+                .stroke(.white.opacity(0.42), lineWidth: 1)
+                .frame(width: 118, height: 118)
+                .offset(x: 120, y: -82)
             Image(systemName: symbol)
-                .font(.system(size: 30, weight: .medium))
-                .foregroundStyle(SpottColor.twilight)
+                .font(.system(size: 44, weight: .medium))
+                .foregroundStyle(SpottColor.ink.opacity(0.72))
+        }
+    }
+
+    private var palette: [Color] {
+        switch event.category {
+        case "outdoor", "sports": [SpottColor.mint.opacity(0.42), SpottColor.twilightPale]
+        case "food": [SpottColor.coralPale, SpottColor.amber.opacity(0.42)]
+        case "art", "music": [SpottColor.twilightPale, SpottColor.coral.opacity(0.28)]
+        case "family": [SpottColor.coralPale, SpottColor.mint.opacity(0.3)]
+        default: [SpottColor.twilightPale, SpottColor.coralPale]
         }
     }
 
     private var symbol: String {
-        switch category {
+        switch event.category {
         case "music": "waveform"
         case "outdoor": "mountain.2"
         case "sports": "figure.run"

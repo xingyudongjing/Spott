@@ -6,6 +6,7 @@ final class DiscoveryQueryTests: XCTestCase {
     override func tearDown() {
         CancellationURLProtocol.onStart = nil
         CancellationURLProtocol.onStop = nil
+        CancellationURLProtocol.responseData = nil
         super.tearDown()
     }
 
@@ -112,6 +113,43 @@ final class DiscoveryQueryTests: XCTestCase {
             XCTFail("Expected CancellationError, received \(error)")
         }
     }
+
+    func testDiscoveryFeedUsesServerConfiguredFeedEndpointWithoutForwardingACursor() async throws {
+        let requestBox = RequestBox()
+        CancellationURLProtocol.onStart = { request in requestBox.request = request }
+        CancellationURLProtocol.responseData = try JSONSerialization.data(withJSONObject: [
+            "banner": NSNull(),
+            "modules": [],
+            "moduleOrder": ["today", "weekend"],
+            "weights": ["freshness": 1.0],
+            "scoringVersion": "v1",
+            "naturalResultsMinRatio": 0.6,
+            "serverTime": "2026-07-16T00:00:00Z",
+            "generatedAt": "2026-07-16T00:00:00Z",
+            "queryExplanationId": "feed-test",
+        ])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CancellationURLProtocol.self]
+        let client = SpottAPIClient(
+            environment: .init(baseURL: URL(string: "https://api.spott.test/v1")!),
+            credentials: CredentialVault(service: "jp.spott.tests.\(UUID().uuidString)"),
+            session: URLSession(configuration: configuration),
+            usesCredentials: false
+        )
+
+        let feed = try await client.discoveryFeed(
+            .init(region: "tokyo", cursor: "must-not-reach-feed", limit: 20)
+        )
+
+        XCTAssertEqual(requestBox.request?.url?.path, "/v1/discovery/feed")
+        let queryItems = URLComponents(
+            url: try XCTUnwrap(requestBox.request?.url),
+            resolvingAgainstBaseURL: false
+        )?.queryItems
+        XCTAssertEqual(queryItems?.first { $0.name == "region" }?.value, "tokyo")
+        XCTAssertNil(queryItems?.first { $0.name == "cursor" })
+        XCTAssertEqual(feed.moduleOrder, ["today", "weekend"])
+    }
 }
 
 private final class RequestBox: @unchecked Sendable {
@@ -127,10 +165,23 @@ private final class RequestBox: @unchecked Sendable {
 private final class CancellationURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var onStart: ((URLRequest) -> Void)?
     nonisolated(unsafe) static var onStop: (() -> Void)?
+    nonisolated(unsafe) static var responseData: Data?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func startLoading() { Self.onStart?(request) }
+    override func startLoading() {
+        Self.onStart?(request)
+        guard let responseData = Self.responseData else { return }
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: responseData)
+        client?.urlProtocolDidFinishLoading(self)
+    }
     override func stopLoading() { Self.onStop?() }
 }
 

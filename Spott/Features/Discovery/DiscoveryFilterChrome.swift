@@ -1,6 +1,20 @@
 import SwiftUI
 
+struct DiscoveryChromeLayoutPolicy {
+    let dynamicTypeSize: DynamicTypeSize
+
+    var usesStackedFilterLabels: Bool { dynamicTypeSize.isAccessibilitySize }
+    var usesStackedModeBar: Bool { dynamicTypeSize.isAccessibilitySize }
+    var filterLabelLineLimit: Int? { dynamicTypeSize.isAccessibilitySize ? nil : 1 }
+    var emphasizesResultCount: Bool { true }
+    var listBottomContentMargin: CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? 72 : 32
+    }
+}
+
 struct DiscoveryFilterStrip: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     let store: DiscoveryStore
 
     private struct Category: Identifiable {
@@ -26,23 +40,37 @@ struct DiscoveryFilterStrip: View {
         ScrollView(.horizontal, showsIndicators: false) {
             if #available(iOS 26.0, *) {
                 GlassEffectContainer(spacing: 8) {
-                    FilterOptions(store: store, categories: Self.categories)
+                    FilterOptions(
+                        store: store,
+                        categories: Self.categories,
+                        layoutPolicy: layoutPolicy
+                    )
                 }
             } else {
-                FilterOptions(store: store, categories: Self.categories)
+                FilterOptions(
+                    store: store,
+                    categories: Self.categories,
+                    layoutPolicy: layoutPolicy
+                )
             }
         }
         .contentMargins(.horizontal, 16)
-        .contentMargins(.vertical, 8)
-        .frame(height: 60)
+        .contentMargins(.vertical, dynamicTypeSize.isAccessibilitySize ? 12 : 8)
+        .fixedSize(horizontal: false, vertical: true)
         .scrollClipDisabled()
-        .background(Color(uiColor: .systemBackground))
+        .scrollBounceBehavior(.basedOnSize)
+        .background(SpottColor.canvas)
         .accessibilityIdentifier("discovery.filters")
+    }
+
+    private var layoutPolicy: DiscoveryChromeLayoutPolicy {
+        DiscoveryChromeLayoutPolicy(dynamicTypeSize: dynamicTypeSize)
     }
 
     private struct FilterOptions: View {
         let store: DiscoveryStore
         let categories: [Category]
+        let layoutPolicy: DiscoveryChromeLayoutPolicy
 
         var body: some View {
             LazyHStack(spacing: 8) {
@@ -51,10 +79,11 @@ struct DiscoveryFilterStrip: View {
                         title: category.title,
                         symbol: category.symbol,
                         isSelected: store.category == category.value,
+                        layoutPolicy: layoutPolicy,
                         action: { select(category.value) }
                     )
                 }
-                DiscoveryMoreFiltersMenu(store: store)
+                DiscoveryMoreFiltersMenu(store: store, layoutPolicy: layoutPolicy)
             }
         }
 
@@ -70,6 +99,7 @@ private struct CategoryButton: View {
     let title: LocalizedStringKey
     let symbol: String
     let isSelected: Bool
+    let layoutPolicy: DiscoveryChromeLayoutPolicy
     let action: () -> Void
 
     var body: some View {
@@ -92,10 +122,21 @@ private struct CategoryButton: View {
 
     private var button: some View {
         Button(action: action) {
-            Label(title, systemImage: symbol)
+            if layoutPolicy.usesStackedFilterLabels {
+                VStack(spacing: 6) {
+                    Image(systemName: symbol)
+                    Text(title)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .frame(minHeight: 44)
+                .frame(minWidth: 78, minHeight: 72)
+            } else {
+                Label(title, systemImage: symbol)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(layoutPolicy.filterLabelLineLimit)
+                    .frame(minHeight: 44)
+            }
         }
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
@@ -103,6 +144,7 @@ private struct CategoryButton: View {
 
 private struct DiscoveryMoreFiltersMenu: View {
     let store: DiscoveryStore
+    let layoutPolicy: DiscoveryChromeLayoutPolicy
 
     var body: some View {
         if #available(iOS 26.0, *) {
@@ -141,15 +183,30 @@ private struct DiscoveryMoreFiltersMenu: View {
                 Button("清除筛选", role: .destructive, action: store.clearFilters)
             }
         } label: {
-            Label(
-                "筛选",
-                systemImage: store.hasActiveFilters
-                    ? "line.3.horizontal.decrease.circle.fill"
-                    : "line.3.horizontal.decrease.circle"
-            )
-            .font(.subheadline.weight(.semibold))
-            .lineLimit(1)
-            .frame(minHeight: 44)
+            if layoutPolicy.usesStackedFilterLabels {
+                VStack(spacing: 6) {
+                    Image(
+                        systemName: store.hasActiveFilters
+                            ? "line.3.horizontal.decrease.circle.fill"
+                            : "line.3.horizontal.decrease.circle"
+                    )
+                    Text("筛选")
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.subheadline.weight(.semibold))
+                .frame(minWidth: 78, minHeight: 72)
+            } else {
+                Label(
+                    "筛选",
+                    systemImage: store.hasActiveFilters
+                        ? "line.3.horizontal.decrease.circle.fill"
+                        : "line.3.horizontal.decrease.circle"
+                )
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(layoutPolicy.filterLabelLineLimit)
+                .frame(minHeight: 44)
+            }
         }
         .accessibilityIdentifier("discovery.more-filters")
     }

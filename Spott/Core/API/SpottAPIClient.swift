@@ -54,6 +54,19 @@ protocol SessionRestoring: Actor {
 }
 
 actor SpottAPIClient: SessionEnding, SessionRestoring {
+    private enum AuthenticationPolicy: Sendable {
+        case required
+        case optional
+        case none
+
+        var permitsRefresh: Bool {
+            switch self {
+            case .required, .optional: true
+            case .none: false
+            }
+        }
+    }
+
     private struct AuthenticatedRequestContext: Sendable {
         let userID: UUID?
         let sessionID: UUID?
@@ -105,9 +118,26 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
             resolvingAgainstBaseURL: false
         )!
         components.queryItems = query.queryItems
-        let page: DiscoveryPage = try await send(URLRequest(url: components.url!))
+        let page: DiscoveryPage = try await send(
+            URLRequest(url: components.url!),
+            authentication: .optional
+        )
         serverTimeAuthority.calibrate(serverTime: page.serverTime)
         return page
+    }
+
+    func discoveryFeed(_ query: EventDiscoveryQuery) async throws -> DiscoveryFeed {
+        var components = URLComponents(
+            url: environment.baseURL.appending(path: "discovery/feed"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = query.queryItems.filter { $0.name != "cursor" }
+        let feed: DiscoveryFeed = try await send(
+            URLRequest(url: components.url!),
+            authentication: .optional
+        )
+        serverTimeAuthority.calibrate(serverTime: feed.serverTime)
+        return feed
     }
 
     func discovery(region: String, query: String? = nil) async throws -> DiscoveryPage {
@@ -329,7 +359,7 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
     func feedbackSummary(eventID: UUID) async throws -> FeedbackSummary {
         try await send(
             URLRequest(url: environment.baseURL.appending(path: "events/\(eventID.uuidString.lowercased())/feedback-summary")),
-            authenticated: false
+            authentication: .none
         )
     }
 
@@ -633,7 +663,7 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         )!
         components.queryItems = [URLQueryItem(name: "limit", value: String(min(max(limit, 1), 50)))]
         if let cursor { components.queryItems?.append(.init(name: "cursor", value: cursor)) }
-        return try await send(URLRequest(url: components.url!), authenticated: false)
+        return try await send(URLRequest(url: components.url!), authentication: .none)
     }
 
     func createShareLink(
@@ -659,7 +689,7 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
     func resolveShareLink(code: String) async throws -> ShareLinkResolution {
         try await send(
             URLRequest(url: environment.baseURL.appending(path: "shares/\(code)")),
-            authenticated: false
+            authentication: .none
         )
     }
 
@@ -800,7 +830,7 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
     func storeProducts() async throws -> StoreProductCatalog {
         try await send(
             URLRequest(url: environment.baseURL.appending(path: "store/products")),
-            authenticated: false
+            authentication: .none
         )
     }
 
@@ -908,14 +938,18 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
     }
 
     func requestEmailCode(email: String, deviceID: UUID) async throws -> EmailChallenge {
-        try await post("auth/email/challenges", body: ["email": email, "deviceId": deviceID.uuidString.lowercased()], authenticated: false)
+        try await post(
+            "auth/email/challenges",
+            body: ["email": email, "deviceId": deviceID.uuidString.lowercased()],
+            authentication: .none
+        )
     }
 
     func authenticateApple(identityToken: String, nonce: String, deviceID: UUID) async throws -> UserSession {
         let response: UserSession = try await post(
             "auth/apple",
             body: AppleAuthenticationPayload(identityToken: identityToken, nonce: nonce, deviceId: deviceID),
-            authenticated: false
+            authentication: .none
         )
         try await credentials.save(session: response)
         return response
@@ -925,14 +959,22 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         let response: UserSession = try await post(
             "auth/google",
             body: GoogleAuthenticationPayload(idToken: idToken, deviceId: deviceID),
-            authenticated: false
+            authentication: .none
         )
         try await credentials.save(session: response)
         return response
     }
 
     func verifyEmail(challengeID: UUID, code: String, deviceID: UUID) async throws -> UserSession {
-        let response: UserSession = try await post("auth/email/verify", body: ["challengeId": challengeID.uuidString.lowercased(), "code": code, "deviceId": deviceID.uuidString.lowercased()], authenticated: false)
+        let response: UserSession = try await post(
+            "auth/email/verify",
+            body: [
+                "challengeId": challengeID.uuidString.lowercased(),
+                "code": code,
+                "deviceId": deviceID.uuidString.lowercased(),
+            ],
+            authentication: .none
+        )
         try await credentials.save(session: response)
         return response
     }
@@ -1035,18 +1077,23 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         try await credentials.clear(expectedSessionID: expectedSessionID)
     }
 
-    private func post<Response: Decodable & Sendable, Body: Encodable & Sendable>(_ path: String, body: Body, authenticated: Bool = true, idempotencyKey: UUID? = nil) async throws -> Response {
+    private func post<Response: Decodable & Sendable, Body: Encodable & Sendable>(
+        _ path: String,
+        body: Body,
+        authentication: AuthenticationPolicy = .required,
+        idempotencyKey: UUID? = nil
+    ) async throws -> Response {
         var request = URLRequest(url: environment.baseURL.appending(path: path))
         request.httpMethod = "POST"
         request.httpBody = try encoder.encode(body)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let idempotencyKey { request.setValue(idempotencyKey.uuidString.lowercased(), forHTTPHeaderField: "Idempotency-Key") }
-        return try await send(request, authenticated: authenticated)
+        return try await send(request, authentication: authentication)
     }
 
     private func send<Response: Decodable & Sendable>(
         _ source: URLRequest,
-        authenticated: Bool = true,
+        authentication: AuthenticationPolicy = .required,
         canRefresh: Bool = true,
         requestContext: AuthenticatedRequestContext? = nil
     ) async throws -> Response {
@@ -1054,10 +1101,22 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         var context = requestContext
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(UUID().uuidString.lowercased(), forHTTPHeaderField: "X-Request-Id")
-        if context == nil, authenticated, usesCredentials {
-            let stored = try await credentials.session()
-            context = .init(session: stored)
+        if context == nil, usesCredentials {
+            let stored: UserSession?
+            switch authentication {
+            case .required:
+                stored = try await credentials.session()
+            case .optional:
+                do {
+                    stored = try await credentials.session()
+                } catch is VaultError {
+                    stored = nil
+                }
+            case .none:
+                stored = nil
+            }
             if let stored {
+                context = .init(session: stored)
                 request.setValue("Bearer \(stored.accessToken)", forHTTPHeaderField: "Authorization")
             }
         }
@@ -1073,7 +1132,7 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
                 )
                 try await ensureActiveAuthentication(context)
                 if http.statusCode == 401,
-                   authenticated,
+                   authentication.permitsRefresh,
                    canRefresh,
                    let sessionID = context?.sessionID,
                    let userID = context?.userID {
@@ -1084,7 +1143,7 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
                     request.setValue("Bearer \(refreshed.accessToken)", forHTTPHeaderField: "Authorization")
                     return try await send(
                         request,
-                        authenticated: false,
+                        authentication: authentication,
                         canRefresh: false,
                         requestContext: .init(session: refreshed)
                     )

@@ -46,12 +46,19 @@ enum GroupJoinReadiness: Equatable, Sendable {
 
 struct GroupsHomeView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.locale) private var locale
     @State private var groups: [GroupSummary] = []
     @State private var scope = GroupDirectoryScope.discover
     @State private var query = ""
     @State private var loading = false
     @State private var error: UserFacingError?
     @State private var sheet: GroupHomeSheet?
+
+    private var copy: GroupCommunityCopy { GroupCommunityCopy(locale: locale) }
+    private var usesVerticalActions: Bool {
+        GroupCommunityLayout.usesVerticalActions(for: dynamicTypeSize)
+    }
 
     var body: some View {
         ScrollView {
@@ -98,55 +105,26 @@ struct GroupsHomeView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("COMMUNITIES")
-                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                .font(.caption2.weight(.bold).monospaced())
                 .tracking(1.6)
                 .foregroundStyle(SpottColor.coral)
             Text("一次见面，\n可以有很长的以后。")
-                .font(.system(size: 33, weight: .bold, design: .rounded))
-                .tracking(-1.1)
-                .lineSpacing(-2)
+                .font(.largeTitle.weight(.bold))
+                .fontDesign(.rounded)
+                .fixedSize(horizontal: false, vertical: true)
             Text("发现公开社群，关注共同兴趣，也把一次活动延续成长期关系。")
-                .font(.system(size: 14.5, design: .rounded))
+                .font(.subheadline)
+                .fontDesign(.rounded)
                 .foregroundStyle(SpottColor.muted)
                 .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private var controls: some View {
         GroupGlassCluster(spacing: 12) {
             VStack(spacing: 12) {
-                HStack(spacing: 8) {
-                    ForEach(GroupDirectoryScope.allCases) { item in
-                        Button {
-                            select(item)
-                        } label: {
-                            Label(scopeTitle(item), systemImage: item == .discover ? "sparkles" : "person.2.fill")
-                                .font(.system(size: 13.5, weight: .semibold, design: .rounded))
-                                .frame(maxWidth: .infinity, minHeight: 42)
-                                .foregroundStyle(scope == item ? SpottColor.twilightDeep : SpottColor.muted)
-                                .background(
-                                    scope == item ? SpottColor.twilight.opacity(0.13) : Color.clear,
-                                    in: Capsule()
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    if model.session != nil {
-                        Button {
-                            model.requireTrust(for: .joinGroup) { sheet = .create }
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 15, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 42, height: 42)
-                                .background(SpottColor.twilight, in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("创建社群")
-                    }
-                }
-                .padding(5)
-                .spottGlassPanel(shape: Capsule(), interactive: true)
+                scopeControlPanel
 
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass")
@@ -161,6 +139,11 @@ struct GroupsHomeView: View {
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundStyle(SpottColor.muted)
+                                .frame(
+                                    minWidth: GroupCommunityLayout.minimumTouchTarget,
+                                    minHeight: GroupCommunityLayout.minimumTouchTarget
+                                )
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("清除搜索")
@@ -184,9 +167,14 @@ struct GroupsHomeView: View {
         } else if let error, groups.isEmpty {
             SpottStateCard(
                 icon: "wifi.exclamationmark",
-                title: "暂时无法加载社群",
-                message: "\(error.message)\n错误编号：\(error.id)",
-                actionTitle: "重新连接"
+                title: copy.text("暂时无法加载社群"),
+                message: String(
+                    format: copy.text("%@\n错误编号：%@"),
+                    locale: locale,
+                    error.message,
+                    error.id
+                ),
+                actionTitle: copy.text("重新连接")
             ) {
                 Task { await load() }
             }
@@ -195,7 +183,7 @@ struct GroupsHomeView: View {
                 icon: query.isEmpty ? "person.3" : "magnifyingglass",
                 title: emptyTitle,
                 message: emptyMessage,
-                actionTitle: scope == .mine ? "发现公开社群" : nil
+                actionTitle: scope == .mine ? copy.text("发现公开社群") : nil
             ) {
                 scope = .discover
             }
@@ -205,41 +193,68 @@ struct GroupsHomeView: View {
                     self.error = nil
                 }
             }
-            ForEach(groups) { group in
-                NavigationLink {
-                    GroupDetailView(groupID: group.id)
-                } label: {
-                    CommunityCard(group: group)
+            LazyVStack(spacing: 16) {
+                ForEach(groups) { group in
+                    NavigationLink {
+                        GroupDetailView(groupID: group.id)
+                    } label: {
+                        CommunityCard(group: group)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
     }
 
     private var signedOutCard: some View {
-        GroupGlassCard {
-            HStack(alignment: .top, spacing: 15) {
-                Image(systemName: "person.3.sequence.fill")
-                    .font(.system(size: 24, weight: .medium))
-                    .foregroundStyle(SpottColor.twilight)
-                    .frame(width: 48, height: 48)
-                    .background(SpottColor.twilightPale, in: Circle())
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("无需登录也能浏览公开社群")
-                        .font(.system(size: 17, weight: .bold, design: .rounded))
-                    Text("登录后可以加入、关注、评论，并在 iOS 与 Web 实时同步。")
-                        .font(.system(size: 13.5, design: .rounded))
-                        .foregroundStyle(SpottColor.muted)
-                        .lineSpacing(3)
-                    Button("登录或注册") {
-                        model.presentedGate = .login
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.capsule)
-                    .tint(SpottColor.twilight)
+        GroupContentCard {
+            if usesVerticalActions {
+                VStack(alignment: .leading, spacing: 14) {
+                    signedOutIcon
+                    signedOutCopy
+                }
+            } else {
+                HStack(alignment: .top, spacing: 15) {
+                    signedOutIcon
+                    signedOutCopy
                 }
             }
         }
+    }
+
+    private var signedOutIcon: some View {
+        Image(systemName: "person.3.sequence.fill")
+            .font(.system(size: 24, weight: .medium))
+            .foregroundStyle(SpottColor.twilight)
+            .frame(width: 48, height: 48)
+            .background(SpottColor.twilightPale, in: Circle())
+            .accessibilityHidden(true)
+    }
+
+    private var signedOutCopy: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(copy.text("无需登录也能浏览公开社群"))
+                .font(.headline.weight(.bold))
+            Text(copy.text("登录后可以加入、关注、评论，并在 iOS 与 Web 实时同步。"))
+                .font(.subheadline)
+                .foregroundStyle(SpottColor.muted)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("community.signed-out.message")
+            Button {
+                model.presentedGate = .login
+            } label: {
+                Text(copy.signInTitle)
+                    .font(.headline.weight(.semibold))
+                    .frame(
+                        maxWidth: usesVerticalActions ? .infinity : nil,
+                        minHeight: GroupCommunityLayout.minimumTouchTarget
+                    )
+            }
+            .spottProminentActionStyle()
+            .accessibilityIdentifier("community.sign-in")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var loadID: String {
@@ -247,21 +262,19 @@ struct GroupsHomeView: View {
     }
 
     private var emptyTitle: String {
-        if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "没有找到匹配的社群" }
-        return scope == .mine ? "还没有加入社群" : "暂时没有公开社群"
+        if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return copy.text("没有找到匹配的社群")
+        }
+        return scope == .mine ? copy.text("还没有加入社群") : copy.text("暂时没有公开社群")
     }
 
     private var emptyMessage: String {
         if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "试试更短的关键词，或搜索兴趣标签与地区。"
+            return copy.text("试试更短的关键词，或搜索兴趣标签与地区。")
         }
         return scope == .mine
-            ? "从一个感兴趣的社群开始，或创建属于你的长期社区。"
-            : "新的公开社群出现后会展示在这里。"
-    }
-
-    private func scopeTitle(_ item: GroupDirectoryScope) -> String {
-        item == .discover ? "发现" : "我的社群"
+            ? copy.text("从一个感兴趣的社群开始，或创建属于你的长期社区。")
+            : copy.text("新的公开社群出现后会展示在这里。")
     }
 
     private func select(_ item: GroupDirectoryScope) {
@@ -273,6 +286,14 @@ struct GroupsHomeView: View {
     }
 
     private func load() async {
+#if DEBUG
+        if GroupCommunityUITestFixture.isEnabled {
+            loading = false
+            error = nil
+            groups = GroupCommunityUITestFixture.groups
+            return
+        }
+#endif
         if scope.requiresAuthentication, model.session == nil {
             scope = .discover
             return
@@ -309,6 +330,91 @@ struct GroupsHomeView: View {
             self.error = AppModel.map(error)
         }
     }
+
+    @ViewBuilder
+    private var scopeControlPanel: some View {
+        if usesVerticalActions {
+            VStack(spacing: 8) {
+                ForEach(GroupDirectoryScope.allCases) { item in
+                    scopeButton(item)
+                }
+                if model.session != nil {
+                    createGroupButton(expanded: true)
+                }
+            }
+            .padding(6)
+            .spottGlassPanel(
+                shape: RoundedRectangle(cornerRadius: SpottMetric.controlRadius, style: .continuous),
+                interactive: true
+            )
+        } else {
+            HStack(spacing: 8) {
+                ForEach(GroupDirectoryScope.allCases) { item in
+                    scopeButton(item)
+                }
+                if model.session != nil {
+                    createGroupButton(expanded: false)
+                }
+            }
+            .padding(5)
+            .spottGlassPanel(shape: Capsule(), interactive: true)
+        }
+    }
+
+    private func scopeButton(_ item: GroupDirectoryScope) -> some View {
+        Button {
+            select(item)
+        } label: {
+            Label(copy.scopeTitle(item), systemImage: item == .discover ? "sparkles" : "person.2.fill")
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity)
+                .foregroundStyle(scope == item ? SpottColor.twilightDeep : SpottColor.muted)
+        }
+        .buttonStyle(.plain)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: GroupCommunityLayout.minimumTouchTarget
+        )
+        .background(
+            scope == item ? SpottColor.twilight.opacity(0.13) : Color.clear,
+            in: Capsule()
+        )
+        .contentShape(Capsule())
+        .accessibilityLabel(copy.scopeTitle(item))
+        .accessibilityIdentifier("community.scope.\(item.rawValue)")
+    }
+
+    @ViewBuilder
+    private func createGroupButton(expanded: Bool) -> some View {
+        Button {
+            model.requireTrust(for: .joinGroup) { sheet = .create }
+        } label: {
+            if expanded {
+                Label(copy.text("创建社群"), systemImage: "plus")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: GroupCommunityLayout.minimumTouchTarget
+                    )
+                    .background(SpottColor.twilight, in: Capsule())
+            } else {
+                Image(systemName: "plus")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(
+                        width: GroupCommunityLayout.minimumTouchTarget,
+                        height: GroupCommunityLayout.minimumTouchTarget
+                    )
+                    .background(SpottColor.twilight, in: Circle())
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(copy.text("创建社群"))
+    }
 }
 
 private enum GroupHomeSheet: String, Identifiable {
@@ -317,9 +423,32 @@ private enum GroupHomeSheet: String, Identifiable {
 }
 
 private struct CommunityCard: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.locale) private var locale
     let group: GroupSummary
 
+    private var copy: GroupCommunityCopy { GroupCommunityCopy(locale: locale) }
+    private var usesVerticalMetadata: Bool {
+        GroupCommunityLayout.usesVerticalCardMetadata(for: dynamicTypeSize)
+    }
+    private var usesVerticalTags: Bool {
+        GroupCommunityLayout.usesVerticalCardTags(for: dynamicTypeSize)
+    }
+
     var body: some View {
+        cardContent
+            .background(SpottColor.surface)
+            .clipShape(cardShape)
+            .overlay(cardShape.stroke(SpottColor.ink.opacity(0.06), lineWidth: 1))
+            .shadow(color: SpottColor.ink.opacity(0.05), radius: 14, y: 6)
+            .contentShape(cardShape)
+    }
+
+    private var cardShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: SpottMetric.cardRadius, style: .continuous)
+    }
+
+    private var cardContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .bottomLeading) {
                 LinearGradient(colors: palette, startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -329,55 +458,102 @@ private struct CommunityCard: View {
                     .offset(x: 215, y: -56)
                 VStack(alignment: .leading, spacing: 7) {
                     Image(systemName: groupSymbol)
-                        .font(.system(size: 27, weight: .semibold))
+                        .font(.title2.weight(.semibold))
                         .foregroundStyle(SpottColor.twilightDeep)
                     Text(verbatim: group.name)
-                        .font(.system(size: 23, weight: .bold, design: .rounded))
+                        .font(.title3.weight(.bold))
+                        .fontDesign(.rounded)
                         .foregroundStyle(SpottColor.ink)
-                        .lineLimit(2)
+                        .lineLimit(usesVerticalMetadata ? nil : 2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(18)
             }
-            .frame(height: 132)
+            .frame(
+                minHeight: GroupCommunityLayout.cardCoverMinimumHeight(for: dynamicTypeSize)
+            )
 
             VStack(alignment: .leading, spacing: 12) {
                 if !group.description.isEmpty {
                     Text(verbatim: group.description)
-                        .font(.system(size: 13.5, design: .rounded))
+                        .font(.subheadline)
+                        .fontDesign(.rounded)
                         .foregroundStyle(SpottColor.muted)
-                        .lineLimit(2)
+                        .lineLimit(usesVerticalMetadata ? nil : 2)
                         .lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if !group.tags.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 7) {
+                    if usesVerticalTags {
+                        VStack(alignment: .leading, spacing: 8) {
                             ForEach(group.tags.prefix(4), id: \.self) { tag in
-                                Text(verbatim: "#\(tag)")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(SpottColor.twilightDeep)
-                                    .padding(.horizontal, 9)
-                                    .padding(.vertical, 5)
-                                    .background(SpottColor.twilightPale, in: Capsule())
+                                tagPill(tag)
                             }
                         }
+                        .accessibilityElement(children: .contain)
+                    } else {
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 7) {
+                                ForEach(group.tags.prefix(4), id: \.self) { tag in
+                                    tagPill(tag)
+                                }
+                            }
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(group.tags.prefix(4), id: \.self) { tag in
+                                    tagPill(tag)
+                                }
+                            }
+                        }
+                        .accessibilityElement(children: .contain)
                     }
                 }
-                HStack(spacing: 10) {
-                    Label("\(group.memberCount) / \(group.capacity)", systemImage: "person.2")
-                    Label(group.regionId, systemImage: "mappin.and.ellipse")
-                    Spacer(minLength: 0)
-                    GroupStatusPill(group: group)
+                if usesVerticalMetadata {
+                    VStack(alignment: .leading, spacing: 9) {
+                        memberCountLabel
+                        regionLabel
+                        GroupStatusPill(group: group)
+                    }
+                } else {
+                    HStack(spacing: 10) {
+                        memberCountLabel
+                        regionLabel
+                        Spacer(minLength: 0)
+                        GroupStatusPill(group: group)
+                    }
                 }
-                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(SpottColor.muted)
             }
             .padding(17)
         }
-        .spottGlassPanel(
-            shape: RoundedRectangle(cornerRadius: SpottMetric.cardRadius, style: .continuous),
-            interactive: true
-        )
-        .contentShape(RoundedRectangle(cornerRadius: SpottMetric.cardRadius, style: .continuous))
+    }
+
+    private var memberCountLabel: some View {
+        Label("\(group.memberCount) / \(group.capacity)", systemImage: "person.2")
+            .font(.caption.weight(.semibold))
+            .fontDesign(.rounded)
+            .foregroundStyle(SpottColor.muted)
+    }
+
+    private var regionLabel: some View {
+        Label {
+            Text(copy.regionName(group.regionId))
+                .accessibilityIdentifier("community.fixture.region")
+        } icon: {
+            Image(systemName: "mappin.and.ellipse")
+        }
+        .font(.caption.weight(.semibold))
+        .fontDesign(.rounded)
+        .foregroundStyle(SpottColor.muted)
+    }
+
+    private func tagPill(_ tag: String) -> some View {
+        Text(verbatim: "#\(tag)")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(SpottColor.twilightDeep)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(SpottColor.twilightPale, in: Capsule())
+            .accessibilityIdentifier("community.fixture.tag.\(tag)")
     }
 
     private var palette: [Color] {
@@ -403,7 +579,10 @@ private struct CommunityCard: View {
 }
 
 private struct GroupStatusPill: View {
+    @Environment(\.locale) private var locale
     let group: GroupSummary
+
+    private var copy: GroupCommunityCopy { GroupCommunityCopy(locale: locale) }
 
     var body: some View {
         Text(title)
@@ -412,18 +591,17 @@ private struct GroupStatusPill: View {
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
             .background(color.opacity(0.1), in: Capsule())
+            .accessibilityIdentifier("community.fixture.status")
     }
 
     private var title: String {
-        if group.status == "closing" { return "解散通知期" }
-        if group.membershipStatus == "pending" { return "等待审核" }
-        if group.membershipStatus == "active" || group.membershipStatus == "muted" { return "已加入" }
-        if group.memberCount >= group.capacity { return "已满员" }
-        switch group.joinMode {
-        case .open: return "开放加入"
-        case .approval: return "申请加入"
-        case .inviteOnly: return "邀请加入"
-        }
+        copy.statusTitle(
+            groupStatus: group.status,
+            membershipStatus: group.membershipStatus,
+            memberCount: group.memberCount,
+            capacity: group.capacity,
+            joinMode: group.joinMode
+        )
     }
 
     private var color: Color {
@@ -436,6 +614,8 @@ private struct GroupStatusPill: View {
 
 struct GroupDetailView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.locale) private var locale
     let groupID: UUID
     @State private var group: GroupSummary?
     @State private var announcements: [GroupAnnouncement] = []
@@ -443,6 +623,11 @@ struct GroupDetailView: View {
     @State private var mutating = false
     @State private var error: UserFacingError?
     @State private var sheet: GroupDetailSheet?
+
+    private var copy: GroupCommunityCopy { GroupCommunityCopy(locale: locale) }
+    private var usesVerticalActions: Bool {
+        GroupCommunityLayout.usesVerticalActions(for: dynamicTypeSize)
+    }
 
     var body: some View {
         ScrollView {
@@ -465,9 +650,9 @@ struct GroupDetailView: View {
                 } else {
                     SpottStateCard(
                         icon: "person.3",
-                        title: "社群不可用",
-                        message: error?.message ?? "社群已关闭或暂时不可见。",
-                        actionTitle: "重新加载"
+                        title: copy.text("社群不可用"),
+                        message: error?.message ?? copy.text("社群已关闭或暂时不可见。"),
+                        actionTitle: copy.text("重新加载")
                     ) {
                         Task { await loadAll() }
                     }
@@ -478,7 +663,7 @@ struct GroupDetailView: View {
             .padding(.bottom, 40)
         }
         .background(SpottColor.canvas.ignoresSafeArea())
-        .navigationTitle(group?.name ?? "社群")
+        .navigationTitle(group?.name ?? copy.text("社群"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if let group {
@@ -539,48 +724,33 @@ struct GroupDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.82)))
             }
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "person.3.fill")
-                    .font(.system(size: 25, weight: .semibold))
-                    .foregroundStyle(SpottColor.twilightDeep)
-                    .frame(width: 54, height: 54)
-                    .background(Color.white.opacity(0.68), in: Circle())
-                    .overlay(Circle().stroke(Color.white.opacity(0.9)))
-                Spacer()
-                VStack(alignment: .trailing, spacing: 6) {
-                    Text("\(group.memberCount) / \(group.capacity)")
-                        .font(.caption.monospaced().weight(.bold))
-                        .foregroundStyle(SpottColor.ink)
-                    GroupStatusPill(group: group)
+            if usesVerticalActions {
+                VStack(alignment: .leading, spacing: 12) {
+                    heroIcon
+                    heroCapacity(group, alignment: .leading)
+                }
+            } else {
+                HStack(alignment: .top, spacing: 12) {
+                    heroIcon
+                    Spacer()
+                    heroCapacity(group, alignment: .trailing)
                 }
             }
             VStack(alignment: .leading, spacing: 7) {
                 Text(verbatim: group.name)
-                    .font(.system(size: 29, weight: .bold, design: .rounded))
+                    .font(.title.weight(.bold))
+                    .fontDesign(.rounded)
                     .foregroundStyle(SpottColor.ink)
+                    .fixedSize(horizontal: false, vertical: true)
                 Label {
-                    Text(verbatim: "\(group.owner.name) · \(group.regionId)")
+                    Text(verbatim: "\(group.owner.name) · \(copy.regionName(group.regionId))")
                 } icon: {
                     Image(systemName: "person.crop.circle")
                 }
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(SpottColor.muted)
             }
-            HStack(spacing: 9) {
-                followButton(group)
-                if group.membershipStatus == nil, group.availableActions.contains("joinGroup") {
-                    joinButton(group)
-                } else if let membershipStatus = group.membershipStatus {
-                    Label(
-                        membershipStatus == "pending" ? "申请审核中" : membershipStatus == "muted" ? "已加入 · 暂停评论" : "已加入社群",
-                        systemImage: membershipStatus == "pending" ? "clock.fill" : "checkmark.circle.fill"
-                    )
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(membershipStatus == "pending" ? SpottColor.amber : SpottColor.mint)
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .background(Color.white.opacity(0.64), in: Capsule())
-                }
-            }
+            groupActions(group)
         }
         .padding(20)
         .background(
@@ -602,13 +772,40 @@ struct GroupDetailView: View {
         .shadow(color: SpottColor.ink.opacity(0.07), radius: 20, y: 9)
     }
 
+    private var heroIcon: some View {
+        Image(systemName: "person.3.fill")
+            .font(.title2.weight(.semibold))
+            .foregroundStyle(SpottColor.twilightDeep)
+            .frame(
+                minWidth: GroupCommunityLayout.minimumTouchTarget,
+                minHeight: GroupCommunityLayout.minimumTouchTarget
+            )
+            .padding(5)
+            .background(Color.white.opacity(0.68), in: Circle())
+            .overlay(Circle().stroke(Color.white.opacity(0.9)))
+            .accessibilityHidden(true)
+    }
+
+    private func heroCapacity(
+        _ group: GroupSummary,
+        alignment: HorizontalAlignment
+    ) -> some View {
+        VStack(alignment: alignment, spacing: 6) {
+            Text("\(group.memberCount) / \(group.capacity)")
+                .font(.caption.monospaced().weight(.bold))
+                .foregroundStyle(SpottColor.ink)
+            GroupStatusPill(group: group)
+        }
+    }
+
     @ViewBuilder
     private func about(_ group: GroupSummary) -> some View {
         if !group.description.isEmpty || !group.rules.isEmpty || !group.tags.isEmpty {
-            GroupGlassCard {
+            GroupContentCard {
                 VStack(alignment: .leading, spacing: 15) {
                     Label("关于社群", systemImage: "info.circle")
-                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .font(.headline.weight(.bold))
+                        .fontDesign(.rounded)
                     if !group.description.isEmpty {
                         Text(verbatim: group.description)
                             .font(.body)
@@ -638,7 +835,8 @@ struct GroupDetailView: View {
         VStack(alignment: .leading, spacing: 13) {
             HStack {
                 Label("公告", systemImage: "megaphone.fill")
-                    .font(.system(size: 21, weight: .bold, design: .rounded))
+                    .font(.title3.weight(.bold))
+                    .fontDesign(.rounded)
                 Spacer()
                 Text("\(announcements.count) 条")
                     .font(.caption.weight(.semibold))
@@ -649,7 +847,10 @@ struct GroupDetailView: View {
                     } label: {
                         Image(systemName: "square.and.pencil")
                             .font(.system(size: 14, weight: .bold))
-                            .frame(width: 38, height: 38)
+                            .frame(
+                                width: GroupCommunityLayout.minimumTouchTarget,
+                                height: GroupCommunityLayout.minimumTouchTarget
+                            )
                             .spottGlassPanel(shape: Circle(), tint: SpottColor.twilightPale)
                     }
                     .buttonStyle(.plain)
@@ -657,7 +858,7 @@ struct GroupDetailView: View {
                 }
             }
             if announcements.isEmpty {
-                GroupGlassCard {
+                GroupContentCard {
                     HStack(spacing: 13) {
                         Image(systemName: "megaphone")
                             .font(.system(size: 22))
@@ -665,7 +866,11 @@ struct GroupDetailView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("还没有公告")
                                 .font(.subheadline.weight(.bold))
-                            Text(policy(group).canManageAnnouncements ? "发布第一条公告，让成员看到最新安排。" : "管理员发布更新后会展示在这里。")
+                            Text(copy.text(
+                                policy(group).canManageAnnouncements
+                                    ? "发布第一条公告，让成员看到最新安排。"
+                                    : "管理员发布更新后会展示在这里。"
+                            ))
                                 .font(.caption)
                                 .foregroundStyle(SpottColor.muted)
                         }
@@ -686,7 +891,7 @@ struct GroupDetailView: View {
     }
 
     private func dissolutionBanner(_ group: GroupSummary) -> some View {
-        GroupGlassCard(tint: SpottColor.coralPale.opacity(0.62)) {
+        GroupContentCard(tint: SpottColor.coralPale.opacity(0.62)) {
             HStack(alignment: .top, spacing: 13) {
                 Image(systemName: "hourglass")
                     .font(.system(size: 20, weight: .semibold))
@@ -715,12 +920,15 @@ struct GroupDetailView: View {
             setFollow(group)
         } label: {
             Label(
-                group.viewerFollowing ? "已关注" : "关注",
+                copy.text(group.viewerFollowing ? "已关注" : "关注"),
                 systemImage: group.viewerFollowing ? "star.fill" : "star"
             )
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(group.viewerFollowing ? SpottColor.twilightDeep : SpottColor.ink)
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: GroupCommunityLayout.minimumTouchTarget
+            )
             .spottGlassPanel(shape: Capsule(), tint: group.viewerFollowing ? SpottColor.twilightPale : nil)
         }
         .buttonStyle(.plain)
@@ -735,10 +943,13 @@ struct GroupDetailView: View {
                 performJoin(group, inviteCode: nil)
             }
         } label: {
-            Label(joinTitle(group), systemImage: "person.badge.plus")
+            Label(copy.joinTitle(group.joinMode), systemImage: "person.badge.plus")
                 .font(.subheadline.weight(.bold))
                 .foregroundStyle(.white)
-                .frame(maxWidth: .infinity, minHeight: 44)
+                .frame(
+                    maxWidth: .infinity,
+                    minHeight: GroupCommunityLayout.minimumTouchTarget
+                )
                 .background(SpottColor.twilight, in: Capsule())
                 .shadow(color: SpottColor.twilight.opacity(0.2), radius: 10, y: 5)
         }
@@ -780,7 +991,11 @@ struct GroupDetailView: View {
                 }
                 if policy.canDissolve {
                     Divider()
-                    Button(group.status == "closing" ? "查看解散计划" : "申请解散", systemImage: "hourglass", role: group.status == "closing" ? nil : .destructive) {
+                    Button(
+                        copy.text(group.status == "closing" ? "查看解散计划" : "申请解散"),
+                        systemImage: "hourglass",
+                        role: group.status == "closing" ? nil : .destructive
+                    ) {
                         sheet = .dissolution(group)
                     }
                 }
@@ -791,11 +1006,36 @@ struct GroupDetailView: View {
         }
     }
 
-    private func joinTitle(_ group: GroupSummary) -> String {
-        switch group.joinMode {
-        case .open: "加入社群"
-        case .approval: "申请加入"
-        case .inviteOnly: "使用邀请码"
+    @ViewBuilder
+    private func groupActions(_ group: GroupSummary) -> some View {
+        if usesVerticalActions {
+            VStack(spacing: 9) {
+                actionItems(group)
+            }
+        } else {
+            HStack(spacing: 9) {
+                actionItems(group)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func actionItems(_ group: GroupSummary) -> some View {
+        followButton(group)
+        if group.membershipStatus == nil, group.availableActions.contains("joinGroup") {
+            joinButton(group)
+        } else if let membershipStatus = group.membershipStatus {
+            Label(
+                copy.membershipTitle(membershipStatus),
+                systemImage: membershipStatus == "pending" ? "clock.fill" : "checkmark.circle.fill"
+            )
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(membershipStatus == "pending" ? SpottColor.amber : SpottColor.mint)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: GroupCommunityLayout.minimumTouchTarget
+            )
+            .background(Color.white.opacity(0.64), in: Capsule())
         }
     }
 
@@ -903,7 +1143,7 @@ private struct GroupAnnouncementCard: View {
     @State private var error: UserFacingError?
 
     var body: some View {
-        GroupGlassCard {
+        GroupContentCard {
             VStack(alignment: .leading, spacing: 13) {
                 HStack(alignment: .top, spacing: 10) {
                     VStack(alignment: .leading, spacing: 5) {
@@ -913,12 +1153,15 @@ private struct GroupAnnouncementCard: View {
                                     .font(.caption2.weight(.bold))
                                     .foregroundStyle(SpottColor.coral)
                             }
-                            Text(announcement.visibility == "public" ? "公开" : "仅成员")
+                            Text(LocalizedStringKey(
+                                announcement.visibility == "public" ? "公开" : "仅成员"
+                            ))
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(SpottColor.muted)
                         }
                         Text(verbatim: announcement.title)
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .font(.headline.weight(.bold))
+                            .fontDesign(.rounded)
                             .foregroundStyle(SpottColor.ink)
                     }
                     Spacer()
@@ -1051,6 +1294,7 @@ private struct GroupAnnouncementCard: View {
 
 private struct GroupAnnouncementDetailView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.locale) private var locale
     let group: GroupSummary
     let canManage: Bool
     let onAnnouncementChange: () async -> Void
@@ -1127,7 +1371,7 @@ private struct GroupAnnouncementDetailView: View {
     }
 
     private var announcementBody: some View {
-        GroupGlassCard {
+        GroupContentCard {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
                     if announcement.pinnedAt != nil {
@@ -1135,12 +1379,15 @@ private struct GroupAnnouncementDetailView: View {
                             .foregroundStyle(SpottColor.coral)
                     }
                     Spacer()
-                    Text(announcement.visibility == "public" ? "公开" : "仅成员")
+                    Text(LocalizedStringKey(
+                        announcement.visibility == "public" ? "公开" : "仅成员"
+                    ))
                         .foregroundStyle(SpottColor.muted)
                 }
                 .font(.caption.weight(.semibold))
                 Text(verbatim: announcement.title)
-                    .font(.system(size: 25, weight: .bold, design: .rounded))
+                    .font(.title2.weight(.bold))
+                    .fontDesign(.rounded)
                 Text(verbatim: announcement.body)
                     .font(.body)
                     .lineSpacing(6)
@@ -1176,7 +1423,8 @@ private struct GroupAnnouncementDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("评论")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .font(.title3.weight(.bold))
+                    .fontDesign(.rounded)
                 Spacer()
                 Text("\(comments.count) 条")
                     .font(.caption.weight(.semibold))
@@ -1187,9 +1435,11 @@ private struct GroupAnnouncementDetailView: View {
                     .frame(maxWidth: .infinity)
                     .padding()
             } else if comments.isEmpty {
-                GroupGlassCard {
+                GroupContentCard {
                     Label(
-                        announcement.commentsEnabled ? "还没有评论" : "这条公告已关闭评论",
+                        LocalizedStringKey(
+                            announcement.commentsEnabled ? "还没有评论" : "这条公告已关闭评论"
+                        ),
                         systemImage: announcement.commentsEnabled ? "bubble.left" : "bubble.left.slash"
                     )
                     .font(.subheadline.weight(.semibold))
@@ -1201,7 +1451,7 @@ private struct GroupAnnouncementDetailView: View {
                 }
             }
             if announcement.commentsEnabled, group.membershipStatus == "active" {
-                GroupGlassCard {
+                GroupContentCard {
                     VStack(alignment: .leading, spacing: 10) {
                         TextField("写下对公告的回应", text: $draft, axis: .vertical)
                             .lineLimit(2...6)
@@ -1234,7 +1484,7 @@ private struct GroupAnnouncementDetailView: View {
     }
 
     private func commentRow(_ comment: GroupComment) -> some View {
-        GroupGlassCard {
+        GroupContentCard {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "person.crop.circle.fill")
                     .font(.system(size: 29))
@@ -1296,7 +1546,7 @@ private struct GroupAnnouncementDetailView: View {
                     groupID: group.id,
                     announcementID: announcement.id,
                     body: body,
-                    locale: groupCommentLocale
+                    locale: GroupCommunityCommentLocale.identifier(for: locale)
                 )
                 comments.append(comment)
                 draft = ""
@@ -1366,11 +1616,14 @@ private struct CommentEditTarget: Identifiable {
 private struct GroupCommentEditor: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
     let comment: GroupComment
     let completion: (GroupComment) -> Void
     @State private var commentText: String
     @State private var busy = false
     @State private var error: UserFacingError?
+
+    private var copy: GroupCommunityCopy { GroupCommunityCopy(locale: locale) }
 
     init(comment: GroupComment, completion: @escaping (GroupComment) -> Void) {
         self.comment = comment
@@ -1403,7 +1656,7 @@ private struct GroupCommentEditor: View {
                     Button("取消") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(busy ? "保存中…" : "保存") { save() }
+                    Button(copy.text(busy ? "保存中…" : "保存")) { save() }
                         .disabled(commentText.trimmed.isEmpty || commentText.count > 2_000 || busy)
                 }
             }
@@ -1433,6 +1686,7 @@ private struct GroupCommentEditor: View {
 private struct GroupAnnouncementEditor: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
     let group: GroupSummary
     let announcement: GroupAnnouncement?
     let completion: () async -> Void
@@ -1442,6 +1696,8 @@ private struct GroupAnnouncementEditor: View {
     @State private var commentsEnabled: Bool
     @State private var busy = false
     @State private var error: UserFacingError?
+
+    private var copy: GroupCommunityCopy { GroupCommunityCopy(locale: locale) }
 
     init(
         group: GroupSummary,
@@ -1485,13 +1741,13 @@ private struct GroupAnnouncementEditor: View {
             }
             .scrollContentBackground(.hidden)
             .background(SpottColor.canvas)
-            .navigationTitle(announcement == nil ? "发布公告" : "编辑公告")
+            .navigationTitle(copy.text(announcement == nil ? "发布公告" : "编辑公告"))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(busy ? "保存中…" : "保存") { save() }
+                    Button(copy.text(busy ? "保存中…" : "保存")) { save() }
                         .disabled(!valid || busy)
                 }
             }
@@ -1540,11 +1796,14 @@ private struct GroupAnnouncementEditor: View {
 private struct JoinGroupView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
     let group: GroupSummary
     let completion: () async -> Void
     @State private var inviteCode = ""
     @State private var busy = false
     @State private var error: UserFacingError?
+
+    private var copy: GroupCommunityCopy { GroupCommunityCopy(locale: locale) }
 
     var body: some View {
         NavigationStack {
@@ -1553,7 +1812,7 @@ private struct JoinGroupView: View {
                     LabeledContent("社群") {
                         Text(verbatim: group.name)
                     }
-                    LabeledContent("加入方式", value: joinModeTitle(group.joinMode))
+                    LabeledContent("加入方式", value: copy.joinModeTitle(group.joinMode))
                     if group.joinMode == .inviteOnly {
                         TextField("邀请码", text: $inviteCode)
                             .textInputAutocapitalization(.characters)
@@ -1562,7 +1821,7 @@ private struct JoinGroupView: View {
                 } header: {
                     Text("加入社群")
                 } footer: {
-                    Text(joinModeExplanation(group.joinMode))
+                    Text(copy.joinModeExplanation(group.joinMode))
                 }
                 if let error {
                     Section {
@@ -1577,7 +1836,7 @@ private struct JoinGroupView: View {
                         if busy {
                             ProgressView().frame(maxWidth: .infinity)
                         } else {
-                            Text(group.joinMode == .approval ? "提交加入申请" : "确认加入")
+                            Text(copy.text(group.joinMode == .approval ? "提交加入申请" : "确认加入"))
                                 .frame(maxWidth: .infinity)
                         }
                     }
@@ -1629,12 +1888,15 @@ private struct JoinGroupView: View {
 
 private struct GroupMembersView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.locale) private var locale
     let group: GroupSummary
     @State private var members: [GroupMember] = []
     @State private var filter = "all"
     @State private var loading = true
     @State private var busyMemberID: UUID?
     @State private var error: UserFacingError?
+
+    private var copy: GroupCommunityCopy { GroupCommunityCopy(locale: locale) }
 
     var body: some View {
         NavigationStack {
@@ -1694,7 +1956,7 @@ private struct GroupMembersView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(verbatim: member.user.name)
                     .font(.subheadline.weight(.bold))
-                Text(verbatim: "@\(member.user.handle) · \(memberRoleTitle(member.role)) · \(memberStatusTitle(member.status))")
+                Text(verbatim: "@\(member.user.handle) · \(copy.memberRoleTitle(member.role)) · \(copy.memberStatusTitle(member.status))")
                     .font(.caption)
                     .foregroundStyle(SpottColor.muted)
             }
@@ -1728,7 +1990,7 @@ private struct GroupMembersView: View {
                     if group.membershipRole == "owner", member.status == "active" {
                         Divider()
                         Button(
-                            member.role == "admin" ? "撤销管理员" : "设为管理员",
+                            copy.text(member.role == "admin" ? "撤销管理员" : "设为管理员"),
                             systemImage: member.role == "admin" ? "star.slash" : "star"
                         ) {
                             update(member, role: member.role == "admin" ? "member" : "admin")
@@ -1825,7 +2087,7 @@ private struct GroupInviteView: View {
                         if busy {
                             ProgressView().frame(maxWidth: .infinity)
                         } else {
-                            Text(invite == nil ? "生成邀请" : "生成新邀请")
+                            Text(LocalizedStringKey(invite == nil ? "生成邀请" : "生成新邀请"))
                                 .frame(maxWidth: .infinity)
                         }
                     }
@@ -1964,6 +2226,7 @@ private struct GroupCapacityView: View {
 private struct GroupCoverEditor: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
     let group: GroupSummary
     let completion: () async -> Void
     @State private var selection: PhotosPickerItem?
@@ -2003,7 +2266,10 @@ private struct GroupCoverEditor: View {
                     .lineSpacing(4)
 
                 PhotosPicker(selection: $selection, matching: .images) {
-                    Label(group.coverURL == nil ? "选择社群封面" : "更换社群封面", systemImage: "photo.on.rectangle.angled")
+                    Label(
+                        LocalizedStringKey(group.coverURL == nil ? "选择社群封面" : "更换社群封面"),
+                        systemImage: "photo.on.rectangle.angled"
+                    )
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(PrimaryButtonStyle())
@@ -2037,21 +2303,19 @@ private struct GroupCoverEditor: View {
         busy = true
         defer { busy = false }
         do {
-            guard let data = try await item.loadTransferable(type: Data.self),
-                  let image = UIImage(data: data),
-                  let jpeg = image.jpegData(compressionQuality: 0.86)
-            else {
-                throw APIError(status: 0, code: "IMAGE_INVALID", message: "无法读取这张图片。", retryable: false)
-            }
+            let data = try await item.loadTransferable(type: Data.self)
+            let prepared = try GroupCommunityImageDecoder.prepare(data: data)
             _ = try await model.api.uploadGroupCover(
-                data: jpeg,
+                data: prepared.jpegData,
                 filename: "group-cover.jpg",
                 mimeType: "image/jpeg",
                 groupID: group.id
             )
-            previewImage = image
+            previewImage = prepared.image
             await completion()
             dismiss()
+        } catch let failure as GroupCommunityImageFailure {
+            self.error = failure.userFacing(locale: locale)
         } catch {
             self.error = AppModel.map(error)
         }
@@ -2060,6 +2324,7 @@ private struct GroupCoverEditor: View {
 
 private struct GroupTransferView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.locale) private var locale
     let group: GroupSummary
     let completion: () async -> Void
     @State private var members: [GroupMember] = []
@@ -2069,6 +2334,8 @@ private struct GroupTransferView: View {
     @State private var loading = true
     @State private var busy = false
     @State private var error: UserFacingError?
+
+    private var copy: GroupCommunityCopy { GroupCommunityCopy(locale: locale) }
 
     var body: some View {
         NavigationStack {
@@ -2125,7 +2392,7 @@ private struct GroupTransferView: View {
     @ViewBuilder
     private func transferStatus(_ lifecycle: GroupLifecycleMutation) -> some View {
         Section("转让状态") {
-            Label(transferStateTitle(lifecycle.state), systemImage: "arrow.left.arrow.right.circle.fill")
+            Label(copy.transferStateTitle(lifecycle.state), systemImage: "arrow.left.arrow.right.circle.fill")
             if let expiresAt = lifecycle.expiresAt {
                 LabeledContent(
                     "接收确认截止",
@@ -2384,11 +2651,12 @@ private struct GroupDissolutionView: View {
 private struct CreateGroupView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
     let completion: (GroupSummary) -> Void
     @State private var name = ""
     @State private var description = ""
     @State private var joinMode = GroupJoinMode.approval
-    @State private var region = "tokyo"
+    @State private var region = GroupCommunityRegion.tokyo
     @State private var category = "outdoor"
     @State private var tags = ""
     @State private var rules = ""
@@ -2401,6 +2669,8 @@ private struct CreateGroupView: View {
     @State private var coverJPEG: Data?
     @State private var coverPreview: UIImage?
     @State private var createdGroup: GroupSummary?
+
+    private var copy: GroupCommunityCopy { GroupCommunityCopy(locale: locale) }
 
     var body: some View {
         NavigationStack {
@@ -2427,10 +2697,15 @@ private struct CreateGroupView: View {
                         .lineLimit(4...10)
                     Picker("加入方式", selection: $joinMode) {
                         ForEach(GroupJoinMode.allCases) { mode in
-                            Text(joinModeTitle(mode)).tag(mode)
+                            Text(copy.joinModeTitle(mode)).tag(mode)
                         }
                     }
-                    TextField("地区", text: $region)
+                    Picker("地区", selection: $region) {
+                        ForEach(GroupCommunityRegion.allCases) { option in
+                            Text(option.title(using: copy)).tag(option)
+                        }
+                    }
+                    .accessibilityIdentifier("community.create.region")
                     Picker("类别", selection: $category) {
                         Text("户外").tag("outdoor")
                         Text("文化").tag("culture")
@@ -2506,9 +2781,7 @@ private struct CreateGroupView: View {
                 }
             }
             .task {
-                if region == "tokyo" {
-                    region = model.region
-                }
+                region = GroupCommunityRegion.safeSelection(for: model.region)
             }
             .onChange(of: coverItem) { _, item in
                 guard let item else { return }
@@ -2527,7 +2800,6 @@ private struct CreateGroupView: View {
     private var valid: Bool {
         (2...30).contains(name.trimmed.count)
             && (20...1_000).contains(description.trimmed.count)
-            && !region.trimmed.isEmpty
             && !category.isEmpty
             && parsedTags.count <= 5
             && rules.count <= 4_000
@@ -2577,7 +2849,7 @@ private struct CreateGroupView: View {
                     slug: slug,
                     description: description.trimmed,
                     joinMode: joinMode,
-                    regionId: region.trimmed,
+                    regionId: region.rawValue,
                     categoryId: category,
                     tags: Array(parsedTags.prefix(5)),
                     rules: rules.trimmed
@@ -2599,15 +2871,13 @@ private struct CreateGroupView: View {
 
     private func loadCover(_ item: PhotosPickerItem) async {
         do {
-            guard let data = try await item.loadTransferable(type: Data.self),
-                  let image = UIImage(data: data),
-                  let jpeg = image.jpegData(compressionQuality: 0.86)
-            else {
-                throw APIError(status: 0, code: "IMAGE_INVALID", message: "无法读取这张图片。", retryable: false)
-            }
-            coverPreview = image
-            coverJPEG = jpeg
+            let data = try await item.loadTransferable(type: Data.self)
+            let prepared = try GroupCommunityImageDecoder.prepare(data: data)
+            coverPreview = prepared.image
+            coverJPEG = prepared.jpegData
             error = nil
+        } catch let failure as GroupCommunityImageFailure {
+            self.error = failure.userFacing(locale: locale)
         } catch {
             self.error = AppModel.map(error)
         }
@@ -2651,7 +2921,7 @@ private struct CreateGroupView: View {
     }
 }
 
-private struct GroupGlassCard<Content: View>: View {
+private struct GroupContentCard<Content: View>: View {
     let tint: Color?
     @ViewBuilder let content: Content
 
@@ -2664,11 +2934,21 @@ private struct GroupGlassCard<Content: View>: View {
         content
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .spottGlassPanel(
-                shape: RoundedRectangle(cornerRadius: SpottMetric.cardRadius, style: .continuous),
-                tint: tint,
-                interactive: false
+            .background(
+                tint ?? SpottColor.surface,
+                in: RoundedRectangle(
+                    cornerRadius: SpottMetric.cardRadius,
+                    style: .continuous
+                )
             )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: SpottMetric.cardRadius,
+                    style: .continuous
+                )
+                .stroke(SpottColor.ink.opacity(0.06), lineWidth: 1)
+            }
+            .shadow(color: SpottColor.ink.opacity(0.05), radius: 14, y: 6)
     }
 }
 
@@ -2746,57 +3026,6 @@ private struct GroupSkeleton: View {
             .fill(Color.black.opacity(0.045))
             .frame(height: 246)
             .redacted(reason: .placeholder)
-    }
-}
-
-private var groupCommentLocale: String {
-    let language = Locale.preferredLanguages.first?.lowercased() ?? "en"
-    if language.hasPrefix("zh") { return "zh-Hans" }
-    if language.hasPrefix("ja") { return "ja" }
-    return "en"
-}
-
-private func joinModeTitle(_ mode: GroupJoinMode) -> String {
-    switch mode {
-    case .open: "公开加入"
-    case .approval: "申请审核"
-    case .inviteOnly: "仅限邀请"
-    }
-}
-
-private func joinModeExplanation(_ mode: GroupJoinMode) -> String {
-    switch mode {
-    case .open: "确认后会立即成为社群成员。"
-    case .approval: "管理员审核通过后才会成为社群成员。"
-    case .inviteOnly: "请输入管理员提供的有效邀请码。"
-    }
-}
-
-private func memberRoleTitle(_ role: String) -> String {
-    switch role {
-    case "owner": "群主"
-    case "admin": "管理员"
-    default: "成员"
-    }
-}
-
-private func memberStatusTitle(_ status: String) -> String {
-    switch status {
-    case "pending": "待审核"
-    case "active": "活跃"
-    case "muted": "已暂停评论"
-    case "removed": "已移除"
-    default: status
-    }
-}
-
-private func transferStateTitle(_ state: String) -> String {
-    switch state {
-    case "awaiting_target": "等待接收人确认"
-    case "cooling_off": "24 小时冷静期"
-    case "completed": "转让已完成"
-    case "cancelled": "转让已取消"
-    default: state
     }
 }
 

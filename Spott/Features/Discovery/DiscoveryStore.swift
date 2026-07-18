@@ -7,6 +7,12 @@ protocol DiscoveryServing: Sendable {
 
 extension SpottAPIClient: DiscoveryServing {}
 
+protocol DiscoveryFeedServing: Sendable {
+    func discoveryFeed(_ query: EventDiscoveryQuery) async throws -> DiscoveryFeed
+}
+
+extension SpottAPIClient: DiscoveryFeedServing {}
+
 protocol DiscoveryCaching: Sendable {
     func cachedEvents() async throws -> [EventSummary]
     func replaceEvents(_ events: [EventSummary]) async throws
@@ -28,6 +34,14 @@ struct DiscoveryReplacementReceipt: Equatable, Sendable {
     let itemCount: Int
 }
 
+struct DiscoveryRecommendationSection: Identifiable, Sendable {
+    let key: String
+    let serverTitle: String
+    let events: [EventSummary]
+
+    var id: String { key }
+}
+
 @MainActor
 @Observable
 final class DiscoveryStore {
@@ -35,6 +49,8 @@ final class DiscoveryStore {
 
     var phase: DiscoveryPhase = .initial
     var items: [EventSummary] = []
+    var recommendationModules: [DiscoveryRecommendationModule] = []
+    var operationalBanner: DiscoveryOperationalBanner?
     var fatalError: UserFacingError?
     var refreshError: UserFacingError?
     var paginationError: UserFacingError?
@@ -56,10 +72,12 @@ final class DiscoveryStore {
     var bounds: MapBounds?
 
     @ObservationIgnored private let service: any DiscoveryServing
+    @ObservationIgnored private let feedService: (any DiscoveryFeedServing)?
     @ObservationIgnored private let cache: any DiscoveryCaching
     @ObservationIgnored private let debounce: Duration
     @ObservationIgnored private var scheduledReload: Task<Void, Never>?
     @ObservationIgnored private var replacementRequest: Task<DiscoveryPage, Error>?
+    @ObservationIgnored private var feedReplacementRequest: Task<DiscoveryFeed, Error>?
     @ObservationIgnored private var paginationRequest: Task<DiscoveryPage, Error>?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var nextCursor: String?
@@ -75,6 +93,7 @@ final class DiscoveryStore {
         locale: Locale = .autoupdatingCurrent
     ) {
         self.service = service
+        feedService = service as? any DiscoveryFeedServing
         self.cache = cache
         self.debounce = debounce
         self.locale = locale
@@ -82,6 +101,21 @@ final class DiscoveryStore {
 
     var mapEvents: [EventSummary] {
         items.filter { $0.coordinate != nil }
+    }
+
+    var recommendationSections: [DiscoveryRecommendationSection] {
+        var seen = Set<UUID>()
+        return recommendationModules.compactMap { module in
+            let events = module.items.compactMap { item in
+                seen.insert(item.event.id).inserted ? item.event : nil
+            }
+            guard !events.isEmpty else { return nil }
+            return DiscoveryRecommendationSection(
+                key: module.key,
+                serverTitle: module.title,
+                events: events
+            )
+        }
     }
 
     var hasActiveFilters: Bool {
@@ -225,6 +259,28 @@ final class DiscoveryStore {
         cancelRequests()
         generation += 1
         items = items.map(\.viewerNeutralDiscoverySummary)
+        recommendationModules = recommendationModules.map { module in
+            DiscoveryRecommendationModule(
+                key: module.key,
+                title: module.title,
+                items: module.items.map { item in
+                    DiscoveryRecommendationItem(
+                        event: item.event.viewerNeutralDiscoverySummary,
+                        recommendation: item.recommendation
+                    )
+                }
+            )
+        }
+        if let banner = operationalBanner {
+            operationalBanner = DiscoveryOperationalBanner(
+                label: banner.label,
+                kind: banner.kind,
+                promotional: banner.promotional,
+                headline: banner.headline,
+                imageURL: banner.imageURL,
+                event: banner.event.viewerNeutralDiscoverySummary
+            )
+        }
         fatalError = nil
         refreshError = nil
         paginationError = nil
@@ -242,6 +298,8 @@ final class DiscoveryStore {
         cancelRequests()
         generation += 1
         items = events.map(\.discoverySafeSummary)
+        recommendationModules = []
+        operationalBanner = nil
         phase = items.isEmpty ? .empty : .content
         fatalError = nil
         refreshError = nil
@@ -281,6 +339,13 @@ final class DiscoveryStore {
         query requestQuery: EventDiscoveryQuery
     ) async -> DiscoveryReplacementReceipt? {
         guard requestGeneration == generation else { return nil }
+        if isHomeFeedQuery(requestQuery), let feedService {
+            return await replaceFeedResults(
+                generation: requestGeneration,
+                query: requestQuery,
+                service: feedService
+            )
+        }
         isRefreshing = !items.isEmpty
         if items.isEmpty { phase = .loading }
         fatalError = nil
@@ -304,6 +369,8 @@ final class DiscoveryStore {
             guard requestGeneration == generation else { return nil }
 
             items = page.items
+            recommendationModules = []
+            operationalBanner = nil
             phase = items.isEmpty ? .empty : .content
             paginationBaseQuery = requestQuery
             if pendingCameraRegion == requestQuery.region {
@@ -345,6 +412,88 @@ final class DiscoveryStore {
         }
     }
 
+    private func replaceFeedResults(
+        generation requestGeneration: Int,
+        query requestQuery: EventDiscoveryQuery,
+        service: any DiscoveryFeedServing
+    ) async -> DiscoveryReplacementReceipt? {
+        isRefreshing = !items.isEmpty
+        if items.isEmpty { phase = .loading }
+        fatalError = nil
+        refreshError = nil
+        paginationError = nil
+        paginationRecoveryRequiresReplacement = false
+        let request = Task {
+            try await service.discoveryFeed(requestQuery)
+        }
+        feedReplacementRequest = request
+        defer {
+            if requestGeneration == generation {
+                isRefreshing = false
+                feedReplacementRequest = nil
+            }
+        }
+
+        do {
+            let feed = try await request.value
+            try Task.checkCancellation()
+            guard requestGeneration == generation else { return nil }
+
+            let orderedModules = Self.orderedModules(from: feed)
+            var seen = Set<UUID>()
+            let orderedItems = orderedModules.flatMap(\.items).compactMap { item in
+                seen.insert(item.event.id).inserted ? item.event : nil
+            }
+
+            recommendationModules = orderedModules
+            operationalBanner = feed.banner
+            items = orderedItems
+            phase = orderedItems.isEmpty && feed.banner == nil ? .empty : .content
+            paginationBaseQuery = nil
+            hasMore = false
+            nextCursor = nil
+            if pendingCameraRegion == requestQuery.region {
+                mapCameraRevision += 1
+                pendingCameraRegion = nil
+            }
+            await persistCanonicalCacheIfNeeded(query: requestQuery)
+            guard requestGeneration == generation, !Task.isCancelled else { return nil }
+            return DiscoveryReplacementReceipt(
+                region: requestQuery.region ?? region,
+                itemCount: orderedItems.count
+            )
+        } catch is CancellationError {
+            return nil
+        } catch {
+            guard requestGeneration == generation else { return nil }
+            let mapped = map(error)
+            if items.isEmpty {
+                fatalError = mapped
+                phase = .error
+            } else {
+                refreshError = mapped
+                phase = Self.isOffline(error) ? .offline : .content
+            }
+            return nil
+        }
+    }
+
+    private static func orderedModules(from feed: DiscoveryFeed) -> [DiscoveryRecommendationModule] {
+        var modulesByKey: [String: DiscoveryRecommendationModule] = [:]
+        var responseOrder: [String] = []
+        for module in feed.modules where modulesByKey[module.key] == nil {
+            modulesByKey[module.key] = module
+            responseOrder.append(module.key)
+        }
+
+        var seen = Set<String>()
+        let requestedOrder = feed.moduleOrder + responseOrder
+        return requestedOrder.compactMap { key in
+            guard seen.insert(key).inserted else { return nil }
+            return modulesByKey[key]
+        }
+    }
+
     private func beginReplacement() {
         cancelRequests()
         generation += 1
@@ -359,6 +508,8 @@ final class DiscoveryStore {
         scheduledReload = nil
         replacementRequest?.cancel()
         replacementRequest = nil
+        feedReplacementRequest?.cancel()
+        feedReplacementRequest = nil
         paginationRequest?.cancel()
         paginationRequest = nil
     }
@@ -377,6 +528,19 @@ final class DiscoveryStore {
     private func isCanonicalCacheQuery(_ query: EventDiscoveryQuery) -> Bool {
         query.q == nil
             && query.region == "tokyo"
+            && query.category == nil
+            && query.startsAfter == nil
+            && query.startsBefore == nil
+            && query.availableOnly == nil
+            && query.format == nil
+            && query.language == nil
+            && query.price == nil
+            && query.bounds == nil
+            && query.cursor == nil
+    }
+
+    private func isHomeFeedQuery(_ query: EventDiscoveryQuery) -> Bool {
+        query.q == nil
             && query.category == nil
             && query.startsAfter == nil
             && query.startsBefore == nil

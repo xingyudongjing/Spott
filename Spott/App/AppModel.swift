@@ -121,7 +121,7 @@ final class AppModel {
         } catch {
             guard isCurrentAuthTransition(generation) else { return }
             banner = .init(title: Self.map(error).message, tone: .warning)
-            return
+            restoredSession = nil
         }
         if let restoredSession {
             guard isCurrentAuthTransition(generation) else { return }
@@ -454,6 +454,22 @@ final class AppModel {
     }
 
     static func map(_ error: Error) -> UserFacingError {
+        if let vaultError = error as? VaultError {
+            switch vaultError {
+            case .status:
+                return .init(
+                    id: "SECURE_SESSION_UNAVAILABLE",
+                    message: "无法读取此设备上的登录信息。你仍可浏览公开活动，请稍后重试。",
+                    retryable: true
+                )
+            case .invalidSession:
+                return .init(
+                    id: "SECURE_SESSION_INVALID",
+                    message: "此设备上的登录信息已失效。你仍可浏览公开活动，请重新登录。",
+                    retryable: false
+                )
+            }
+        }
         if let apiError = error as? APIError {
             let message: String
             switch apiError.code {

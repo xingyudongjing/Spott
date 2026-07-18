@@ -24,17 +24,23 @@ struct DiscoveryView: View {
         @Bindable var store = store
         VStack(spacing: 0) {
             DiscoveryFilterStrip(store: store)
-            Divider()
+            DiscoveryModeBar(
+                count: store.items.count,
+                displayMode: displayMode,
+                toggle: toggleDisplayMode
+            )
             DiscoveryContent(
                 store: store,
                 displayMode: displayMode,
                 selectedMapEventID: $selectedMapEventID,
                 showsMapResults: $showsMapResults
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .layoutPriority(1)
         }
-        .background(Color(uiColor: .systemBackground))
-        .navigationTitle("发现")
-        .navigationBarTitleDisplayMode(.large)
+        .background(SpottColor.canvas)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
         .searchable(
             text: $store.searchText,
             placement: .navigationBarDrawer(displayMode: .automatic),
@@ -65,30 +71,39 @@ struct DiscoveryView: View {
 
     @ToolbarContentBuilder
     private var discoveryToolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .topBarTrailing) {
+        ToolbarItem(placement: .topBarLeading) {
             Menu {
                 regionButton("东京", value: "tokyo")
                 regionButton("神奈川", value: "kanagawa")
                 regionButton("大阪", value: "osaka")
                 regionButton("京都", value: "kyoto")
             } label: {
-                Label(regionTitle, systemImage: "location")
+                HStack(spacing: 6) {
+                    Image(systemName: "location.fill")
+                    Text(regionTitle)
+                        .font(.subheadline.weight(.semibold))
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.secondary)
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(regionTitle))
             }
-            .accessibilityLabel("地区")
+            .accessibilityLabel(Text(regionTitle))
             .accessibilityIdentifier("discovery.region")
+        }
 
-            Button(action: toggleDisplayMode) {
-                Label(
-                    displayMode == .list ? "显示地图" : "显示列表",
-                    systemImage: displayMode == .list ? "map" : "list.bullet"
-                )
-            }
-            .accessibilityIdentifier("discovery.mode")
-
+        ToolbarItemGroup(placement: .topBarTrailing) {
             Button(action: openNotifications) {
                 Label("通知", systemImage: "bell")
             }
             .accessibilityIdentifier("discovery.notifications")
+
+            Button(action: openProfile) {
+                Label("打开我的页面", systemImage: "person.crop.circle")
+            }
+            .accessibilityIdentifier("discovery.profile")
         }
     }
 
@@ -138,6 +153,95 @@ struct DiscoveryView: View {
 
     private func openNotifications() {
         model.router.push(.notifications)
+    }
+
+    private func openProfile() {
+        model.router.selectedTab = .profile
+    }
+}
+
+private struct DiscoveryModeBar: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    let count: Int
+    let displayMode: DiscoveryDisplayMode
+    let toggle: () -> Void
+
+    var body: some View {
+        Group {
+            if layoutPolicy.usesStackedModeBar {
+                VStack(alignment: .leading, spacing: 8) {
+                    resultCount
+                    modeButton
+                }
+            } else {
+                HStack(spacing: 12) {
+                    resultCount
+                    Spacer(minLength: 12)
+                    modeButton
+                }
+            }
+        }
+        .padding(.horizontal, SpottMetric.pageInset)
+        .padding(.vertical, 6)
+        .background(SpottColor.canvas)
+    }
+
+    private var layoutPolicy: DiscoveryChromeLayoutPolicy {
+        DiscoveryChromeLayoutPolicy(dynamicTypeSize: dynamicTypeSize)
+    }
+
+    private var resultCount: some View {
+        HStack(spacing: 8) {
+            Capsule()
+                .fill(SpottColor.coral)
+                .frame(width: 3, height: 20)
+                .accessibilityHidden(true)
+            Text("\(count) 个活动")
+                .font(resultCountFont)
+                .foregroundStyle(SpottColor.ink)
+                .monospacedDigit()
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityIdentifier("discovery.result-count")
+    }
+
+    private var resultCountFont: Font {
+        guard layoutPolicy.emphasizesResultCount else {
+            return .subheadline.weight(.semibold)
+        }
+        return dynamicTypeSize.isAccessibilitySize
+            ? .headline.weight(.bold)
+            : .title3.weight(.bold)
+    }
+
+    @ViewBuilder
+    private var modeButton: some View {
+        let button = Button(action: toggle) {
+            Label(
+                displayMode == .list ? "显示地图" : "显示列表",
+                systemImage: displayMode == .list ? "map" : "list.bullet"
+            )
+            .font(.subheadline.weight(.semibold))
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(
+                maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : nil,
+                minHeight: 44,
+                alignment: .leading
+            )
+        }
+        .accessibilityIdentifier("discovery.mode")
+
+        if #available(iOS 26.0, *) {
+            button.buttonStyle(.glass)
+        } else {
+            button
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+        }
     }
 }
 

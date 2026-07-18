@@ -702,6 +702,128 @@ struct DiscoveryPage: Codable, Sendable {
     }
 }
 
+struct DiscoveryRecommendationScore: Decodable, Hashable, Sendable {
+    let score: Double
+    let boosted: Bool
+    let components: [String: Double]
+}
+
+struct DiscoveryRecommendationItem: Decodable, Hashable, Sendable, Identifiable {
+    let event: EventSummary
+    let recommendation: DiscoveryRecommendationScore
+
+    var id: UUID { event.id }
+
+    init(event: EventSummary, recommendation: DiscoveryRecommendationScore) {
+        self.event = event.discoveryListSafeSummary
+        self.recommendation = recommendation
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            event: try EventSummary(from: decoder),
+            recommendation: try container.decode(
+                DiscoveryRecommendationScore.self,
+                forKey: .recommendation
+            )
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case recommendation
+    }
+}
+
+struct DiscoveryRecommendationModule: Decodable, Hashable, Sendable, Identifiable {
+    let key: String
+    let title: String
+    let items: [DiscoveryRecommendationItem]
+
+    var id: String { key }
+
+    init(key: String, title: String, items: [DiscoveryRecommendationItem]) {
+        self.key = key
+        self.title = title
+        self.items = items
+    }
+}
+
+struct DiscoveryOperationalBanner: Decodable, Hashable, Sendable {
+    let label: String
+    let kind: String
+    let promotional: Bool
+    let headline: String?
+    let imageURL: URL?
+    let event: EventSummary
+
+    init(
+        label: String,
+        kind: String,
+        promotional: Bool,
+        headline: String?,
+        imageURL: URL?,
+        event: EventSummary
+    ) {
+        self.label = label
+        self.kind = kind
+        self.promotional = promotional
+        self.headline = headline
+        self.imageURL = imageURL
+        self.event = event.discoveryListSafeSummary
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            label: try container.decode(String.self, forKey: .label),
+            kind: try container.decode(String.self, forKey: .kind),
+            promotional: try container.decode(Bool.self, forKey: .promotional),
+            headline: try container.decodeIfPresent(String.self, forKey: .headline),
+            imageURL: try container.decodeIfPresent(URL.self, forKey: .imageURL),
+            event: try container.decode(EventSummary.self, forKey: .event)
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case label, kind, promotional, headline, imageURL, event
+    }
+}
+
+struct DiscoveryFeed: Decodable, Sendable {
+    let banner: DiscoveryOperationalBanner?
+    let modules: [DiscoveryRecommendationModule]
+    let moduleOrder: [String]
+    let weights: [String: Double]
+    let scoringVersion: String
+    let naturalResultsMinRatio: Double
+    let serverTime: Date
+    let generatedAt: Date
+    let queryExplanationId: String
+
+    init(
+        banner: DiscoveryOperationalBanner?,
+        modules: [DiscoveryRecommendationModule],
+        moduleOrder: [String],
+        weights: [String: Double],
+        scoringVersion: String,
+        naturalResultsMinRatio: Double,
+        serverTime: Date,
+        generatedAt: Date,
+        queryExplanationId: String
+    ) {
+        self.banner = banner
+        self.modules = modules
+        self.moduleOrder = moduleOrder
+        self.weights = weights
+        self.scoringVersion = scoringVersion
+        self.naturalResultsMinRatio = naturalResultsMinRatio
+        self.serverTime = serverTime
+        self.generatedAt = generatedAt
+        self.queryExplanationId = queryExplanationId
+    }
+}
+
 struct EventCollection: Codable, Sendable { let items: [EventSummary] }
 
 struct UserSession: Codable, Sendable {

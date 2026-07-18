@@ -120,7 +120,7 @@ private struct LegacyEventDetailView: View {
             }
         }
         .sheet(item: $shareItem) { item in
-            ShareActivityView(items: [item.url])
+            ShareActivityView(items: [item.url], subject: item.subject)
                 .presentationDetents([.medium])
         }
         .sheet(isPresented: $posterPresented) {
@@ -370,9 +370,12 @@ private struct LegacyEventDetailView: View {
                    resourceID: detail.id,
                    campaign: "ios_event_detail"
                ) {
-                shareItem = .init(url: receipt.url)
+                shareItem = .init(url: receipt.url, subject: detail.title)
             } else {
-                shareItem = .init(url: URL(string: "https://spott.jp/e/\(detail.publicSlug)")!)
+                shareItem = .init(
+                    url: URL(string: "https://spott.jp/e/\(detail.publicSlug)")!,
+                    subject: detail.title
+                )
             }
         }
     }
@@ -426,24 +429,79 @@ private struct LegacyEventDetailView: View {
     }
 }
 
-private struct EventShareItem: Identifiable {
+struct EventShareItem: Identifiable {
     let id = UUID()
     let url: URL
+    let subject: String?
+
+    init(url: URL, subject: String? = nil) {
+        self.url = url
+        self.subject = subject
+    }
 }
 
-private struct ShareActivityView: UIViewControllerRepresentable {
+struct ShareActivityView: UIViewControllerRepresentable {
     let items: [Any]
+    let subject: String?
+
+    init(items: [Any], subject: String? = nil) {
+        self.items = items
+        self.subject = subject
+    }
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let activityItems: [Any]
+        if let subject = subject?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !subject.isEmpty {
+            activityItems = items.map {
+                ShareActivityItemSource(item: $0, subject: subject)
+            }
+        } else {
+            activityItems = items
+        }
+        return UIActivityViewController(
+            activityItems: activityItems,
+            applicationActivities: nil
+        )
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) { }
 }
 
-private struct PosterGeneratorView: View {
+private final class ShareActivityItemSource: NSObject, UIActivityItemSource {
+    private let item: Any
+    private let subject: String
+
+    init(item: Any, subject: String) {
+        self.item = item
+        self.subject = subject
+    }
+
+    func activityViewControllerPlaceholderItem(
+        _ activityViewController: UIActivityViewController
+    ) -> Any {
+        item
+    }
+
+    func activityViewController(
+        _ activityViewController: UIActivityViewController,
+        itemForActivityType activityType: UIActivity.ActivityType?
+    ) -> Any? {
+        item
+    }
+
+    func activityViewController(
+        _ activityViewController: UIActivityViewController,
+        subjectForActivityType activityType: UIActivity.ActivityType?
+    ) -> String {
+        subject
+    }
+}
+
+struct PosterGeneratorView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
     let resourceType: String
     let resourceID: UUID
     let title: String
@@ -457,7 +515,7 @@ private struct PosterGeneratorView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("为这次相遇留一张海报")
+                    Text(presentation.text("journey.poster.hero"))
                         .font(.system(size: 28, weight: .bold, design: .rounded))
                     Text(title)
                         .font(.subheadline)
@@ -475,16 +533,22 @@ private struct PosterGeneratorView: View {
                     .overlay(RoundedRectangle(cornerRadius: 26).stroke(SpottColor.divider))
 
                     Button {
-                        shareItem = .init(url: url)
+                        shareItem = .init(url: url, subject: title)
                     } label: {
-                        Label("分享海报", systemImage: "square.and.arrow.up")
+                        Label(
+                            presentation.text("journey.poster.share"),
+                            systemImage: "square.and.arrow.up"
+                        )
                     }
                     .buttonStyle(PrimaryButtonStyle())
                 } else {
-                    Picker("海报风格", selection: $template) {
-                        Text("东京余光").tag("tokyo_afterglow")
-                        Text("夜间电车").tag("night_transit")
-                        Text("纸灯笼").tag("paper_lantern")
+                    Picker(presentation.text("journey.poster.style"), selection: $template) {
+                        Text(presentation.text("journey.poster.template.tokyo_afterglow"))
+                            .tag("tokyo_afterglow")
+                        Text(presentation.text("journey.poster.template.night_transit"))
+                            .tag("night_transit")
+                        Text(presentation.text("journey.poster.template.paper_lantern"))
+                            .tag("paper_lantern")
                     }
                     .pickerStyle(.segmented)
 
@@ -499,7 +563,7 @@ private struct PosterGeneratorView: View {
                     .frame(maxWidth: .infinity, minHeight: 260)
                     .spottGlassPanel(shape: RoundedRectangle(cornerRadius: 26, style: .continuous), interactive: false)
 
-                    Button("生成品牌海报") { create() }
+                    Button(presentation.text("journey.poster.generate")) { create() }
                         .buttonStyle(PrimaryButtonStyle())
                         .disabled(busy)
                 }
@@ -509,22 +573,22 @@ private struct PosterGeneratorView: View {
                         .font(.caption)
                         .foregroundStyle(SpottColor.danger)
                 }
-                Text("海报只使用已获准公开的活动信息与图片，不会包含精确地址、手机号或报名答案。")
+                Text(presentation.text("journey.poster.privacy"))
                     .font(.caption)
                     .foregroundStyle(SpottColor.muted)
             }
             .padding(SpottMetric.pageInset)
         }
         .background(SpottColor.canvas.ignoresSafeArea())
-        .navigationTitle("分享海报")
+        .navigationTitle(presentation.text("journey.poster.title"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("关闭") { dismiss() }
+                Button(presentation.text("journey.poster.close")) { dismiss() }
             }
         }
         .sheet(item: $shareItem) { item in
-            ShareActivityView(items: [item.url])
+            ShareActivityView(items: [item.url], subject: item.subject)
                 .presentationDetents([.medium])
         }
         .task(id: resourceID) {
@@ -532,20 +596,17 @@ private struct PosterGeneratorView: View {
         }
     }
 
-    private var posterStatus: LocalizedStringKey {
+    private var posterStatus: String {
         switch job?.state {
-        case "queued": "海报已排队"
-        case "processing": "正在生成海报"
-        case "failed": "海报生成失败"
-        default: "选择一个品牌模板"
+        case "queued": presentation.text("journey.poster.status.queued")
+        case "processing": presentation.text("journey.poster.status.processing")
+        case "failed": presentation.text("journey.poster.status.failed")
+        default: presentation.text("journey.poster.status.choose")
         }
     }
 
-    private var locale: String {
-        let language = Locale.preferredLanguages.first?.lowercased() ?? "en"
-        if language.hasPrefix("zh") { return "zh-Hans" }
-        if language.hasPrefix("ja") { return "ja" }
-        return "en"
+    private var presentation: EventPosterPresentation {
+        EventPosterPresentation(locale: locale)
     }
 
     private func create() {
@@ -558,7 +619,7 @@ private struct PosterGeneratorView: View {
                     resourceType: resourceType,
                     resourceID: resourceID,
                     template: template,
-                    locale: locale
+                    locale: presentation.backendLocaleIdentifier
                 )
                 try await poll(jobID: receipt.id)
             } catch is CancellationError {

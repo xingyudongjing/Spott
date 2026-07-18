@@ -3,6 +3,88 @@ import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
 
+struct EventComposerAccessGateLayoutPolicy {
+    let dynamicTypeSize: DynamicTypeSize
+
+    var centersInViewport: Bool { !dynamicTypeSize.isAccessibilitySize }
+}
+
+private struct EventComposerAccessGateView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    let icon: String
+    let title: LocalizedStringKey
+    let message: LocalizedStringKey
+    let actionTitle: LocalizedStringKey
+    let action: () -> Void
+
+    var body: some View {
+        GeometryReader { proxy in
+            ScrollView {
+                gateCard
+                    .frame(maxWidth: 560)
+                    .frame(maxWidth: .infinity)
+                    .frame(
+                        minHeight: layoutPolicy.centersInViewport ? proxy.size.height : nil,
+                        alignment: .center
+                    )
+                    .padding(.horizontal, SpottMetric.pageInset)
+                    .padding(.vertical, dynamicTypeSize.isAccessibilitySize ? 28 : 18)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+        .accessibilityIdentifier("event.composer.access-gate")
+    }
+
+    private var layoutPolicy: EventComposerAccessGateLayoutPolicy {
+        EventComposerAccessGateLayoutPolicy(dynamicTypeSize: dynamicTypeSize)
+    }
+
+    private var gateCard: some View {
+        VStack(spacing: 18) {
+            Image(systemName: icon)
+                .font(.system(size: 28, weight: .medium))
+                .foregroundStyle(SpottColor.twilight)
+                .frame(width: 58, height: 58)
+                .background(SpottColor.twilightPale, in: Circle())
+                .accessibilityHidden(true)
+
+            VStack(spacing: 8) {
+                Text(title)
+                    .font(.title2.bold())
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(SpottColor.muted)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Button(action: action) {
+                Text(actionTitle)
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+            }
+            .spottProminentActionStyle()
+            .accessibilityIdentifier("event.composer.access-gate.action")
+        }
+        .padding(dynamicTypeSize.isAccessibilitySize ? 22 : 24)
+        .background(
+            SpottColor.surface,
+            in: RoundedRectangle(cornerRadius: SpottMetric.coverRadius, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: SpottMetric.coverRadius, style: .continuous)
+                .stroke(SpottColor.divider)
+        }
+        .shadow(color: SpottColor.ink.opacity(0.05), radius: 20, y: 8)
+    }
+}
+
 struct EventComposerView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.locale) private var locale
@@ -125,13 +207,25 @@ struct EventComposerView: View {
     }
 
     private var signedOutState: some View {
-        SpottStateCard(icon: "plus.circle", title: "登录后创建活动", message: "草稿会自动保存，并可在 Web 工作台继续编辑。", actionTitle: "登录") { model.presentedGate = .login }
-            .padding(SpottMetric.pageInset)
+        EventComposerAccessGateView(
+            icon: "plus.circle",
+            title: "登录后创建活动",
+            message: "草稿会自动保存，并可在 Web 工作台继续编辑。",
+            actionTitle: "登录"
+        ) {
+            model.presentedGate = .login
+        }
     }
 
     private var phoneGate: some View {
-        SpottStateCard(icon: "iphone.badge.checkmark", title: "先完成手机号验证", message: "发布活动属于高信任操作，验证后可获得首次奖励。", actionTitle: "继续验证") { model.presentedGate = .phoneVerification }
-            .padding(SpottMetric.pageInset)
+        EventComposerAccessGateView(
+            icon: "iphone.badge.checkmark",
+            title: "先完成手机号验证",
+            message: "发布活动属于高信任操作，验证后可获得首次奖励。",
+            actionTitle: "继续验证"
+        ) {
+            model.presentedGate = .phoneVerification
+        }
     }
 
     private var submittedState: some View {

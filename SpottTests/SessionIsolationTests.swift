@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Security
 import XCTest
 @testable import Spott
 
@@ -9,6 +10,7 @@ final class SessionIsolationTests: XCTestCase {
         ControlledRefreshURLProtocol.reset()
         SessionBoundaryURLProtocol.reset()
         BootstrapURLProtocol.reset()
+        OptionalAuthenticationURLProtocol.reset()
         UserDefaults.standard.removeObject(forKey: Self.syncOwnerKey)
         super.tearDown()
     }
@@ -380,6 +382,7 @@ final class SessionIsolationTests: XCTestCase {
             session: URLSession(configuration: configuration)
         )
         let persistence = PersistenceStore.makeInMemory()
+        let discoveryService = BootstrapDiscoveryService(outcome: .success([]))
         let lifecycle = RecordingSyncLifecycle()
         let router = AppRouter()
         var sensitiveEvent = EventSummary.samples[0]
@@ -392,7 +395,12 @@ final class SessionIsolationTests: XCTestCase {
             persistence: persistence,
             sync: SyncEngine(api: api, persistence: persistence),
             router: router,
-            syncLifecycle: lifecycle
+            syncLifecycle: lifecycle,
+            discovery: DiscoveryStore(
+                service: discoveryService,
+                cache: persistence,
+                debounce: .zero
+            )
         )
         model.session = current
         SessionBoundaryURLProtocol.onStart = { _, requestNumber in
@@ -632,6 +640,7 @@ final class SessionIsolationTests: XCTestCase {
             authenticationExpirationBoundary: expirationBoundary
         )
         let persistenceSpy = DestructivePersistenceResetSpy()
+        let discoveryService = BootstrapDiscoveryService(outcome: .success([]))
         let syncPersistence = RecordingSyncPersistence()
         let syncLifecycle = RecordingSyncLifecycle()
         let model = AppModel(
@@ -641,7 +650,12 @@ final class SessionIsolationTests: XCTestCase {
             sync: SyncEngine(api: api, persistence: syncPersistence),
             router: AppRouter(),
             sessionEnder: ImmediateSessionEnder(),
-            syncLifecycle: syncLifecycle
+            syncLifecycle: syncLifecycle,
+            discovery: DiscoveryStore(
+                service: discoveryService,
+                cache: persistenceSpy,
+                debounce: .zero
+            )
         )
         let signedOutSession = Self.session(user: 31, session: 31)
         let expiredSession = Self.session(user: 32, session: 32)
@@ -734,6 +748,265 @@ final class SessionIsolationTests: XCTestCase {
         XCTAssertEqual(model.session?.sessionId, restored.sessionId)
         XCTAssertEqual(bootstrapUserIDs, [restored.user.id])
         _ = try await vault.clear(expectedSessionID: restored.sessionId)
+    }
+
+    func testMissingEntitlementIsNotReportedAsANetworkFailure() {
+        let mapped = AppModel.map(VaultError.status(errSecMissingEntitlement))
+
+        XCTAssertEqual(mapped.id, "SECURE_SESSION_UNAVAILABLE")
+        XCTAssertNotEqual(mapped.id, "NETWORK_UNAVAILABLE")
+        XCTAssertTrue(mapped.retryable)
+    }
+
+    func testSecureSessionMessagesRemainStableKeysAcrossAppLocales() throws {
+        let unavailable = AppModel.map(VaultError.status(errSecMissingEntitlement))
+        let invalid = AppModel.map(VaultError.invalidSession)
+
+        XCTAssertEqual(unavailable.message, Self.secureSessionUnavailableMessageKey)
+        XCTAssertEqual(invalid.message, Self.secureSessionInvalidMessageKey)
+
+        let expectations: [(AppLanguage, String, String)] = [
+            (
+                .simplifiedChinese,
+                "无法读取此设备上的登录信息。你仍可浏览公开活动，请稍后重试。",
+                "此设备上的登录信息已失效。你仍可浏览公开活动，请重新登录。"
+            ),
+            (
+                .japanese,
+                "このデバイスのログイン情報を読み込めません。公開イベントは引き続き閲覧できます。しばらくしてからもう一度お試しください。",
+                "このデバイスのログイン情報は無効になりました。公開イベントは引き続き閲覧できます。もう一度ログインしてください。"
+            ),
+            (
+                .english,
+                "Unable to read sign-in information on this device. You can still browse public events. Try again later.",
+                "Sign-in information on this device is no longer valid. You can still browse public events. Sign in again."
+            ),
+        ]
+
+        for (language, unavailableMessage, invalidMessage) in expectations {
+            XCTAssertEqual(
+                try Self.localizedAppString(unavailable.message, language: language),
+                unavailableMessage,
+                "The stable key must resolve using the in-app \(language.rawValue) locale"
+            )
+            XCTAssertEqual(
+                try Self.localizedAppString(invalid.message, language: language),
+                invalidMessage,
+                "The stable key must resolve using the in-app \(language.rawValue) locale"
+            )
+        }
+    }
+
+    func testMalformedKeychainSessionIsReportedAsInvalidSecureSession() async throws {
+        let service = "jp.spott.malformed-session.\(UUID().uuidString)"
+        let account = "active-session"
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        var insert = query
+        insert[kSecValueData as String] = Data("not-a-user-session".utf8)
+        insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemDelete(query as CFDictionary)
+        let insertStatus = SecItemAdd(insert as CFDictionary, nil)
+        try XCTSkipIf(
+            insertStatus == errSecMissingEntitlement,
+            "The test runner does not have a Keychain entitlement"
+        )
+        XCTAssertEqual(insertStatus, errSecSuccess)
+        defer { SecItemDelete(query as CFDictionary) }
+
+        do {
+            _ = try await CredentialVault(service: service).session()
+            XCTFail("Malformed session bytes must not restore a signed-in user")
+        } catch {
+            let mapped = AppModel.map(error)
+            XCTAssertEqual(mapped.id, "SECURE_SESSION_INVALID")
+            XCTAssertNotEqual(mapped.id, "NETWORK_UNAVAILABLE")
+            XCTAssertFalse(mapped.retryable)
+        }
+    }
+
+    func testMissingKeychainItemRestoresAnonymousState() async throws {
+        let service = "jp.spott.missing-session.\(UUID().uuidString)"
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "active-session"
+        ]
+        SecItemDelete(query as CFDictionary)
+
+        let restored = try await CredentialVault(service: service).session()
+
+        XCTAssertNil(restored)
+    }
+
+    func testMissingEntitlementFallsBackToTheAnonymousPublicDiscoveryFeed() async throws {
+        try await assertVaultFailureFallsBackToAnonymousDiscovery(
+            .status(errSecMissingEntitlement)
+        )
+    }
+
+    func testMalformedSessionFallsBackToTheAnonymousPublicDiscoveryFeed() async throws {
+        try await assertVaultFailureFallsBackToAnonymousDiscovery(.invalidSession)
+    }
+
+    func testPublicSearchFallsBackToAnonymousWhenTheVaultCannotBeRead() async throws {
+        try OptionalAuthenticationURLProtocol.configure(
+            feedData: Self.discoveryFeedData(),
+            searchData: Self.discoveryPageData()
+        )
+        let credentials = ThrowingCredentialStore(
+            failure: .status(errSecMissingEntitlement)
+        )
+        let client = Self.optionalAuthenticationClient(credentials: credentials)
+
+        let page = try await client.discovery(.init(q: "night walk", region: "tokyo"))
+        let requests = OptionalAuthenticationURLProtocol.requests()
+        XCTAssertEqual(requests.count, 1)
+        let request = try XCTUnwrap(requests.first)
+
+        XCTAssertEqual(page.items.map(\.id), [EventSummary.samples[0].id])
+        XCTAssertEqual(request.url?.path, "/v1/events/search")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+    }
+
+    func testReadableSessionPreservesBearerAndViewerFactsInThePublicFeed() async throws {
+        try OptionalAuthenticationURLProtocol.configure(
+            feedData: Self.discoveryFeedData(personalized: true),
+            searchData: Self.discoveryPageData()
+        )
+        let authenticated = Self.session(user: 41, session: 41)
+        let credentials = InMemoryCredentialStore(session: authenticated)
+        let client = Self.optionalAuthenticationClient(credentials: credentials)
+
+        let feed = try await client.discoveryFeed(.init(region: "tokyo"))
+        let requests = OptionalAuthenticationURLProtocol.requests()
+        XCTAssertEqual(requests.count, 1)
+        let request = try XCTUnwrap(requests.first)
+        let event = try XCTUnwrap(feed.modules.first?.items.first?.event)
+
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Authorization"),
+            "Bearer \(authenticated.accessToken)"
+        )
+        XCTAssertTrue(event.favorited)
+        XCTAssertEqual(event.viewerRegistration?.status, .confirmed)
+        XCTAssertTrue(event.organizer.viewerFollowing)
+    }
+
+    func testReadableSessionPreservesRefreshForThePublicFeed() async throws {
+        let authenticated = Self.session(user: 42, session: 42)
+        let refreshed = Self.session(user: 42, session: 43)
+        try OptionalAuthenticationURLProtocol.configureRefresh(
+            feedData: Self.discoveryFeedData(personalized: true),
+            searchData: Self.discoveryPageData(),
+            refreshedSessionData: try Self.encodedSession(refreshed)
+        )
+        let credentials = InMemoryCredentialStore(session: authenticated)
+        let client = Self.optionalAuthenticationClient(credentials: credentials)
+
+        let feed = try await client.discoveryFeed(.init(region: "tokyo"))
+        let requests = OptionalAuthenticationURLProtocol.requests()
+        let storedSession = try await credentials.session()
+
+        XCTAssertEqual(feed.modules.first?.items.first?.event.id, EventSummary.samples[0].id)
+        XCTAssertEqual(
+            requests.compactMap { $0.url?.path },
+            ["/v1/discovery/feed", "/v1/auth/refresh", "/v1/discovery/feed"]
+        )
+        XCTAssertEqual(
+            requests.first?.value(forHTTPHeaderField: "Authorization"),
+            "Bearer \(authenticated.accessToken)"
+        )
+        XCTAssertNil(requests.dropFirst().first?.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(
+            requests.last?.value(forHTTPHeaderField: "Authorization"),
+            "Bearer \(refreshed.accessToken)"
+        )
+        XCTAssertEqual(storedSession?.sessionId, refreshed.sessionId)
+    }
+
+    func testPublicFeedDoesNotSwallowANonVaultCredentialFailure() async throws {
+        try OptionalAuthenticationURLProtocol.configure(
+            feedData: Self.discoveryFeedData(),
+            searchData: Self.discoveryPageData()
+        )
+        let credentials = CredentialProbeFailureStore(failure: .nonVault)
+        let client = Self.optionalAuthenticationClient(credentials: credentials)
+
+        do {
+            _ = try await client.discoveryFeed(.init(region: "tokyo"))
+            XCTFail("Optional authentication may only recover from VaultError")
+        } catch CredentialProbeError.injected {
+            // Expected.
+        } catch {
+            XCTFail("Expected the original non-Vault failure, received \(error)")
+        }
+
+        XCTAssertTrue(OptionalAuthenticationURLProtocol.requests().isEmpty)
+    }
+
+    func testPublicFeedDoesNotSwallowCredentialCancellation() async throws {
+        try OptionalAuthenticationURLProtocol.configure(
+            feedData: Self.discoveryFeedData(),
+            searchData: Self.discoveryPageData()
+        )
+        let credentials = CredentialProbeFailureStore(failure: .cancellation)
+        let client = Self.optionalAuthenticationClient(credentials: credentials)
+
+        do {
+            _ = try await client.discoveryFeed(.init(region: "tokyo"))
+            XCTFail("Credential cancellation must remain cancellation")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            XCTFail("Expected CancellationError, received \(error)")
+        }
+
+        XCTAssertTrue(OptionalAuthenticationURLProtocol.requests().isEmpty)
+    }
+
+    func testAuthenticatedWriteDoesNotFallBackToAnonymousWhenTheVaultCannotBeRead() async throws {
+        try OptionalAuthenticationURLProtocol.configure(
+            feedData: Self.discoveryFeedData(),
+            searchData: Self.discoveryPageData()
+        )
+        let credentials = ThrowingCredentialStore(
+            failure: .status(errSecMissingEntitlement)
+        )
+        let client = Self.optionalAuthenticationClient(credentials: credentials)
+
+        do {
+            try await client.markNotificationRead(UUID())
+            XCTFail("Authenticated writes must fail closed when secure credentials are unavailable")
+        } catch VaultError.status(let status) {
+            XCTAssertEqual(status, errSecMissingEntitlement)
+        } catch {
+            XCTFail("Expected the original VaultError, received \(error)")
+        }
+
+        XCTAssertTrue(
+            OptionalAuthenticationURLProtocol.requests().isEmpty,
+            "A write must never be retried anonymously"
+        )
+    }
+
+    func testSessionVaultFailureLeavesExplicitDiscoveryErrorInsteadOfInitialSkeleton() async {
+        let discoveryService = BootstrapDiscoveryService(outcome: .offline)
+        let model = Self.publicBootstrapModel(
+            sessionRestorer: FailingVaultSessionRestorer(failure: .missingEntitlement),
+            discoveryService: discoveryService
+        )
+
+        await model.bootstrap()
+        let requestCount = await discoveryService.requestCount()
+
+        XCTAssertNil(model.session)
+        XCTAssertEqual(model.discovery.phase, .error)
+        XCTAssertNotNil(model.discovery.fatalError)
+        XCTAssertEqual(requestCount, 1)
     }
 
     func testAccountASignOutThenBThenAReturnPreservesAQueueBytesExactly() async throws {
@@ -1097,6 +1370,41 @@ final class SessionIsolationTests: XCTestCase {
         XCTAssertEqual(model.session?.sessionId, authenticated.sessionId)
     }
 
+    func testLateColdStartVaultFailureCannotWarnOrLoadAnonymousDiscoveryAfterNewAuthentication() async {
+        let authenticated = Self.session(user: 3, session: 3)
+        let restorer = ControlledFailingSessionRestorer()
+        let discoveryService = BootstrapDiscoveryService(outcome: .success(EventSummary.samples))
+        let syncLifecycle = RecordingSyncLifecycle()
+        let model = Self.publicBootstrapModel(
+            sessionRestorer: restorer,
+            discoveryService: discoveryService,
+            syncLifecycle: syncLifecycle
+        )
+
+        let bootstrap = Task { await model.bootstrap() }
+        await restorer.waitUntilStarted()
+        model.didAuthenticate(authenticated)
+        await syncLifecycle.waitForBootstrap(userID: authenticated.user.id)
+        let authenticatedDiscoveryStarted = await Self.waitForDiscoveryRequest(
+            discoveryService,
+            count: 1
+        )
+        XCTAssertTrue(
+            authenticatedDiscoveryStarted,
+            "Authenticated discovery did not start before the bounded deadline"
+        )
+
+        await restorer.failWithMissingEntitlement()
+        await bootstrap.value
+        await Self.yieldRepeatedly()
+
+        let requestCount = await discoveryService.requestCount()
+        XCTAssertEqual(model.session?.sessionId, authenticated.sessionId)
+        XCTAssertNil(model.banner, "A stale Keychain failure must not warn after a newer login")
+        XCTAssertEqual(requestCount, 1, "Only authenticated discovery may load")
+        XCTAssertEqual(model.discovery.items.map(\.id), EventSummary.samples.map(\.id))
+    }
+
     func testAPIErrorPreservesServerFieldErrors() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [FieldErrorURLProtocol.self]
@@ -1183,6 +1491,186 @@ final class SessionIsolationTests: XCTestCase {
     )
 
     nonisolated private static let syncOwnerKey = "jp.spott.sync.owner-user-id"
+    nonisolated private static let secureSessionUnavailableMessageKey =
+        "无法读取此设备上的登录信息。你仍可浏览公开活动，请稍后重试。"
+    nonisolated private static let secureSessionInvalidMessageKey =
+        "此设备上的登录信息已失效。你仍可浏览公开活动，请重新登录。"
+
+    private func assertVaultFailureFallsBackToAnonymousDiscovery(
+        _ failure: VaultError,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        try OptionalAuthenticationURLProtocol.configure(
+            feedData: Self.discoveryFeedData(),
+            searchData: Self.discoveryPageData()
+        )
+        let credentials = ThrowingCredentialStore(failure: failure)
+        let api = Self.optionalAuthenticationClient(credentials: credentials)
+        let persistence = PersistenceStore.makeInMemory()
+        let model = AppModel(
+            api: api,
+            analytics: AnalyticsClient(environment: .preview),
+            persistence: persistence,
+            sync: SyncEngine(api: api, persistence: persistence),
+            router: AppRouter()
+        )
+
+        await model.bootstrap()
+
+        let requests = OptionalAuthenticationURLProtocol.requests()
+        XCTAssertNil(model.session, file: file, line: line)
+        XCTAssertEqual(model.discovery.phase, .content, file: file, line: line)
+        XCTAssertEqual(
+            model.discovery.items.map(\.id),
+            [EventSummary.samples[0].id],
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(model.banner?.tone, .warning, file: file, line: line)
+        XCTAssertEqual(
+            model.banner?.title,
+            AppModel.map(failure).message,
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(requests.count, 1, file: file, line: line)
+        let request = try XCTUnwrap(requests.first, file: file, line: line)
+        XCTAssertEqual(request.url?.path, "/v1/discovery/feed", file: file, line: line)
+        XCTAssertNil(
+            request.value(forHTTPHeaderField: "Authorization"),
+            file: file,
+            line: line
+        )
+    }
+
+    private static func optionalAuthenticationClient(
+        credentials: any CredentialStoring
+    ) -> SpottAPIClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OptionalAuthenticationURLProtocol.self]
+        return SpottAPIClient(
+            environment: .init(baseURL: URL(string: "https://api.spott.test/v1")!),
+            credentials: credentials,
+            session: URLSession(configuration: configuration)
+        )
+    }
+
+    nonisolated private static func discoveryFeedData(
+        personalized: Bool = false
+    ) throws -> Data {
+        var event = try eventJSONObject(personalized: personalized)
+        event["recommendation"] = [
+            "score": 1.0,
+            "boosted": false,
+            "components": ["freshness": 1.0],
+        ]
+        return try JSONSerialization.data(withJSONObject: [
+            "banner": NSNull(),
+            "modules": [[
+                "key": "today",
+                "title": "Today",
+                "items": [event],
+            ]],
+            "moduleOrder": ["today"],
+            "weights": ["freshness": 1.0],
+            "scoringVersion": "optional-auth-test-v1",
+            "naturalResultsMinRatio": 0.6,
+            "serverTime": "2026-07-19T00:00:00Z",
+            "generatedAt": "2026-07-19T00:00:00Z",
+            "queryExplanationId": "optional-auth-feed-test",
+        ])
+    }
+
+    nonisolated private static func discoveryPageData() throws -> Data {
+        try JSONSerialization.data(withJSONObject: [
+            "items": [try eventJSONObject(personalized: false)],
+            "nextCursor": NSNull(),
+            "hasMore": false,
+            "serverTime": "2026-07-19T00:00:00Z",
+            "queryExplanationId": "optional-auth-search-test",
+        ])
+    }
+
+    nonisolated private static func eventJSONObject(
+        personalized: Bool
+    ) throws -> [String: Any] {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(EventSummary.samples[0])
+        guard var event = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw URLError(.cannotParseResponse)
+        }
+        guard personalized else { return event }
+
+        event["favorited"] = true
+        event["registrationStatus"] = "confirmed"
+        event["viewerRegistration"] = [
+            "id": "019b0000-0000-7000-8200-000000000041",
+            "status": "confirmed",
+            "partySize": 2,
+            "offerExpiresAt": NSNull(),
+        ]
+        if var organizer = event["organizer"] as? [String: Any] {
+            organizer["viewerFollowing"] = true
+            event["organizer"] = organizer
+        }
+        return event
+    }
+
+    private static func waitForDiscoveryRequest(
+        _ service: BootstrapDiscoveryService,
+        count: Int,
+        timeout: Duration = .seconds(1)
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while await service.requestCount() < count {
+            guard clock.now < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return true
+    }
+
+    private static func localizedAppString(
+        _ key: String,
+        language: AppLanguage
+    ) throws -> String {
+        let path = try XCTUnwrap(
+            Bundle.main.path(forResource: language.rawValue, ofType: "lproj"),
+            "Missing \(language.rawValue).lproj from the built app"
+        )
+        let bundle = try XCTUnwrap(Bundle(path: path))
+        return bundle.localizedString(forKey: key, value: nil, table: "Localizable")
+    }
+
+    private static func publicBootstrapModel(
+        sessionRestorer: any SessionRestoring,
+        discoveryService: any DiscoveryServing,
+        syncLifecycle: (any SyncLifecycleManaging)? = nil
+    ) -> AppModel {
+        let credentials = InMemoryCredentialStore()
+        let persistence = PersistenceStore.makeInMemory()
+        let api = SpottAPIClient(
+            environment: .init(baseURL: URL(string: "https://api.spott.test/v1")!),
+            credentials: credentials,
+            session: URLSession(configuration: .ephemeral)
+        )
+        return AppModel(
+            api: api,
+            analytics: AnalyticsClient(environment: .preview),
+            persistence: persistence,
+            sync: SyncEngine(api: api, persistence: persistence),
+            router: AppRouter(),
+            sessionRestorer: sessionRestorer,
+            syncLifecycle: syncLifecycle ?? RecordingSyncLifecycle(),
+            discovery: DiscoveryStore(
+                service: discoveryService,
+                cache: persistence,
+                debounce: .zero
+            )
+        )
+    }
 
     private static func yieldRepeatedly() async {
         for _ in 0..<20 { await Task.yield() }
@@ -1382,6 +1870,80 @@ private actor InMemoryCredentialStore: CredentialStoring {
     }
 }
 
+private actor ThrowingCredentialStore: CredentialStoring {
+    private let failure: VaultError
+
+    init(failure: VaultError) {
+        self.failure = failure
+    }
+
+    func save(session: UserSession) throws {
+        _ = session
+        throw failure
+    }
+
+    func replace(session: UserSession, expectedSessionID: UUID) throws -> Bool {
+        _ = session
+        _ = expectedSessionID
+        throw failure
+    }
+
+    func session() throws -> UserSession? {
+        throw failure
+    }
+
+    func clear(expectedSessionID: UUID) throws -> Bool {
+        _ = expectedSessionID
+        throw failure
+    }
+}
+
+private enum CredentialProbeError: Error {
+    case injected
+}
+
+private actor CredentialProbeFailureStore: CredentialStoring {
+    enum Failure: Sendable {
+        case nonVault
+        case cancellation
+    }
+
+    private let failure: Failure
+
+    init(failure: Failure) {
+        self.failure = failure
+    }
+
+    func save(session: UserSession) throws {
+        _ = session
+        try fail()
+    }
+
+    func replace(session: UserSession, expectedSessionID: UUID) throws -> Bool {
+        _ = session
+        _ = expectedSessionID
+        try fail()
+    }
+
+    func session() throws -> UserSession? {
+        try fail()
+    }
+
+    func clear(expectedSessionID: UUID) throws -> Bool {
+        _ = expectedSessionID
+        try fail()
+    }
+
+    private func fail() throws -> Never {
+        switch failure {
+        case .nonVault:
+            throw CredentialProbeError.injected
+        case .cancellation:
+            throw CancellationError()
+        }
+    }
+}
+
 private actor ControlledSessionRestorer: SessionRestoring {
     private let restoredSession: UserSession
     private var started = false
@@ -1410,6 +1972,82 @@ private actor ControlledSessionRestorer: SessionRestoring {
         finishContinuation?.resume()
         finishContinuation = nil
     }
+}
+
+private actor ControlledFailingSessionRestorer: SessionRestoring {
+    private var started = false
+    private var startedWaiters: [CheckedContinuation<Void, Never>] = []
+    private var finishContinuation: CheckedContinuation<UserSession?, any Error>?
+
+    func currentSession() async throws -> UserSession? {
+        started = true
+        let waiters = startedWaiters
+        startedWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        return try await withCheckedThrowingContinuation { finishContinuation = $0 }
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { startedWaiters.append($0) }
+    }
+
+    func failWithMissingEntitlement() {
+        finishContinuation?.resume(throwing: VaultError.status(errSecMissingEntitlement))
+        finishContinuation = nil
+    }
+}
+
+private actor FailingVaultSessionRestorer: SessionRestoring {
+    enum Failure: Sendable {
+        case missingEntitlement
+    }
+
+    private let failure: Failure
+
+    init(failure: Failure) {
+        self.failure = failure
+    }
+
+    func currentSession() async throws -> UserSession? {
+        switch failure {
+        case .missingEntitlement:
+            throw VaultError.status(errSecMissingEntitlement)
+        }
+    }
+}
+
+private actor BootstrapDiscoveryService: DiscoveryServing {
+    enum Outcome: Sendable {
+        case success([EventSummary])
+        case offline
+    }
+
+    private let outcome: Outcome
+    private var requests = 0
+
+    init(outcome: Outcome) {
+        self.outcome = outcome
+    }
+
+    func discovery(_ query: EventDiscoveryQuery) async throws -> DiscoveryPage {
+        _ = query
+        requests += 1
+        switch outcome {
+        case .success(let events):
+            return DiscoveryPage(
+                items: events,
+                nextCursor: nil,
+                hasMore: false,
+                serverTime: Date(timeIntervalSince1970: 1_773_792_000),
+                queryExplanationId: "session-vault-bootstrap-test"
+            )
+        case .offline:
+            throw URLError(.notConnectedToInternet)
+        }
+    }
+
+    func requestCount() -> Int { requests }
 }
 
 private actor RecordingSyncLifecycle: SyncLifecycleManaging {
@@ -2321,6 +2959,120 @@ private final class BootstrapURLProtocol: URLProtocol, @unchecked Sendable {
 
     static func reset() {
         lock.withLock { count = 0 }
+    }
+}
+
+private final class OptionalAuthenticationURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let storage = OptionalAuthenticationProtocolStorage()
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let stub = Self.storage.response(for: request)
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: stub.statusCode,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: stub.data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+
+    static func configure(feedData: Data, searchData: Data) {
+        storage.configure(feedData: feedData, searchData: searchData)
+    }
+
+    static func configureRefresh(
+        feedData: Data,
+        searchData: Data,
+        refreshedSessionData: Data
+    ) {
+        storage.configureRefresh(
+            feedData: feedData,
+            searchData: searchData,
+            refreshedSessionData: refreshedSessionData
+        )
+    }
+
+    static func requests() -> [URLRequest] { storage.requests() }
+
+    static func reset() { storage.reset() }
+}
+
+private final class OptionalAuthenticationProtocolStorage: @unchecked Sendable {
+    private let lock = NSLock()
+    private var feedData = Data()
+    private var searchData = Data()
+    private var refreshedSessionData: Data?
+    private var feedRequestCount = 0
+    private var recordedRequests: [URLRequest] = []
+
+    func configure(feedData: Data, searchData: Data) {
+        lock.withLock {
+            self.feedData = feedData
+            self.searchData = searchData
+            refreshedSessionData = nil
+            feedRequestCount = 0
+            recordedRequests.removeAll()
+        }
+    }
+
+    func configureRefresh(
+        feedData: Data,
+        searchData: Data,
+        refreshedSessionData: Data
+    ) {
+        lock.withLock {
+            self.feedData = feedData
+            self.searchData = searchData
+            self.refreshedSessionData = refreshedSessionData
+            feedRequestCount = 0
+            recordedRequests.removeAll()
+        }
+    }
+
+    func response(for request: URLRequest) -> (statusCode: Int, data: Data) {
+        lock.withLock {
+            recordedRequests.append(request)
+            switch request.url?.path {
+            case "/v1/discovery/feed":
+                feedRequestCount += 1
+                if refreshedSessionData != nil, feedRequestCount == 1 {
+                    return (
+                        401,
+                        Data(
+                            #"{"error":{"code":"TOKEN_EXPIRED","message":"expired","requestId":"optional-auth-refresh","retryable":false}}"#.utf8
+                        )
+                    )
+                }
+                return (200, feedData)
+            case "/v1/events/search":
+                return (200, searchData)
+            case "/v1/auth/refresh":
+                return (200, refreshedSessionData ?? Data("{}".utf8))
+            default:
+                return (200, Data("{}".utf8))
+            }
+        }
+    }
+
+    func requests() -> [URLRequest] {
+        lock.withLock { recordedRequests }
+    }
+
+    func reset() {
+        lock.withLock {
+            feedData = Data()
+            searchData = Data()
+            refreshedSessionData = nil
+            feedRequestCount = 0
+            recordedRequests.removeAll()
+        }
     }
 }
 

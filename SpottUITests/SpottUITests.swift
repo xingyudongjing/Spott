@@ -5,6 +5,7 @@
 //  Created by 姚凯 on 2026/7/15.
 //
 
+import UIKit
 import XCTest
 
 final class SpottUITests: XCTestCase {
@@ -14,6 +15,14 @@ final class SpottUITests: XCTestCase {
 
         // In UI tests it is usually best to stop immediately when a failure occurs.
         continueAfterFailure = false
+
+        // UI configuration and previous simulator sessions can leave the device
+        // rotated. Every product-flow assertion in this suite targets the
+        // documented portrait iPhone experience, so restore that invariant
+        // before launching the app.
+        MainActor.assumeIsolated {
+            XCUIDevice.shared.orientation = .portrait
+        }
 
         // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
     }
@@ -28,12 +37,17 @@ final class SpottUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.tabBars.buttons["发现"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.tabBars.buttons["行程"].exists)
-        XCTAssertTrue(app.tabBars.buttons["创建"].exists)
         XCTAssertTrue(app.tabBars.buttons["社群"].exists)
+        XCTAssertTrue(app.tabBars.buttons["创建"].exists)
+        XCTAssertTrue(app.tabBars.buttons["行程"].exists)
         XCTAssertTrue(app.tabBars.buttons["我的"].exists)
         XCTAssertEqual(app.tabBars.count, 1, "发现页只能有一套系统底部导航")
         XCTAssertEqual(app.tabBars.firstMatch.buttons.count, 5, "系统底部导航应当正好包含五个入口")
+        XCTAssertEqual(
+            app.tabBars.firstMatch.buttons.allElementsBoundByIndex.map(\.label),
+            ["发现", "社群", "创建", "行程", "我的"],
+            "底部导航必须遵守产品文档的信息架构，而不是复制 Web 的导航顺序"
+        )
 
         XCTAssertTrue(app.buttons["显示地图"].exists, "地图切换不能暴露 SF Symbol 的内部名称")
         app.buttons["显示地图"].tap()
@@ -43,6 +57,66 @@ final class SpottUITests: XCTestCase {
         app.tabBars.buttons["创建"].tap()
         XCTAssertTrue(app.staticTexts["登录后创建活动"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.buttons["登录"].exists)
+    }
+
+    @MainActor
+    func testDiscoveryFirstViewportPrioritizesARealEditorialEventCard() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-spott-ui-test-navigation-fixture"]
+        app.launch()
+
+        let featuredCard = app.descendants(matching: .any)["discovery.featured-event"]
+        XCTAssertTrue(featuredCard.waitForExistence(timeout: 5))
+        XCTAssertTrue(featuredCard.isHittable, "首屏真实活动卡必须可直接进入详情")
+        XCTAssertTrue(featuredCard.label.contains("周末开局"), "活动卡必须展示局头，而不只是标题和图片")
+        XCTAssertTrue(featuredCard.label.contains("city-walk"), "活动卡必须展示最多三个真实标签")
+        XCTAssertTrue(featuredCard.label.contains("摄影"))
+        XCTAssertLessThan(
+            featuredCard.frame.minY,
+            app.tabBars.firstMatch.frame.minY,
+            "首屏必须在底部导航之前出现真实活动内容"
+        )
+        XCTAssertTrue(app.buttons["显示地图"].exists, "地图切换应保留，但不能挤占顶栏身份入口")
+        XCTAssertTrue(app.buttons["通知"].exists)
+        XCTAssertTrue(app.buttons["打开我的页面"].exists)
+    }
+
+    @MainActor
+    func testDiscoveryRegionControlShowsAndReadsTheCurrentLocalizedRegion() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-spott-ui-test-navigation-fixture"]
+        app.launch()
+
+        let regionControl = app.buttons["东京"]
+        XCTAssertTrue(
+            regionControl.waitForExistence(timeout: 5),
+            "当前地区必须以本地化文字可见，不能退化成只有定位图标"
+        )
+        XCTAssertTrue(regionControl.isHittable)
+    }
+
+    @MainActor
+    func testCompactDiscoveryCardVisuallyReservesSpaceForHostAndThreeTags() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-spott-ui-test-navigation-fixture"]
+        app.launch()
+
+        let compactCard = app.descendants(matching: .any)[
+            "discovery.event.019b0000-0000-7000-8100-000000000002"
+        ]
+        XCTAssertTrue(compactCard.waitForExistence(timeout: 5))
+        for _ in 0..<4 where !compactCard.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(compactCard.isHittable)
+        XCTAssertTrue(compactCard.label.contains("小光"))
+        XCTAssertTrue(compactCard.label.contains("music"))
+        XCTAssertTrue(compactCard.label.contains("新朋友"))
+        XCTAssertGreaterThanOrEqual(
+            compactCard.frame.height,
+            160,
+            "紧凑卡必须为视觉上的局头和标签留出空间，而不只是把信息塞进 VoiceOver 标签"
+        )
     }
 
     @MainActor
@@ -219,7 +293,7 @@ final class SpottUITests: XCTestCase {
             "-spott-ui-test-navigation-fixture",
             "-spott-ui-test-composer-contact",
             "-UIPreferredContentSizeCategoryName",
-            "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge",
+            UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue,
         ]
         app.launch()
 
@@ -252,6 +326,88 @@ final class SpottUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(value.frame.height, 48)
         value.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testVisibleSurfacesAtStandardText() throws {
+        try assertVisibleSurfaces(largestAccessibilityText: false)
+    }
+
+    @MainActor
+    func testVisibleSurfacesAtLargestAccessibilityText() throws {
+        try assertVisibleSurfaces(largestAccessibilityText: true)
+    }
+
+    @MainActor
+    private func assertVisibleSurfaces(largestAccessibilityText: Bool) throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-spott-ui-test-navigation-fixture"]
+        if largestAccessibilityText {
+            app.launchArguments += [
+                "-UIPreferredContentSizeCategoryName",
+                UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue,
+            ]
+        }
+        app.launch()
+
+        let sizeName = largestAccessibilityText ? "ax" : "standard"
+        let discovery = app.descendants(matching: .any)["discovery.screen"]
+        let firstFilter = app.buttons["全部"]
+        let modeButton = app.buttons["显示地图"]
+        XCTAssertTrue(discovery.waitForExistence(timeout: 5))
+        XCTAssertTrue(firstFilter.waitForExistence(timeout: 3))
+        XCTAssertTrue(firstFilter.isHittable)
+        XCTAssertTrue(modeButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(modeButton.isHittable)
+        XCTAssertGreaterThanOrEqual(modeButton.frame.height, 44)
+        captureScreenshot(named: "i4a-\(sizeName)-discovery")
+
+        let featured = app.descendants(matching: .any)["discovery.featured-event"]
+        XCTAssertTrue(featured.waitForExistence(timeout: 5))
+        for _ in 0..<5 where !featured.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(featured.isHittable)
+        featured.tap()
+
+        let detailTitle = app.descendants(matching: .any)["event.detail.title"]
+        let detailAction = app.buttons
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "event.action."))
+            .firstMatch
+        XCTAssertTrue(detailTitle.waitForExistence(timeout: 5))
+        XCTAssertTrue(detailAction.waitForExistence(timeout: 3))
+        XCTAssertGreaterThan(detailAction.frame.width, 80)
+        XCTAssertGreaterThanOrEqual(detailAction.frame.height, 44)
+        captureScreenshot(named: "i4a-\(sizeName)-detail")
+        try tapNativeBackButton(in: app)
+
+        app.tabBars.buttons["创建"].tap()
+        let composerGate = app.staticTexts["登录后创建活动"]
+        let composerAction = app.buttons["登录"]
+        XCTAssertTrue(composerGate.waitForExistence(timeout: 5))
+        XCTAssertTrue(composerAction.waitForExistence(timeout: 3))
+        for _ in 0..<4 where !composerAction.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(composerAction.isHittable)
+        XCTAssertGreaterThanOrEqual(composerAction.frame.height, 44)
+        XCTAssertTrue(app.staticTexts["草稿会自动保存，并可在 Web 工作台继续编辑。"].exists)
+        captureScreenshot(named: "i4a-\(sizeName)-create")
+
+        app.tabBars.buttons["我的"].tap()
+        let profileAction = app.buttons["登录或注册"]
+        XCTAssertTrue(profileAction.waitForExistence(timeout: 5))
+        XCTAssertTrue(profileAction.isHittable)
+        XCTAssertGreaterThanOrEqual(profileAction.frame.height, 44)
+        captureScreenshot(named: "i4a-\(sizeName)-profile")
+    }
+
+    @MainActor
+    private func captureScreenshot(named name: String) {
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     @MainActor
@@ -323,7 +479,7 @@ final class SpottUITests: XCTestCase {
         if largestAccessibilityText {
             arguments += [
                 "-UIPreferredContentSizeCategoryName",
-                "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge",
+                UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue,
             ]
         }
         return arguments

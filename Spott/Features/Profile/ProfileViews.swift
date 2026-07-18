@@ -5,8 +5,17 @@ import StoreKit
 import SwiftUI
 import UIKit
 
+struct ProfileSignedOutLayoutPolicy {
+    let dynamicTypeSize: DynamicTypeSize
+
+    var showsPlatformBadge: Bool { !dynamicTypeSize.isAccessibilitySize }
+    var placesPrimaryActionBeforeSupportingText: Bool { dynamicTypeSize.isAccessibilitySize }
+    var bottomContentPadding: CGFloat { dynamicTypeSize.isAccessibilitySize ? 112 : 36 }
+}
+
 struct ProfileHomeView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var profile: UserProfile?
     @State private var wallet: WalletSnapshot?
     @State private var achievementCount = 0
@@ -31,7 +40,10 @@ struct ProfileHomeView: View {
             }
             .padding(.horizontal, SpottMetric.pageInset)
             .padding(.top, 18)
-            .padding(.bottom, 36)
+            .padding(
+                .bottom,
+                model.session == nil ? signedOutLayoutPolicy.bottomContentPadding : 36
+            )
         }
         .background(SpottColor.canvas.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
@@ -45,23 +57,29 @@ struct ProfileHomeView: View {
                     .fill(Color.white.opacity(0.55))
                     .frame(width: 68, height: 68)
                     .overlay(Image(systemName: "person").font(.system(size: 25, weight: .medium)))
-                Spacer()
-                Text("iOS + Web")
-                    .font(.caption.monospaced().weight(.semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.white.opacity(0.56), in: Capsule())
+                    .accessibilityHidden(true)
+                if signedOutLayoutPolicy.showsPlatformBadge {
+                    Spacer()
+                    Text("iOS + Web")
+                        .font(.caption.monospaced().weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.56), in: Capsule())
+                        .accessibilityHidden(true)
+                }
             }
-            VStack(alignment: .leading, spacing: 7) {
-                Text("把每一次见面，留在同一个账号里。")
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                    .tracking(-0.6)
-                Text("登录后同步收藏、活动、群组、成就和积分钱包。")
-                    .font(.subheadline)
-                    .foregroundStyle(SpottColor.muted)
+
+            if signedOutLayoutPolicy.placesPrimaryActionBeforeSupportingText {
+                signedOutTitle
+                signedOutAction
+                signedOutSupportingText
+            } else {
+                VStack(alignment: .leading, spacing: 7) {
+                    signedOutTitle
+                    signedOutSupportingText
+                }
+                signedOutAction
             }
-            Button("登录或注册") { model.presentedGate = .login }
-                .buttonStyle(PrimaryButtonStyle())
         }
         .padding(22)
         .background(
@@ -72,6 +90,38 @@ struct ProfileHomeView: View {
             ),
             in: RoundedRectangle(cornerRadius: SpottMetric.coverRadius, style: .continuous)
         )
+    }
+
+    private var signedOutLayoutPolicy: ProfileSignedOutLayoutPolicy {
+        ProfileSignedOutLayoutPolicy(dynamicTypeSize: dynamicTypeSize)
+    }
+
+    private var signedOutTitle: some View {
+        Text("把每一次见面，留在同一个账号里。")
+            .font(.title2.bold())
+            .tracking(dynamicTypeSize.isAccessibilitySize ? 0 : -0.6)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var signedOutSupportingText: some View {
+        Text("登录后同步收藏、活动、群组、成就和积分钱包。")
+            .font(.subheadline)
+            .foregroundStyle(SpottColor.muted)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var signedOutAction: some View {
+        Button {
+            model.presentedGate = .login
+        } label: {
+            Text("登录或注册")
+                .font(.headline)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: 52)
+        }
+        .spottProminentActionStyle()
+        .accessibilityIdentifier("profile.sign-in")
     }
 
     private var profileHeader: some View {

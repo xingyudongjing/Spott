@@ -168,6 +168,12 @@ describe('generated cross-surface contract', () => {
     expect(schema).toContain(
       'deviceBindingProof?: components["schemas"]["PersistentDeviceBindingProof"]',
     );
+    expect(schema).toContain(
+      'refreshEnvelopeClaims?: components["schemas"]["WebRefreshEnvelopeDBClaims"]',
+    );
+    expect(schema).toContain('WebRefreshEnvelopeDBClaims: {');
+    expect(schema).toContain('transportClass: "web_bff";');
+    expect(schema).toContain('persistentBindingGeneration: number;');
     expect(schema).toContain('proofClass: "persistent";');
     expect(schema).toContain('refreshGeneration: number;');
   });

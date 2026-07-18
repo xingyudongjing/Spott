@@ -15,6 +15,10 @@ import {
   type SessionTransportClass,
 } from '../../platform/web-bff-authority.js';
 import type { SessionResponse } from './auth.service.js';
+import {
+  webRefreshEnvelopeDBClaimsSchema,
+  type WebRefreshEnvelopeDBClaims,
+} from './refresh-envelope-claims.js';
 
 const successorContext = 'spott:refresh-successor';
 const successorVersion = 'v2';
@@ -34,6 +38,7 @@ export interface RefreshMutationInput {
   readonly deviceId: string;
   readonly attemptKey?: string | undefined;
   readonly deviceBindingProof?: DeviceBindingProof | undefined;
+  readonly refreshEnvelopeClaims?: WebRefreshEnvelopeDBClaims | undefined;
 }
 
 export interface SessionTokenResponse extends SessionResponse {
@@ -273,8 +278,17 @@ export class SessionTokenService {
     attemptHash: Buffer | null,
   ): Promise<RefreshMutationOutcome> {
     const predecessor = await this.lockHistoryGeneration(client, session.id, predecessorGeneration);
-    if (!this.isCurrentHistory(predecessor, session, predecessorGeneration, predecessorHash)) {
+    if (predecessor === null
+      || !this.isCurrentHistory(predecessor, session, predecessorGeneration, predecessorHash)) {
       return { kind: 'invalid' };
+    }
+    if (!this.matchesRefreshEnvelopeClaims(
+      input.refreshEnvelopeClaims,
+      session,
+      predecessor,
+      predecessorGeneration,
+    )) {
+      return { kind: 'reauth_required' };
     }
 
     let binding: VerifiedBinding | null = null;
@@ -425,8 +439,16 @@ export class SessionTokenService {
       return { kind: 'invalid' };
     }
     const predecessorGeneration = this.generation(predecessor.generation);
-    if (predecessorGeneration === null
-      || credential.version === 'legacy'
+    if (predecessorGeneration === null) return { kind: 'invalid' };
+    if (!this.matchesRefreshEnvelopeClaims(
+      input.refreshEnvelopeClaims,
+      session,
+      predecessor,
+      predecessorGeneration,
+    )) {
+      return { kind: 'reauth_required' };
+    }
+    if (credential.version === 'legacy'
       || credential.generation !== predecessorGeneration) {
       return credential.version === 'legacy' ? { kind: 'reauth_required' } : { kind: 'invalid' };
     }
@@ -582,9 +604,42 @@ export class SessionTokenService {
       && history.family_id === session.refresh_family_id
       && history.transport_class === session.transport_class
       && history.derivation_kid === session.current_derivation_kid
+      && history.binding_id === session.current_binding_id
+      && this.sameNullableGeneration(
+        history.binding_generation,
+        session.current_binding_generation,
+      )
       && this.generation(history.generation) === generation
       && this.equalHash(history.token_hash, predecessorHash)
       && this.equalHash(history.token_hash, session.refresh_hash);
+  }
+
+  private matchesRefreshEnvelopeClaims(
+    value: unknown,
+    session: LockedSessionRow,
+    history: RefreshHistoryRow,
+    generation: number,
+  ): boolean {
+    if (session.transport_class !== 'web_bff') return value === undefined;
+    const parsed = webRefreshEnvelopeDBClaimsSchema.safeParse(value);
+    const bindingGeneration = this.generation(history.binding_generation);
+    return parsed.success
+      && bindingGeneration !== null
+      && parsed.data.sessionId === session.id
+      && parsed.data.familyId === history.family_id
+      && parsed.data.generation === generation
+      && parsed.data.transportClass === 'web_bff'
+      && parsed.data.persistentBindingId === history.binding_id
+      && parsed.data.persistentBindingGeneration === bindingGeneration;
+  }
+
+  private sameNullableGeneration(
+    left: string | number | null,
+    right: string | number | null,
+  ): boolean {
+    if (left === null || right === null) return left === null && right === null;
+    const leftGeneration = this.generation(left);
+    return leftGeneration !== null && leftGeneration === this.generation(right);
   }
 
   private async verifyBinding(

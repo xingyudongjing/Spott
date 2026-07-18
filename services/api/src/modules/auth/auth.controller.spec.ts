@@ -55,6 +55,14 @@ const bootstrapProof = {
   proof: Buffer.alloc(32, 23).toString('base64url'),
   proofClass: 'persistent',
 } as const;
+const refreshEnvelopeClaims = {
+  sessionId: bootstrapSessionId,
+  familyId: '019b0000-0000-7000-8000-000000000041',
+  generation: 3,
+  transportClass: 'web_bff',
+  persistentBindingId: bootstrapProof.bindingId,
+  persistentBindingGeneration: bootstrapProof.generation,
+} as const;
 
 function guardContext(request: unknown) {
   return {
@@ -185,6 +193,7 @@ describe('AuthController trusted session issuance authority', () => {
       'headerless_native',
       undefined,
       undefined,
+      undefined,
     );
   });
 
@@ -209,6 +218,7 @@ describe('AuthController trusted session issuance authority', () => {
           refreshToken: 'current-refresh-token',
           deviceId,
           deviceBindingProof: proof,
+          refreshEnvelopeClaims,
           platform: 'ios',
           transportClass: 'native',
           sessionRequestChannel: 'headerless_native',
@@ -225,7 +235,29 @@ describe('AuthController trusted session issuance authority', () => {
       'verified_bff',
       key,
       proof,
+      refreshEnvelopeClaims,
     );
+  });
+
+  it('rejects a malformed or non-strict refresh envelope claim before AuthService', async () => {
+    const { auth, controller } = harness();
+    const request: IssuanceRequest = {
+      verifiedBFFAuthority: authority,
+      sessionRequestChannel: 'verified_bff',
+    };
+
+    for (const claims of [
+      { ...refreshEnvelopeClaims, transportClass: 'native' },
+      { ...refreshEnvelopeClaims, generation: -1 },
+      { ...refreshEnvelopeClaims, extra: 'forged' },
+    ]) {
+      await expect(Promise.resolve().then(() => controller.refresh(request, {
+        refreshToken: 'current-refresh-token',
+        deviceId,
+        refreshEnvelopeClaims: claims,
+      }))).rejects.toBeDefined();
+    }
+    expect(auth.refresh).not.toHaveBeenCalled();
   });
 
   it('rejects a malformed optional idempotency key or non-persistent proof before AuthService', async () => {
@@ -275,6 +307,7 @@ describe('AuthController trusted session issuance authority', () => {
         refreshToken: 'current-refresh-token',
         deviceId,
         deviceBindingProof: bootstrapProof,
+        refreshEnvelopeClaims,
       }),
     ).resolves.toEqual({ sessionId: 'bootstrap-session' });
 
@@ -284,6 +317,7 @@ describe('AuthController trusted session issuance authority', () => {
       bootstrapProof,
       authority,
       'verified_bff',
+      refreshEnvelopeClaims,
     );
   });
 
@@ -538,6 +572,7 @@ describe('Auth bootstrap global guard to controller chain', () => {
       bootstrapProof,
       undefined,
       'headerless_native',
+      undefined,
     );
   });
 
@@ -547,6 +582,7 @@ describe('Auth bootstrap global guard to controller chain', () => {
       refreshToken: bootstrapRefreshToken,
       deviceId,
       deviceBindingProof: bootstrapProof,
+      refreshEnvelopeClaims,
     };
     const request: IssuanceRequest & {
       method: string;
@@ -587,6 +623,7 @@ describe('Auth bootstrap global guard to controller chain', () => {
       bootstrapProof,
       authority,
       'verified_bff',
+      refreshEnvelopeClaims,
     );
   });
 });

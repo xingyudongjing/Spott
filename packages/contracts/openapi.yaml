@@ -153,7 +153,9 @@ paths:
         Rotates the current refresh credential. Idempotency-Key and a persistent
         device binding proof are optional for compatibility only while the
         supplied credential is still current and being used for the first time;
-        neither omission permits recovery of a consumed credential.
+        neither omission permits recovery of a consumed credential. A Web BFF
+        sends the integrity-verified refresh envelope DB claims; the API checks
+        them against locked session/history rows before any refresh mutation.
       tags: [Auth]
       security: []
       parameters:
@@ -173,6 +175,7 @@ paths:
                 refreshToken: { type: string }
                 deviceId: { $ref: '#/components/schemas/UUID' }
                 deviceBindingProof: { $ref: '#/components/schemas/PersistentDeviceBindingProof' }
+                refreshEnvelopeClaims: { $ref: '#/components/schemas/WebRefreshEnvelopeDBClaims' }
       responses:
         '200': { $ref: '#/components/responses/AuthSession' }
         '401': { $ref: '#/components/responses/Error' }
@@ -187,7 +190,8 @@ paths:
         current generation, current refresh history and active persistent
         binding all agree. This read-only operation never rotates or extends the
         refresh credential and never updates session, history or binding time
-        fields.
+        fields. Web BFF envelope DB claims are compared in the same read-only
+        SELECT snapshot; native, Ops and legacy callers omit them.
       tags: [Auth]
       security: []
       requestBody:
@@ -202,6 +206,7 @@ paths:
                 refreshToken: { type: string }
                 deviceId: { $ref: '#/components/schemas/UUID' }
                 deviceBindingProof: { $ref: '#/components/schemas/PersistentDeviceBindingProof' }
+                refreshEnvelopeClaims: { $ref: '#/components/schemas/WebRefreshEnvelopeDBClaims' }
       responses:
         '200': { $ref: '#/components/responses/AuthSession' }
         '400': { $ref: '#/components/responses/Error' }
@@ -2637,9 +2642,26 @@ components:
       required: [bindingId, generation, proof, proofClass]
       properties:
         bindingId: { $ref: '#/components/schemas/UUID' }
-        generation: { type: integer, minimum: 0 }
+        generation: { type: integer, minimum: 0, maximum: 9007199254740991 }
         proof: { type: string, minLength: 32, maxLength: 1024, writeOnly: true }
         proofClass: { type: string, enum: [persistent] }
+    WebRefreshEnvelopeDBClaims:
+      type: object
+      additionalProperties: false
+      required:
+        - sessionId
+        - familyId
+        - generation
+        - transportClass
+        - persistentBindingId
+        - persistentBindingGeneration
+      properties:
+        sessionId: { $ref: '#/components/schemas/UUID' }
+        familyId: { $ref: '#/components/schemas/UUID' }
+        generation: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        transportClass: { type: string, enum: [web_bff] }
+        persistentBindingId: { $ref: '#/components/schemas/UUID' }
+        persistentBindingGeneration: { type: integer, minimum: 0, maximum: 9007199254740991 }
     AuthSession:
       type: object
       required: [accessToken, accessTokenExpiresAt, refreshToken, refreshGeneration, sessionId, user]

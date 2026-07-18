@@ -106,7 +106,7 @@ export interface paths {
         put?: never;
         /**
          * Refresh session
-         * @description Rotates the current refresh credential. Idempotency-Key and a persistent device binding proof are optional for compatibility only while the supplied credential is still current and being used for the first time; neither omission permits recovery of a consumed credential.
+         * @description Rotates the current refresh credential. Idempotency-Key and a persistent device binding proof are optional for compatibility only while the supplied credential is still current and being used for the first time; neither omission permits recovery of a consumed credential. A Web BFF sends the integrity-verified refresh envelope DB claims; the API checks them against locked session/history rows before any refresh mutation.
          */
         post: operations["refreshSession"];
         delete?: never;
@@ -126,7 +126,7 @@ export interface paths {
         put?: never;
         /**
          * Bootstrap the current session without rotating it
-         * @description Returns a freshly signed access token for the same current stable session only after the refresh credential, device, immutable transport, current generation, current refresh history and active persistent binding all agree. This read-only operation never rotates or extends the refresh credential and never updates session, history or binding time fields.
+         * @description Returns a freshly signed access token for the same current stable session only after the refresh credential, device, immutable transport, current generation, current refresh history and active persistent binding all agree. This read-only operation never rotates or extends the refresh credential and never updates session, history or binding time fields. Web BFF envelope DB claims are compared in the same read-only SELECT snapshot; native, Ops and legacy callers omit them.
          */
         post: operations["bootstrapSession"];
         delete?: never;
@@ -2370,6 +2370,15 @@ export interface components {
             /** @enum {string} */
             proofClass: "persistent";
         };
+        WebRefreshEnvelopeDBClaims: {
+            sessionId: components["schemas"]["UUID"];
+            familyId: components["schemas"]["UUID"];
+            generation: number;
+            /** @enum {string} */
+            transportClass: "web_bff";
+            persistentBindingId: components["schemas"]["UUID"];
+            persistentBindingGeneration: number;
+        };
         AuthSession: {
             accessToken: string;
             /** Format: date-time */
@@ -4088,6 +4097,7 @@ export interface operations {
                     refreshToken: string;
                     deviceId: components["schemas"]["UUID"];
                     deviceBindingProof?: components["schemas"]["PersistentDeviceBindingProof"];
+                    refreshEnvelopeClaims?: components["schemas"]["WebRefreshEnvelopeDBClaims"];
                 };
             };
         };
@@ -4110,6 +4120,7 @@ export interface operations {
                     refreshToken: string;
                     deviceId: components["schemas"]["UUID"];
                     deviceBindingProof: components["schemas"]["PersistentDeviceBindingProof"];
+                    refreshEnvelopeClaims?: components["schemas"]["WebRefreshEnvelopeDBClaims"];
                 };
             };
         };

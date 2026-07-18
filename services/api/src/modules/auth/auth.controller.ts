@@ -12,6 +12,7 @@ import type {
   SessionTransportClass,
 } from '../../platform/web-bff-authority.js';
 import { AuthService } from './auth.service.js';
+import { webRefreshEnvelopeDBClaimsSchema } from './refresh-envelope-claims.js';
 import { isCanonicalPersistentDeviceBindingProof } from './session-token.service.js';
 
 const persistentDeviceBindingProofSchema = z
@@ -81,6 +82,7 @@ export class AuthController {
         refreshToken: z.string(),
         deviceId: z.string().uuid(),
         deviceBindingProof: persistentDeviceBindingProofSchema.optional(),
+        refreshEnvelopeClaims: webRefreshEnvelopeDBClaimsSchema.optional(),
       })
       .parse(body);
     return this.auth.refresh(
@@ -91,6 +93,7 @@ export class AuthController {
       this.requestChannel(request),
       this.optionalKey(key),
       input.deviceBindingProof,
+      input.refreshEnvelopeClaims,
     );
   }
 
@@ -102,6 +105,7 @@ export class AuthController {
         refreshToken: z.string(),
         deviceId: z.string().uuid(),
         deviceBindingProof: persistentDeviceBindingProofSchema,
+        refreshEnvelopeClaims: webRefreshEnvelopeDBClaimsSchema.optional(),
       })
       .strict()
       .parse(body);
@@ -111,6 +115,7 @@ export class AuthController {
       input.deviceBindingProof,
       request.verifiedBFFAuthority,
       this.requestChannel(request),
+      input.refreshEnvelopeClaims,
     );
   }
 

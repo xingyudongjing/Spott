@@ -49,6 +49,7 @@ interface SeededSession {
   readonly userId: string;
   readonly deviceId: string;
   readonly sessionId: string;
+  readonly familyId: string;
   readonly token: string;
 }
 
@@ -204,7 +205,7 @@ describe('real HTTP Web BFF transport boundary', () => {
        ) VALUES ($1, $2, $3, $4, $5, clock_timestamp() + interval '30 days', $6)`,
       [sessionId, userId, deviceId, refreshHash, familyId, transportClass],
     );
-    return { userId, deviceId, sessionId, token: `${sessionId}.${secret}` };
+    return { userId, deviceId, sessionId, familyId, token: `${sessionId}.${secret}` };
   }
 
   async function seedEmailChallenge(): Promise<SeededEmailChallenge> {
@@ -367,6 +368,43 @@ describe('real HTTP Web BFF transport boundary', () => {
     };
   }
 
+  async function upgradeWebSessionBinding(
+    seeded: SeededSession,
+    targetBaseURL = baseURL,
+    requestHeaders: Record<string, string> = {},
+  ) {
+    const path = '/v1/auth/device-binding/upgrade';
+    const bindingId = randomUUID();
+    const proof = randomBytes(32).toString('base64url');
+    const body = JSON.stringify({
+      refreshToken: seeded.token,
+      deviceId: seeded.deviceId,
+      attemptId: randomUUID(),
+      newBinding: {
+        bindingId,
+        generation: 0,
+        proof,
+        proofClass: 'persistent',
+      },
+    });
+    const response = await postJSONWithoutBrowserHeaders(`${targetBaseURL}${path}`, body, {
+      ...requestHeaders,
+      ...signedHeaders(path, body),
+    });
+    expect(response.status).toBe(200);
+    return {
+      deviceBindingProof: { bindingId, generation: 0, proof, proofClass: 'persistent' as const },
+      refreshEnvelopeClaims: {
+        sessionId: seeded.sessionId,
+        familyId: seeded.familyId,
+        generation: 0,
+        transportClass: 'web_bff' as const,
+        persistentBindingId: bindingId,
+        persistentBindingGeneration: 0,
+      },
+    };
+  }
+
   async function sessionTransport(response: Response): Promise<SessionTransportClass | undefined> {
     const json = await responseJSON(response) as { sessionId?: string };
     if (!json.sessionId) return undefined;
@@ -512,7 +550,13 @@ describe('real HTTP Web BFF transport boundary', () => {
 
   it('accepts a valid one-time BFF authority and explicitly inherits web_bff on its successor', async () => {
     const seeded = await seedSession('signed', 'web_bff', 'web');
-    const body = JSON.stringify({ refreshToken: seeded.token, deviceId: seeded.deviceId });
+    const binding = await upgradeWebSessionBinding(seeded);
+    const attemptId = randomUUID();
+    const body = JSON.stringify({
+      refreshToken: seeded.token,
+      deviceId: seeded.deviceId,
+      ...binding,
+    });
     const timestamp = Date.now();
     const nonce = `nonce-${randomUUID().replaceAll('-', '')}`;
     const keyring = parseVersionedKeyring(`${bffKid}:${bffKey}`, bffKid);
@@ -532,6 +576,7 @@ describe('real HTTP Web BFF transport boundary', () => {
       'x-spott-bff-timestamp': String(timestamp),
       'x-spott-bff-nonce': nonce,
       'x-spott-bff-signature': signature,
+      'idempotency-key': attemptId,
     };
 
     const response = await postRefresh(body, headers);
@@ -553,7 +598,7 @@ describe('real HTTP Web BFF transport boundary', () => {
       'SELECT count(*)::text AS count FROM identity.web_bff_request_nonces WHERE signing_kid = $1',
       [bffKid],
     );
-    expect(nonceRows.rows[0]?.count).toBe('1');
+    expect(nonceRows.rows[0]?.count).toBe('2');
   });
 
   it('hard-requires one-time BFF authority before the first persistent binding mutation', async () => {
@@ -692,13 +737,23 @@ describe('real HTTP Web BFF transport boundary', () => {
         await expectSessionUnchanged(webUnsigned);
 
         const webSigned = await seedSession(`matrix_web_signed_${mode}`, 'web_bff', 'web');
+        const webBinding = await upgradeWebSessionBinding(
+          webSigned,
+          modeAPI.baseURL,
+          browserHeaders,
+        );
         const webSignedBody = JSON.stringify({
           refreshToken: webSigned.token,
           deviceId: webSigned.deviceId,
+          ...webBinding,
         });
         const webSignedResponse = await postRefresh(
           webSignedBody,
-          { ...browserHeaders, ...signedHeaders('/v1/auth/refresh', webSignedBody) },
+          {
+            ...browserHeaders,
+            ...signedHeaders('/v1/auth/refresh', webSignedBody),
+            'idempotency-key': randomUUID(),
+          },
           modeAPI.baseURL,
         );
         expect(webSignedResponse.status).toBe(201);

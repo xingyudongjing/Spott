@@ -93,6 +93,15 @@ interface MemoryBinding {
   proofClass: 'persistent';
 }
 
+interface TestWebRefreshEnvelopeDBClaims {
+  readonly sessionId: string;
+  readonly familyId: string;
+  readonly generation: number;
+  readonly transportClass: 'web_bff';
+  readonly persistentBindingId: string;
+  readonly persistentBindingGeneration: number;
+}
+
 function refreshHash(secret: string): Buffer {
   return createHmac('sha256', refreshHmacKey).update(secret).digest();
 }
@@ -226,6 +235,21 @@ class MemoryPoolClient {
       attemptKey: attemptA,
       deviceBindingProof: this.proof(),
       ...overrides,
+    };
+  }
+
+  envelopeClaims(generation = this.session.generation): TestWebRefreshEnvelopeDBClaims {
+    const history = this.histories.get(generation);
+    if (!history || history.bindingId === null || history.bindingGeneration === null) {
+      throw new Error('Test refresh history has no persistent binding');
+    }
+    return {
+      sessionId: this.session.id,
+      familyId: history.familyId,
+      generation,
+      transportClass: 'web_bff',
+      persistentBindingId: history.bindingId,
+      persistentBindingGeneration: history.bindingGeneration,
     };
   }
 
@@ -488,6 +512,126 @@ describe('strict refresh token grammar', () => {
 });
 
 describe('SessionTokenService stable rotation and exact recovery', () => {
+  it('requires exact current DB claims for a web_bff rotation', async () => {
+    const { memory, rotate } = serviceHarness({ transportClass: 'web_bff' });
+    const claims = memory.envelopeClaims();
+
+    const outcome = await rotate({
+      ...memory.input(),
+      refreshEnvelopeClaims: claims,
+    });
+
+    expect(outcome).toMatchObject({
+      kind: 'rotated',
+      session: { sessionId, refreshGeneration: 1 },
+    });
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['session', { sessionId: '019b0000-0000-7000-8000-000000000099' }],
+    ['family', { familyId: '019b0000-0000-7000-8000-000000000099' }],
+    ['generation', { generation: 1 }],
+    ['transport class', { transportClass: 'native' }],
+    ['binding ID', { persistentBindingId: '019b0000-0000-7000-8000-000000000099' }],
+    ['binding generation', { persistentBindingGeneration: 4 }],
+    ['extra field', { extra: 'forged' }],
+  ] as const)('returns reauthentication with zero mutation for %s web_bff claims', async (
+    _label,
+    mutation,
+  ) => {
+    const { memory, rotate } = serviceHarness({ transportClass: 'web_bff' });
+    const beforeQueries = memory.queries.length;
+    const input = {
+      ...memory.input(),
+      ...(mutation === undefined
+        ? {}
+        : { refreshEnvelopeClaims: { ...memory.envelopeClaims(), ...mutation } }),
+    } as unknown as RefreshMutationInput;
+
+    await expect(rotate(input)).resolves.toEqual({ kind: 'reauth_required' });
+    expect(memory.session.generation).toBe(0);
+    expect(memory.session.revokedAt).toBeNull();
+    expect(memory.session.reuseDetectedAt).toBeNull();
+    expect([...memory.histories.values()]).toEqual([
+      expect.objectContaining({ generation: 0, state: 'current' }),
+    ]);
+    expect(memory.queries.slice(beforeQueries).every(({ sql }) => (
+      !/^\s*(?:INSERT|UPDATE|DELETE)\b/iu.test(sql)
+    ))).toBe(true);
+  });
+
+  it('rejects disguised web claims on native sessions without breaking claimless compatibility', async () => {
+    const disguised = serviceHarness({ transportClass: 'native' });
+    const rejected = await disguised.rotate({
+      ...disguised.memory.input(),
+      refreshEnvelopeClaims: disguised.memory.envelopeClaims(),
+    });
+
+    expect(rejected).toEqual({ kind: 'reauth_required' });
+    expect(disguised.memory.session.generation).toBe(0);
+    expect(disguised.memory.session.revokedAt).toBeNull();
+
+    const compatible = serviceHarness({ transportClass: 'native' });
+    await expect(compatible.rotate()).resolves.toMatchObject({ kind: 'rotated' });
+  });
+
+  it('uses predecessor DB claims for web_bff response-loss recovery and checks them before reuse revocation', async () => {
+    const recoveredHarness = serviceHarness({ transportClass: 'web_bff' });
+    const predecessorClaims = recoveredHarness.memory.envelopeClaims(0);
+    const predecessor = {
+      ...recoveredHarness.memory.input(),
+      refreshEnvelopeClaims: predecessorClaims,
+    };
+
+    await expect(recoveredHarness.rotate(predecessor)).resolves.toMatchObject({ kind: 'rotated' });
+    await expect(recoveredHarness.rotate(predecessor)).resolves.toMatchObject({
+      kind: 'recovered',
+      session: { refreshGeneration: 1 },
+    });
+
+    const mismatchHarness = serviceHarness({ transportClass: 'web_bff' });
+    const mismatchPredecessor = {
+      ...mismatchHarness.memory.input(),
+      refreshEnvelopeClaims: mismatchHarness.memory.envelopeClaims(0),
+    };
+    await mismatchHarness.rotate(mismatchPredecessor);
+
+    const mismatch = await mismatchHarness.rotate({
+      ...mismatchPredecessor,
+      attemptKey: attemptB,
+      refreshEnvelopeClaims: {
+        ...mismatchHarness.memory.envelopeClaims(0),
+        generation: 1,
+      },
+    });
+
+    expect(mismatch).toEqual({ kind: 'reauth_required' });
+    expect(mismatchHarness.memory.session.revokedAt).toBeNull();
+    expect(mismatchHarness.memory.session.reuseDetectedAt).toBeNull();
+    expect(mismatchHarness.memory.queries.some(({ sql }) => (
+      sql.includes('refresh_family_id = $1') && sql.includes('reuse_detected_at')
+    ))).toBe(false);
+  });
+
+  it.each([
+    ['binding ID', '019b0000-0000-7000-8000-000000000099', 3],
+    ['binding generation', bindingId, 4],
+  ] as const)('refuses current history whose %s disagrees with the locked session', async (
+    _label,
+    changedBindingId,
+    changedBindingGeneration,
+  ) => {
+    const { memory, rotate } = serviceHarness();
+    const current = memory.histories.get(0);
+    if (!current) throw new Error('missing current history');
+    current.bindingId = changedBindingId;
+    current.bindingGeneration = changedBindingGeneration;
+
+    await expect(rotate()).resolves.toEqual({ kind: 'invalid' });
+    expect(memory.session.generation).toBe(0);
+  });
+
   it('rotates hash while preserving session id and family id', async () => {
     const { memory, rotate } = serviceHarness();
     const before = { id: memory.session.id, familyId: memory.session.familyId };

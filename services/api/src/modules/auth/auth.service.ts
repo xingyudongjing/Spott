@@ -16,6 +16,10 @@ import {
   type VerifiedBFFAuthority,
 } from '../../platform/web-bff-authority.js';
 import {
+  webRefreshEnvelopeDBClaimsSchema,
+  type WebRefreshEnvelopeDBClaims,
+} from './refresh-envelope-claims.js';
+import {
   isCanonicalPersistentDeviceBindingProof,
   persistentDeviceBindingHash,
   SessionTokenService,
@@ -394,6 +398,7 @@ export class AuthService {
     requestChannel: SessionRequestChannel,
     attemptKey?: string,
     deviceBindingProof?: DeviceBindingProof,
+    refreshEnvelopeClaims?: WebRefreshEnvelopeDBClaims,
   ): Promise<SessionResponse> {
     const credential = parseRefreshCredential(refreshToken);
     if (!credential) throw new DomainError('TOKEN_INVALID', '登录已失效。', 401);
@@ -431,6 +436,7 @@ export class AuthService {
           deviceId,
           attemptKey,
           deviceBindingProof,
+          refreshEnvelopeClaims,
         },
         transport,
       ),
@@ -453,6 +459,7 @@ export class AuthService {
     proofValue: unknown,
     authority: VerifiedBFFAuthority | undefined,
     requestChannel: SessionRequestChannel,
+    refreshEnvelopeClaims?: WebRefreshEnvelopeDBClaims,
   ): Promise<SessionResponse> {
     const credential = parseRefreshCredential(refreshToken);
     const parsedDevice = deviceSchema.safeParse(deviceValue);
@@ -568,6 +575,7 @@ export class AuthService {
         proof,
         suppliedRefreshHash,
         suppliedBindingHash,
+        refreshEnvelopeClaims,
       )
     ) {
       throw new DomainError('TOKEN_EXPIRED', '登录已过期，请重新登录。', 401);
@@ -2264,6 +2272,7 @@ export class AuthService {
     proof: PersistentDeviceBindingProof,
     suppliedRefreshHash: Buffer,
     suppliedBindingHash: Buffer,
+    refreshEnvelopeClaims: WebRefreshEnvelopeDBClaims | undefined,
   ): boolean {
     const generation = this.generation(row.refresh_generation);
     const currentBindingGeneration = this.generation(row.current_binding_generation);
@@ -2311,8 +2320,37 @@ export class AuthService {
       bindingGeneration === proof.generation &&
       row.binding_proof_class === 'persistent' &&
       row.binding_active &&
-      this.sameHash(row.binding_current_hash, suppliedBindingHash)
+      this.sameHash(row.binding_current_hash, suppliedBindingHash) &&
+      this.validRefreshEnvelopeClaims(
+        refreshEnvelopeClaims,
+        row.transport_class,
+        row.id,
+        row.refresh_family_id,
+        generation,
+        row.history_binding_id,
+        historyBindingGeneration,
+      )
     );
+  }
+
+  private validRefreshEnvelopeClaims(
+    value: unknown,
+    transportClass: SessionTransportClass,
+    sessionId: string,
+    familyId: string,
+    generation: number,
+    bindingId: string | null,
+    bindingGeneration: number,
+  ): boolean {
+    if (transportClass !== 'web_bff') return value === undefined;
+    const parsed = webRefreshEnvelopeDBClaimsSchema.safeParse(value);
+    return parsed.success
+      && parsed.data.sessionId === sessionId
+      && parsed.data.familyId === familyId
+      && parsed.data.generation === generation
+      && parsed.data.transportClass === 'web_bff'
+      && parsed.data.persistentBindingId === bindingId
+      && parsed.data.persistentBindingGeneration === bindingGeneration;
   }
 
   private sameHash(left: Buffer, right: Buffer): boolean {

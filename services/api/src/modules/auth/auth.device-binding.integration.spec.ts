@@ -8,6 +8,7 @@ import {
   type DeviceBindingUpgradeInput,
   type DeviceBindingUpgradeMaterial,
 } from './auth.service.js';
+import type { WebRefreshEnvelopeDBClaims } from './refresh-envelope-claims.js';
 import { SessionTokenService } from './session-token.service.js';
 
 const databaseURL = process.env.SPOTT_TEST_DATABASE_URL;
@@ -134,6 +135,20 @@ function upgradeInput(
   };
 }
 
+function refreshEnvelopeClaims(
+  seeded: SeededWebSession,
+  input: DeviceBindingUpgradeInput,
+): WebRefreshEnvelopeDBClaims {
+  return {
+    sessionId: seeded.sessionId,
+    familyId: seeded.familyId,
+    generation: 0,
+    transportClass: 'web_bff',
+    persistentBindingId: input.newBinding.bindingId,
+    persistentBindingGeneration: input.newBinding.generation,
+  };
+}
+
 describe('first persistent Web device-binding upgrade on PostgreSQL', () => {
   beforeAll(async () => {
     client = new Client({
@@ -243,6 +258,7 @@ describe('first persistent Web device-binding upgrade on PostgreSQL', () => {
       input.newBinding,
       authority,
       'verified_bff',
+      refreshEnvelopeClaims(seeded, input),
     )).resolves.toMatchObject({
       sessionId: seeded.sessionId,
       refreshToken: seeded.refreshToken,
@@ -259,7 +275,79 @@ describe('first persistent Web device-binding upgrade on PostgreSQL', () => {
       input.newBinding,
       authority,
       'verified_bff',
+      refreshEnvelopeClaims(seeded, input),
     )).rejects.toMatchObject({ code: 'TOKEN_EXPIRED', status: 401 });
+  });
+
+  it('checks refresh envelope DB claims before any rotate or reuse mutation', async () => {
+    const seeded = await seedWebSession();
+    const input = upgradeInput(seeded);
+    await service.upgradeDeviceBinding(input, authority, 'verified_bff');
+    const claims = refreshEnvelopeClaims(seeded, input);
+    const attemptId = randomUUID();
+
+    await expect(service.refresh(
+      seeded.refreshToken,
+      seeded.deviceId,
+      'web',
+      authority,
+      'verified_bff',
+      attemptId,
+      input.newBinding,
+      { ...claims, generation: 1 },
+    )).rejects.toMatchObject({ code: 'TOKEN_EXPIRED', status: 401 });
+
+    const unchanged = await client.query<{
+      refresh_generation: string;
+      revoked_at: Date | null;
+      reuse_detected_at: Date | null;
+      current_count: string;
+      history_count: string;
+    }>(
+      `SELECT session.refresh_generation, session.revoked_at, session.reuse_detected_at,
+              (SELECT count(*) FROM identity.session_refresh_history history
+               WHERE history.session_id = session.id AND history.state = 'current')::text
+                 AS current_count,
+              (SELECT count(*) FROM identity.session_refresh_history history
+               WHERE history.session_id = session.id)::text AS history_count
+       FROM identity.sessions AS session WHERE session.id = $1`,
+      [seeded.sessionId],
+    );
+    expect(unchanged.rows).toEqual([{
+      refresh_generation: '0',
+      revoked_at: null,
+      reuse_detected_at: null,
+      current_count: '1',
+      history_count: '1',
+    }]);
+
+    const rotated = await service.refresh(
+      seeded.refreshToken,
+      seeded.deviceId,
+      'web',
+      authority,
+      'verified_bff',
+      attemptId,
+      input.newBinding,
+      claims,
+    );
+    expect(rotated).toMatchObject({ sessionId: seeded.sessionId, refreshGeneration: 1 });
+
+    await expect(service.refresh(
+      seeded.refreshToken,
+      seeded.deviceId,
+      'web',
+      authority,
+      'verified_bff',
+      randomUUID(),
+      input.newBinding,
+      { ...claims, familyId: randomUUID() },
+    )).rejects.toMatchObject({ code: 'TOKEN_EXPIRED', status: 401 });
+    const notRevoked = await client.query<{ revoked_at: Date | null; reuse_detected_at: Date | null }>(
+      'SELECT revoked_at, reuse_detected_at FROM identity.sessions WHERE id = $1',
+      [seeded.sessionId],
+    );
+    expect(notRevoked.rows).toEqual([{ revoked_at: null, reuse_detected_at: null }]);
   });
 
   it('rejects a second attempt instead of silently rotating or rebinding the issued session', async () => {

@@ -11,6 +11,7 @@ import {
   AuthService,
   type SessionResponse,
 } from './auth.service.js';
+import type { WebRefreshEnvelopeDBClaims } from './refresh-envelope-claims.js';
 import {
   persistentDeviceBindingHash,
   type DeviceBindingProof,
@@ -537,6 +538,14 @@ const bootstrapAuthority: VerifiedBFFAuthority = {
   timestamp: 1_784_246_400_000,
   nonceHash: Buffer.alloc(32, 7),
 };
+const bootstrapEnvelopeClaims = {
+  sessionId: currentSessionId,
+  familyId: bootstrapFamilyId,
+  generation: 3,
+  transportClass: 'web_bff',
+  persistentBindingId: bootstrapBindingId,
+  persistentBindingGeneration: 4,
+} as const;
 const baseBootstrapRow = {
   id: currentSessionId,
   user_id: currentUserId,
@@ -788,6 +797,7 @@ describe('AuthService read-only session bootstrap', () => {
         bootstrapProof,
         undefined,
         'headerless_native',
+        bootstrapEnvelopeClaims,
       ),
     ).rejects.toMatchObject({ code: 'WEB_BFF_AUTHORITY_REQUIRED', status: 403 });
 
@@ -798,8 +808,66 @@ describe('AuthService read-only session bootstrap', () => {
         bootstrapProof,
         bootstrapAuthority,
         'verified_bff',
+        bootstrapEnvelopeClaims,
       ),
     ).resolves.toMatchObject({ sessionId: currentSessionId, refreshGeneration: 3 });
+  });
+
+  it.each([
+    ['missing claims', undefined],
+    ['different session', { ...bootstrapEnvelopeClaims, sessionId: secondUserId }],
+    ['different family', {
+      ...bootstrapEnvelopeClaims,
+      familyId: '019b0000-0000-7000-8000-000000000099',
+    }],
+    ['different generation', { ...bootstrapEnvelopeClaims, generation: 2 }],
+    ['different binding', {
+      ...bootstrapEnvelopeClaims,
+      persistentBindingId: '019b0000-0000-7000-8000-000000000099',
+    }],
+    ['different binding generation', {
+      ...bootstrapEnvelopeClaims,
+      persistentBindingGeneration: 3,
+    }],
+  ] as const)('fails closed read-only for web_bff bootstrap with %s', async (_label, claims) => {
+    const { database, service } = bootstrapHarness({
+      transport_class: 'web_bff',
+      history_transport_class: 'web_bff',
+    });
+
+    await expect(service.bootstrap(
+      `s2.${currentSessionId}.3.${bootstrapSecret}`,
+      bootstrapDeviceId,
+      bootstrapProof,
+      bootstrapAuthority,
+      'verified_bff',
+      claims,
+    )).rejects.toMatchObject({ code: 'TOKEN_EXPIRED', status: 401 });
+    expect(database.query).toHaveBeenCalledOnce();
+    expect(database.transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects web envelope claims on a native bootstrap without changing native claimless compatibility', async () => {
+    const disguised = bootstrapHarness();
+    await expect(disguised.service.bootstrap(
+      `s2.${currentSessionId}.3.${bootstrapSecret}`,
+      bootstrapDeviceId,
+      bootstrapProof,
+      undefined,
+      'headerless_native',
+      bootstrapEnvelopeClaims,
+    )).rejects.toMatchObject({ code: 'TOKEN_EXPIRED', status: 401 });
+    expect(disguised.database.query).toHaveBeenCalledOnce();
+    expect(disguised.database.transaction).not.toHaveBeenCalled();
+
+    const compatible = bootstrapHarness();
+    await expect(compatible.service.bootstrap(
+      `s2.${currentSessionId}.3.${bootstrapSecret}`,
+      bootstrapDeviceId,
+      bootstrapProof,
+      undefined,
+      'headerless_native',
+    )).resolves.toMatchObject({ sessionId: currentSessionId });
   });
 
   it('marks an initially issued full AuthSession as refresh generation zero', async () => {
@@ -1186,6 +1254,7 @@ interface Task5RefreshContract {
     requestChannel: SessionRequestChannel,
     attemptKey?: string,
     deviceBindingProof?: DeviceBindingProof,
+    refreshEnvelopeClaims?: WebRefreshEnvelopeDBClaims,
   ): Promise<SessionResponse>;
 }
 
@@ -1196,6 +1265,7 @@ interface Task7BootstrapContract {
     deviceBindingProof: unknown,
     authority: VerifiedBFFAuthority | undefined,
     requestChannel: SessionRequestChannel,
+    refreshEnvelopeClaims?: WebRefreshEnvelopeDBClaims,
   ): Promise<SessionResponse & { refreshGeneration: number }>;
 }
 

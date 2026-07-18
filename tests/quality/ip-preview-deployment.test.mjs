@@ -182,6 +182,22 @@ test('deployment script validates config, migrates, seeds synthetic data, and pr
   assert.doesNotMatch(deploy, /git reset|docker system prune|rm -rf/u);
 });
 
+test('backup restore drill targets the immutable deployed release and existing Compose project', () => {
+  const backup = source('backup-restore-check.sh');
+
+  assert.match(backup, /release_directory=\$\(cd "\$release_root" && pwd -P\)/u);
+  assert.match(backup, /release_id=\$\(basename "\$release_directory"\)/u);
+  assert.match(backup, /\^\[a-f0-9\]\{12,64\}\$/u);
+  assert.match(backup, /env "SPOTT_RELEASE_ID=\$release_id" docker compose/u);
+  assert.match(backup, /--project-name spott-ip-preview/u);
+  assert.match(backup, /pg_dump/u);
+  assert.match(backup, /pg_restore/u);
+  assert.match(backup, /exec -T postgres pg_restore --list <"\$dump_tmp"/u);
+  assert.doesNotMatch(backup, /pg_restore --list -/u);
+  assert.match(backup, /schema_migrations/u);
+  assert.doesNotMatch(backup, /set -x|cat .*ip-preview\.env/u);
+});
+
 test('internal functional-test entry stays loopback-only and uses same-origin browser API calls', () => {
   const compose = source('compose.yaml');
   const internal = yaml.load(source('compose.internal.yaml'), { json: true });

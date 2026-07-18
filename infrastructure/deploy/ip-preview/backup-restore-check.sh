@@ -9,20 +9,31 @@ if [[ $(id -u) -ne 0 ]]; then
   printf 'Run this backup check as root\n' >&2
   exit 77
 fi
+if [[ ! -d $release_root ]]; then
+  printf 'Preview release directory is missing\n' >&2
+  exit 66
+fi
+release_directory=$(cd "$release_root" && pwd -P)
+release_id=$(basename "$release_directory")
+if [[ ! $release_id =~ ^[a-f0-9]{12,64}$ ]]; then
+  printf 'Preview release directory must end with its immutable source digest\n' >&2
+  exit 64
+fi
 if [[ ! -f $env_file ]]; then
   printf 'Preview environment file is missing\n' >&2
   exit 66
 fi
-if [[ ! -f $release_root/infrastructure/deploy/ip-preview/compose.yaml ]]; then
+if [[ ! -f $release_directory/infrastructure/deploy/ip-preview/compose.yaml ]]; then
   printf 'Preview release is incomplete\n' >&2
   exit 66
 fi
 
 compose=(
-  docker compose
+  env "SPOTT_RELEASE_ID=$release_id" docker compose
+  --project-name spott-ip-preview
   --env-file "$env_file"
-  -f "$release_root/infrastructure/deploy/ip-preview/compose.yaml"
-  -f "$release_root/infrastructure/deploy/ip-preview/compose.internal.yaml"
+  -f "$release_directory/infrastructure/deploy/ip-preview/compose.yaml"
+  -f "$release_directory/infrastructure/deploy/ip-preview/compose.internal.yaml"
 )
 
 install -d -m 700 -o root -g root "$backup_root"
@@ -69,7 +80,7 @@ if [[ ! -s $dump_tmp ]]; then
   exit 1
 fi
 
-"${compose[@]}" exec -T postgres pg_restore --list - <"$dump_tmp" >/dev/null
+"${compose[@]}" exec -T postgres pg_restore --list <"$dump_tmp" >/dev/null
 
 restore_database="spott_restore_check_$(openssl rand -hex 12)"
 "${compose[@]}" exec -T postgres sh -ceu '

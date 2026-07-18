@@ -66,6 +66,7 @@ export function makeDetail(overrides: Partial<EventDetail> = {}): EventDetail {
   return {
     ...eventFixture,
     exactAddress: null,
+    organizerContact: null,
     attendeeRequirements: "Bring comfortable shoes.",
     riskFlags: [],
     riskDetails: {},

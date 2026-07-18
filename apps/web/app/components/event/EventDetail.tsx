@@ -12,6 +12,7 @@ import {
 } from "../../lib/format";
 import { EventCover } from "../EventCover";
 import styles from "./EventDetail.module.css";
+import { OrganizerContactCard } from "./OrganizerContactCard";
 
 export function EventDetailView({
   event,
@@ -90,6 +91,14 @@ export function EventDetailView({
           </section>
 
           {supplementary}
+
+          {event.organizerContact ? (
+            <OrganizerContactCard
+              contact={event.organizerContact}
+              eventId={event.id}
+              locale={locale}
+            />
+          ) : null}
 
           {event.fee && !event.fee.isFree ? (
             <section className={styles.section}>

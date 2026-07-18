@@ -89,6 +89,10 @@
 .confirmation .eyebrow { margin-top: 4px; }
 .confirmationLead { max-width: 46ch; margin: -8px auto 0; color: var(--spott-muted); line-height: 1.65; }
 .partyConfirmation { margin: -8px 0 0; font-weight: 750; }
+.contactRefreshError { display: grid; gap: 10px; padding: 16px; border: 1px solid color-mix(in srgb, var(--spott-coral) 34%, var(--spott-divider)); border-radius: 14px; background: color-mix(in srgb, var(--spott-coral) 7%, var(--spott-surface)); color: var(--spott-ink); text-align: left; }
+.contactRefreshError p { margin: 0; color: var(--spott-muted); font-size: 13px; line-height: 1.5; }
+.contactRefreshError button { min-height: 44px; justify-self: start; padding: 8px 14px; border: 1px solid var(--spott-twilight); border-radius: 12px; background: var(--spott-surface); color: var(--spott-twilight); font-weight: 800; }
+.contactRefreshError button:focus-visible { outline: 3px solid color-mix(in srgb, var(--spott-twilight) 30%, transparent); outline-offset: 3px; }
 .confirmationUtilities { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .confirmationUtilities button,
 .confirmationSecondary { display: inline-flex; min-height: 46px; align-items: center; justify-content: center; border: 1px solid var(--spott-divider); border-radius: 13px; background: var(--spott-surface); color: var(--spott-ink); font-weight: 750; }

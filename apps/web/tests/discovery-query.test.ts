@@ -9,6 +9,7 @@ import {
 } from "../app/lib/discovery-query";
 import {
   EventContractError,
+  parseEventDetail,
   parseEventPage,
   parseEventSummary,
   type EventDetail,
@@ -73,6 +74,7 @@ const detail: EventDetail = {
   ...summary,
   coordinate: { latitude: 35.68123, longitude: 139.79123, precision: "exact" },
   exactAddress: "1-2-3 Kiyosumi",
+  organizerContact: null,
   attendeeRequirements: null,
   riskFlags: [],
   riskDetails: {},
@@ -168,6 +170,7 @@ describe("strict event contracts", () => {
         ...summary,
         coordinate: { latitude: 35.68123, longitude: 139.79123, precision: "exact" },
         exactAddress: "1-2-3 Kiyosumi",
+        organizerContact: { kind: "email", label: "Host", value: "private@example.jp" },
         exactCoordinate: { latitude: 35.68123, longitude: 139.79123 },
         attendeeRequirements: "Bring an ID",
         registrationQuestions: [{ prompt: "Private question" }],
@@ -185,6 +188,7 @@ describe("strict event contracts", () => {
     const [event] = parsed.items;
     expect(event.coordinate).toBeNull();
     expect(event).not.toHaveProperty("exactAddress");
+    expect(event).not.toHaveProperty("organizerContact");
     expect(event).not.toHaveProperty("exactCoordinate");
     expect(event).not.toHaveProperty("attendeeRequirements");
     expect(event).not.toHaveProperty("registrationQuestions");
@@ -192,6 +196,20 @@ describe("strict event contracts", () => {
     expect(event).not.toHaveProperty("checkinCode");
     expect(event).not.toHaveProperty("media");
     expect((event as EventSummary & { queryRank: number }).queryRank).toBe(0.93);
+  });
+
+  test("strictly parses the protected organizer contact channel", () => {
+    expect(parseEventDetail({
+      ...detail,
+      organizerContact: { kind: "website", label: "Event desk", value: "https://example.jp/contact" },
+    })).toMatchObject({
+      organizerContact: { kind: "website", label: "Event desk", value: "https://example.jp/contact" },
+    });
+
+    expect(() => parseEventDetail({
+      ...detail,
+      organizerContact: { kind: "website", label: null, value: "javascript:alert(1)" },
+    })).toThrow(EventContractError);
   });
 
   test("preserves nullable draft facts without manufacturing location or fee copy", () => {

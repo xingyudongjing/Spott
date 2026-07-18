@@ -47,6 +47,7 @@ type AppDialogController = {
   ask: (request: AppDialogRequest) => Promise<boolean>;
   askForText: (request: AppDialogRequest & { input: AppDialogInput }) => Promise<string | null>;
   run: (request: AppDialogAction) => Promise<boolean>;
+  dismiss: () => void;
 };
 
 const AppDialogContext = createContext<AppDialogController | null>(null);
@@ -65,6 +66,8 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
     const current = pendingRef.current;
     if (!current) return;
     pendingRef.current = null;
+    busyRef.current = false;
+    setBusy(false);
     current.resolve(current.mode === "text" ? null : false);
     setDialog(null);
     setError("");
@@ -93,7 +96,10 @@ export function AppDialogProvider({ children }: { children: ReactNode }) {
     present({ ...request, mode: "action", resolve: (value) => resolve(value === true) });
   }), [present]);
 
-  const controller = useMemo(() => ({ ask, askForText, run }), [ask, askForText, run]);
+  const controller = useMemo(
+    () => ({ ask, askForText, run, dismiss: dismissCurrent }),
+    [ask, askForText, dismissCurrent, run],
+  );
 
   useEffect(() => () => {
     const current = pendingRef.current;

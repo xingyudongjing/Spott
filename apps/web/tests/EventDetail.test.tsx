@@ -1,12 +1,16 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
 import { EventDetailView, eventStructuredData } from "../app/components/event/EventDetail";
 import { PreviewModeProvider } from "../app/components/PreviewModeProvider";
-import { EventDetailClient } from "../app/e/[slug]/EventDetailClient";
+import {
+  EventDetailClient,
+  visibleEventForRoute,
+} from "../app/e/[slug]/EventDetailClient";
 import { apiRequest } from "../app/lib/client-api";
+import { publicSafeEventDetail } from "../app/lib/event-contract";
 import { fetchEvent } from "../app/lib/events-api";
 import { makeDetail, renderWithI18n } from "./event-fixtures";
 
@@ -141,6 +145,11 @@ describe("premium event detail", () => {
     });
     const viewerEvent = makeDetail({
       exactAddress: "东京都江东区平野 1-2-3",
+      organizerContact: {
+        kind: "email",
+        label: "已授权活动邮箱",
+        value: "authorized-host@example.jp",
+      },
       availableActions: ["viewTicket"],
       viewerRegistration: {
         id: "019b0000-0000-7000-8200-000000000001",
@@ -162,7 +171,197 @@ describe("premium event detail", () => {
 
     expect(await screen.findByRole("link", { name: "查看我的报名" })).toBeInTheDocument();
     expect(screen.getByText("东京都江东区平野 1-2-3")).toBeInTheDocument();
+    expect(screen.getByText("已授权活动邮箱")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "发送邮件" })).toHaveAttribute(
+      "href",
+      "mailto:authorized-host@example.jp",
+    );
     expect(screen.queryByText("报名确认后显示精确集合点")).not.toBeInTheDocument();
+  });
+
+  test("synchronously removes every old viewer-only fact when the viewer logs out", async () => {
+    const authorizedSSR = makeDetail({
+      exactAddress: "Old account exact address",
+      coordinate: { latitude: 35.681, longitude: 139.792, precision: "exact" },
+      organizerContact: {
+        kind: "email",
+        label: "Old account private desk",
+        value: "old-account@example.jp",
+      },
+      registrationStatus: "confirmed",
+      viewerRegistration: {
+        id: "019b0000-0000-7000-8200-000000000001",
+        status: "confirmed",
+        partySize: 1,
+        availableActions: ["viewTicket"],
+        offerExpiresAt: null,
+      },
+      favorited: true,
+      availableActions: ["viewTicket"],
+      organizer: {
+        ...makeDetail().organizer,
+        viewerFollowing: true,
+      },
+    });
+    actionMocks.session = {
+      accessToken: "old-account-token",
+      user: { id: "old-account", phoneVerified: true },
+    };
+    apiRequestMock.mockImplementation(async (path) => path === `/events/${authorizedSSR.id}`
+      ? authorizedSSR
+      : { published: false, tags: [] });
+
+    renderWithI18n(<EventDetailClient event={authorizedSSR} locale="zh-Hans" />);
+
+    expect(await screen.findByText("Old account private desk")).toBeInTheDocument();
+    actionMocks.session = null;
+    act(() => window.dispatchEvent(new CustomEvent("spott:session")));
+
+    expect(screen.queryByText("Old account private desk")).not.toBeInTheDocument();
+    expect(screen.queryByText("old-account@example.jp")).not.toBeInTheDocument();
+    expect(screen.queryByText("Old account exact address")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "查看我的报名" })).not.toBeInTheDocument();
+  });
+
+  test("never publishes an A response after switching to B", async () => {
+    const serverEvent = makeDetail({
+      exactAddress: "Account A SSR address",
+      coordinate: { latitude: 35.681, longitude: 139.792, precision: "exact" },
+      organizerContact: {
+        kind: "email",
+        label: "Account A SSR desk",
+        value: "a-ssr@example.jp",
+      },
+    });
+    const accountA = makeDetail({
+      exactAddress: "Account A late address",
+      organizerContact: {
+        kind: "email",
+        label: "Account A late desk",
+        value: "a-late@example.jp",
+      },
+    });
+    const accountB = makeDetail({
+      exactAddress: "Account B authorized address",
+      organizerContact: {
+        kind: "email",
+        label: "Account B authorized desk",
+        value: "b@example.jp",
+      },
+    });
+    let resolveA!: (event: typeof accountA) => void;
+    let resolveB!: (event: typeof accountB) => void;
+    const pendingA = new Promise<typeof accountA>((resolve) => { resolveA = resolve; });
+    const pendingB = new Promise<typeof accountB>((resolve) => { resolveB = resolve; });
+    let detailReads = 0;
+    actionMocks.session = {
+      accessToken: "account-a-token",
+      user: { id: "account-a", phoneVerified: true },
+    };
+    apiRequestMock.mockImplementation(async (path) => {
+      if (path !== `/events/${serverEvent.id}`) return { published: false, tags: [] };
+      detailReads += 1;
+      return detailReads === 1 ? pendingA : pendingB;
+    });
+
+    renderWithI18n(<EventDetailClient event={serverEvent} locale="zh-Hans" />);
+
+    expect(screen.queryByText("Account A SSR desk")).not.toBeInTheDocument();
+    expect(screen.queryByText("Account A SSR address")).not.toBeInTheDocument();
+    await waitFor(() => expect(detailReads).toBe(1));
+    actionMocks.session = {
+      accessToken: "account-b-token",
+      user: { id: "account-b", phoneVerified: true },
+    };
+    act(() => window.dispatchEvent(new CustomEvent("spott:session")));
+    await waitFor(() => expect(detailReads).toBe(2));
+
+    await act(async () => resolveA(accountA));
+    expect(screen.queryByText("Account A late desk")).not.toBeInTheDocument();
+    expect(screen.queryByText("Account A late address")).not.toBeInTheDocument();
+
+    await act(async () => resolveB(accountB));
+    expect(await screen.findByText("Account B authorized desk")).toBeInTheDocument();
+    expect(screen.getByText("Account B authorized address")).toBeInTheDocument();
+  });
+
+  test("keeps the public-safe event when an authorized response has the wrong event id", async () => {
+    const serverEvent = makeDetail({ organizerContact: null, exactAddress: null });
+    const wrongEvent = makeDetail({
+      id: "019b0000-0000-7000-8100-000000000099",
+      publicSlug: "wrong-cached-event",
+      exactAddress: "Wrong event private address",
+      organizerContact: {
+        kind: "email",
+        label: "Wrong event private desk",
+        value: "wrong-event@example.jp",
+      },
+    });
+    actionMocks.session = {
+      accessToken: "viewer-token",
+      user: { id: "viewer-user", phoneVerified: true },
+    };
+    apiRequestMock.mockImplementation(async (path) => path === `/events/${serverEvent.id}`
+      ? wrongEvent
+      : { published: false, tags: [] });
+
+    renderWithI18n(<EventDetailClient event={serverEvent} locale="en" />, "en");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Events could not be loaded");
+    expect(screen.queryByText("Wrong event private desk")).not.toBeInTheDocument();
+    expect(screen.queryByText("wrong-event@example.jp")).not.toBeInTheDocument();
+    expect(screen.queryByText("Wrong event private address")).not.toBeInTheDocument();
+    expect(screen.getByText("清澄白河站附近")).toBeInTheDocument();
+  });
+
+  test("synchronously projects route B instead of retaining route A private state before effects run", () => {
+    const authorizedA = makeDetail({
+      organizerContact: {
+        kind: "email",
+        label: "Route A private desk",
+        value: "route-a@example.jp",
+      },
+      exactAddress: "Route A private address",
+    });
+    const publicB = publicSafeEventDetail(makeDetail({
+      id: "019b0000-0000-7000-8100-000000000099",
+      publicSlug: "route-b",
+      title: "Route B",
+    }));
+
+    const visible = visibleEventForRoute(
+      { routeId: authorizedA.id, event: authorizedA },
+      publicB,
+    );
+
+    expect(visible.id).toBe(publicB.id);
+    expect(visible.title).toBe("Route B");
+    expect(visible.organizerContact).toBeNull();
+    expect(visible.exactAddress).toBeNull();
+    expect(JSON.stringify(visible)).not.toContain("route-a@example.jp");
+    expect(JSON.stringify(visible)).not.toContain("Route A private address");
+  });
+
+  test("builds a public-safe detail without retaining an exact coordinate", () => {
+    const safe = publicSafeEventDetail(makeDetail({
+      exactAddress: "Private address",
+      coordinate: { latitude: 35.681, longitude: 139.792, precision: "exact" },
+      organizerContact: { kind: "email", label: "Private", value: "private@example.jp" },
+      registrationStatus: "confirmed",
+      viewerRegistration: {
+        id: "019b0000-0000-7000-8200-000000000001",
+        status: "confirmed",
+        partySize: 1,
+        availableActions: ["viewTicket"],
+        offerExpiresAt: null,
+      },
+    }));
+
+    expect(safe.exactAddress).toBeNull();
+    expect(safe.organizerContact).toBeNull();
+    expect(safe.coordinate).toBeNull();
+    expect(safe.registrationStatus).toBeNull();
+    expect(safe.viewerRegistration).toBeNull();
   });
 
   test("keeps public JSON-LD server-rendered while a client boundary owns viewer facts", () => {
@@ -224,6 +423,49 @@ describe("premium event detail", () => {
     const exactAddress = screen.getByText("东京都江东区平野 1-2-3");
     expect(exactAddress).toBeInTheDocument();
     expect(exactAddress.parentElement).toHaveTextContent("仅向有权限的参加者显示");
+  });
+
+  test.each([
+    ["zh-Hans", "联系主办方", "打开联系页面"],
+    ["ja", "主催者に連絡", "連絡ページを開く"],
+    ["en", "Contact the host", "Open contact page"],
+  ] as const)("keeps the authorized organizer contact reachable on a %s event revisit", (locale, title, action) => {
+    const event = makeDetail({
+      organizerContact: {
+        kind: "website",
+        label: "Event safety desk",
+        value: "https://example.jp/contact",
+      },
+    });
+
+    renderWithI18n(
+      <EventDetailView event={event} locale={locale} actions={null} />,
+      locale,
+    );
+
+    const heading = screen.getByRole("heading", { name: title });
+    const contactCard = heading.closest("section");
+    expect(contactCard).not.toBeNull();
+    expect(screen.getByText("Event safety desk")).toBeInTheDocument();
+    expect(within(contactCard!).getByRole("link", { name: new RegExp(action) })).toHaveAttribute(
+      "href",
+      "https://example.jp/contact",
+    );
+    expect(within(contactCard!).getByRole("link", { name: new RegExp(action) })).toHaveAttribute("target", "_blank");
+    expect(within(contactCard!).getByRole("link", { name: new RegExp(action) })).toHaveAttribute("rel", "noopener noreferrer");
+    expect(within(contactCard!).getByText("↗")).toHaveAttribute("aria-hidden", "true");
+    expect(within(contactCard!).getByRole("link", { name: /举报|報告|Report/ })).toHaveAttribute(
+      "href",
+      `/reports/new?targetType=event&targetId=${event.id}`,
+    );
+  });
+
+  test("does not invent an organizer contact when the authorized API detail returns null", () => {
+    renderWithI18n(
+      <EventDetailView event={makeDetail({ organizerContact: null })} locale="zh-Hans" actions={null} />,
+    );
+
+    expect(screen.queryByRole("heading", { name: "联系主办方" })).not.toBeInTheDocument();
   });
 
   test("shows only contract-backed organizer trust and language facts", () => {

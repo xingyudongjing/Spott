@@ -151,9 +151,33 @@ const eventMediaSchema = z.object({
   url: z.url().nullable().optional(),
 }).passthrough();
 
+const organizerContactLabelSchema = z.string().trim().min(1).max(80).nullable();
+
+export const organizerContactSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("email"),
+    label: organizerContactLabelSchema,
+    value: z.email().max(254),
+  }).strict(),
+  z.object({
+    kind: z.literal("line"),
+    label: organizerContactLabelSchema,
+    value: z.string().regex(/^[A-Za-z0-9._-]{2,64}$/),
+  }).strict(),
+  z.object({
+    kind: z.literal("website"),
+    label: organizerContactLabelSchema,
+    value: z.url().max(500).refine((value) => {
+      const protocol = new URL(value).protocol;
+      return value.startsWith("https://") && protocol === "https:";
+    }, "must use https"),
+  }).strict(),
+]);
+
 export const eventDetailSchema = eventSummaryBaseSchema.and(z.object({
   coordinate: eventCoordinateSchema.nullable(),
   exactAddress: z.string().nullable(),
+  organizerContact: organizerContactSchema.nullable(),
   attendeeRequirements: z.string().nullable(),
   riskFlags: z.array(z.string()),
   riskDetails: z.record(z.string(), z.string()),
@@ -225,6 +249,7 @@ export type OrganizerTrust = z.infer<typeof organizerTrustSchema>;
 export type EventFee = z.infer<typeof eventFeeSchema>;
 export type EventOrganizer = z.infer<typeof eventOrganizerSchema>;
 export type ViewerRegistration = z.infer<typeof viewerRegistrationSchema>;
+export type OrganizerContact = z.infer<typeof organizerContactSchema>;
 export type EventSummary = z.infer<typeof eventSummarySchema>;
 export type EventDetail = z.infer<typeof eventDetailSchema>;
 export type EventPage = z.infer<typeof eventPageSchema>;
@@ -251,6 +276,35 @@ export function parseEventSummary(value: unknown): EventSummary {
 
 export function parseEventDetail(value: unknown): EventDetail {
   return stripLegacyDisplayFields(parseContract("EventDetail", eventDetailSchema, value));
+}
+
+/**
+ * Builds the detail that is safe to keep on screen while viewer authority is
+ * unknown or changing. Server rendering can legitimately carry facts for the
+ * request cookie, but the browser may already belong to a different viewer.
+ */
+export function publicSafeEventDetail(event: EventDetail): EventDetail {
+  const normalized = {
+    ...event,
+    coordinate: event.coordinate?.precision === "approximate"
+      ? { ...event.coordinate }
+      : null,
+    exactAddress: null,
+    organizerContact: null,
+    registrationStatus: null,
+    viewerRegistration: null,
+    favorited: false,
+    availableActions: [],
+    organizer: {
+      ...event.organizer,
+      viewerFollowing: false,
+    },
+  } as EventDetail;
+
+  for (const field of viewerSecretPassthroughFields) {
+    delete (normalized as Record<string, unknown>)[field];
+  }
+  return normalized;
 }
 
 export function parseEventPage(value: unknown): EventPage {
@@ -285,6 +339,7 @@ function stripLegacyDisplayFields<Event extends EventSummary | EventDetail>(even
 
 const discoveryDetailOnlyFields = [
   "exactAddress",
+  "organizerContact",
   "exactCoordinate",
   "exactLatitude",
   "exactLongitude",
@@ -299,6 +354,20 @@ const discoveryDetailOnlyFields = [
   "checkinMode",
   "commentPermission",
   "posterEnabled",
+  "joinInfo",
+  "joinInstructions",
+  "joinURL",
+  "meetingURL",
+  "onlineJoinURL",
+  "checkinCode",
+  "checkinToken",
+  "ticketCode",
+] as const;
+
+const viewerSecretPassthroughFields = [
+  "exactCoordinate",
+  "exactLatitude",
+  "exactLongitude",
   "joinInfo",
   "joinInstructions",
   "joinURL",

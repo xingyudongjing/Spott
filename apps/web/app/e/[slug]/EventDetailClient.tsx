@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { EventDetailView } from "../../components/event/EventDetail";
 import { usePreviewMode } from "../../components/PreviewModeProvider";
-import type { Locale } from "../../i18n/messages";
+import { formatMessage, type Locale } from "../../i18n/messages";
 import { trackProductEvent } from "../../lib/analytics";
 import {
   errorMessage,
@@ -12,10 +12,22 @@ import {
   subscribeSessionChanges,
   type WebSession,
 } from "../../lib/client-api";
-import type { EventDetail } from "../../lib/event-contract";
+import { publicSafeEventDetail, type EventDetail } from "../../lib/event-contract";
 import { fetchViewerEvent } from "../../lib/events-client";
 import { EventActions } from "./EventActions";
 import { EventFeedbackSummary } from "./EventFeedbackSummary";
+
+export interface RouteBoundEventSnapshot {
+  readonly routeId: string;
+  readonly event: EventDetail;
+}
+
+export function visibleEventForRoute(
+  snapshot: RouteBoundEventSnapshot,
+  publicEvent: EventDetail,
+): EventDetail {
+  return snapshot.routeId === publicEvent.id ? snapshot.event : publicEvent;
+}
 
 export function EventDetailClient({
   event,
@@ -25,10 +37,18 @@ export function EventDetailClient({
   locale: Locale;
 }) {
   const isReadOnly = usePreviewMode() === "read-only";
-  const [liveEvent, setLiveEvent] = useState(event);
+  const publicEvent = useMemo(() => publicSafeEventDetail(event), [event]);
+  const [liveSnapshot, setLiveSnapshot] = useState<RouteBoundEventSnapshot>({
+    routeId: event.id,
+    event: publicEvent,
+  });
   const [viewerSession, setViewerSession] = useState<WebSession | null>(null);
   const [viewerMessage, setViewerMessage] = useState("");
   const requestGeneration = useRef(0);
+  const liveEvent = visibleEventForRoute(liveSnapshot, publicEvent);
+  const snapshotMatchesRoute = liveSnapshot.routeId === event.id;
+  const visibleViewerSession = snapshotMatchesRoute ? viewerSession : null;
+  const visibleViewerMessage = snapshotMatchesRoute ? viewerMessage : "";
 
   useEffect(() => {
     if (isReadOnly) return;
@@ -45,7 +65,10 @@ export function EventDetailClient({
     let active = true;
     const synchronizeViewer = async () => {
       const generation = ++requestGeneration.current;
-      setLiveEvent(event);
+      // A server detail can belong to the request Cookie while the browser has
+      // already logged out or switched accounts. Remove old private facts
+      // synchronously, before reading or awaiting the next viewer authority.
+      setLiveSnapshot({ routeId: event.id, event: publicEvent });
       setViewerSession(null);
       setViewerMessage("");
       if (isReadOnly) return;
@@ -54,13 +77,16 @@ export function EventDetailClient({
 
       try {
         const authorizedEvent = await fetchViewerEvent(event.id);
+        if (authorizedEvent.id !== event.id) {
+          throw new Error(formatMessage(locale, "discover.error"));
+        }
         const currentSession = readSession();
         if (
           !active
           || generation !== requestGeneration.current
           || currentSession?.user.id !== requestedSession.user.id
         ) return;
-        setLiveEvent(authorizedEvent);
+        setLiveSnapshot({ routeId: event.id, event: authorizedEvent });
         setViewerSession(currentSession);
       } catch (error) {
         if (!active || generation !== requestGeneration.current) return;
@@ -77,7 +103,7 @@ export function EventDetailClient({
       requestGeneration.current += 1;
       unsubscribe();
     };
-  }, [event, isReadOnly]);
+  }, [event.id, isReadOnly, locale, publicEvent]);
 
   return (
     <EventDetailView
@@ -86,14 +112,14 @@ export function EventDetailClient({
       actions={(
         <EventActions
           key={[
-            viewerSession?.user.id ?? "anonymous",
+            visibleViewerSession?.user.id ?? "anonymous",
             liveEvent.version,
             liveEvent.favorited,
             liveEvent.organizer.viewerFollowing,
           ].join(":")}
           event={liveEvent}
-          session={viewerSession}
-          viewerMessage={viewerMessage}
+          session={visibleViewerSession}
+          viewerMessage={visibleViewerMessage}
         />
       )}
       supplementary={<EventFeedbackSummary eventId={liveEvent.id} locale={locale} />}

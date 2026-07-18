@@ -13,13 +13,24 @@ import {
   readSession,
   subscribeSessionChanges,
 } from "../lib/client-api";
-import type { EventView } from "../lib/demo-data";
+import { fetchViewerEvent } from "../lib/events-client";
 import {
   createMediaUploadAttempt,
   uploadProcessedImage,
   type MediaUploadAttempt,
 } from "../lib/media-upload";
-import { composerDraftStorageKey, parseComposerDraft } from "./event-composer-draft";
+import {
+  composerDraftStorageKey,
+  parseComposerDraft,
+  pickComposerRemoteReference,
+  serializeComposerDraft,
+  type ComposerRemoteReference,
+} from "./event-composer-draft";
+import {
+  organizerContactDraftFromAuthorized,
+  organizerContactPayload,
+  organizerContactValid,
+} from "./organizer-contact";
 
 type QuestionKind = "text" | "single_choice" | "boolean";
 
@@ -37,11 +48,11 @@ interface GroupOption {
   slug: string;
 }
 
-interface RemoteEvent {
-  id: string;
-  publicSlug: string;
-  version: number;
-  status: string;
+type RemoteEvent = ComposerRemoteReference;
+
+interface ComposerOperation {
+  readonly generation: number;
+  readonly userId: string;
 }
 
 interface DraftState {
@@ -60,6 +71,9 @@ interface DraftState {
   registrationMode: "automatic" | "approval" | "invite_only";
   waitlistEnabled: boolean;
   attendeeRequirements: string;
+  contactKind: "email" | "line" | "website";
+  contactLabel: string;
+  contactValue: string;
   registrationQuestions: RegistrationQuestionDraft[];
   isFree: boolean;
   amountJPY: string;
@@ -91,6 +105,9 @@ const initialDraft: DraftState = {
   registrationMode: "automatic",
   waitlistEnabled: true,
   attendeeRequirements: "",
+  contactKind: "email",
+  contactLabel: "",
+  contactValue: "",
   registrationQuestions: [],
   isFree: true,
   amountJPY: "",
@@ -160,12 +177,28 @@ export function EventComposer() {
   const [submitted, setSubmitted] = useState<RemoteEvent | null>(null);
   const [draftOwnerId, setDraftOwnerId] = useState<string | null>(null);
   const [draftHydrated, setDraftHydrated] = useState(false);
+  const [contactRestoreState, setContactRestoreState] = useState<"required" | "failed" | null>(null);
   const uploadAttempts = useRef(new WeakMap<File, MediaUploadAttempt>());
+  const contactRestoreGeneration = useRef(0);
+  const contactMutationGeneration = useRef(0);
+  const mutationAuthority = useRef<{ generation: number; userId: string | null }>({
+    generation: 0,
+    userId: null,
+  });
+  const remoteIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     let activeOwnerId: string | null = null;
 
-    const clearPrivateComposerState = () => {
+    const clearPrivateComposerState = (nextOwnerId: string | null) => {
+      appDialog.dismiss();
+      contactRestoreGeneration.current += 1;
+      contactMutationGeneration.current += 1;
+      mutationAuthority.current = {
+        generation: mutationAuthority.current.generation + 1,
+        userId: nextOwnerId,
+      };
+      remoteIdRef.current = null;
       setDraft(initialDraft);
       setRemote(null);
       setGroups([]);
@@ -176,7 +209,9 @@ export function EventComposer() {
       });
       setUploadedNames([]);
       setRemoteCoverURL("");
+      setContactRestoreState(null);
       setStep(0);
+      setBusy(false);
       setMessage("");
       setSubmitted(null);
       uploadAttempts.current = new WeakMap<File, MediaUploadAttempt>();
@@ -188,7 +223,7 @@ export function EventComposer() {
         activeOwnerId = null;
         setDraftHydrated(false);
         setDraftOwnerId(null);
-        clearPrivateComposerState();
+        clearPrivateComposerState(null);
         window.location.replace(`/login?returnTo=${encodeURIComponent("/create")}`);
         return;
       }
@@ -196,7 +231,7 @@ export function EventComposer() {
         activeOwnerId = null;
         setDraftHydrated(false);
         setDraftOwnerId(null);
-        clearPrivateComposerState();
+        clearPrivateComposerState(null);
         window.location.replace(`/phone-verification?returnTo=${encodeURIComponent("/create")}`);
         return;
       }
@@ -205,13 +240,16 @@ export function EventComposer() {
       activeOwnerId = session.user.id;
       setDraftHydrated(false);
       setDraftOwnerId(session.user.id);
-      clearPrivateComposerState();
+      clearPrivateComposerState(session.user.id);
+      const ownerOperation = { ...mutationAuthority.current } as ComposerOperation;
 
       const storageKey = composerDraftStorageKey(session.user.id);
       const source = window.localStorage.getItem(storageKey);
-      const value = parseComposerDraft<DraftState, RemoteEvent>(source);
+      const value = parseComposerDraft<DraftState>(source);
       if (source && !value) window.localStorage.removeItem(storageKey);
       if (value) {
+        const sanitizedSource = serializeComposerDraft(value);
+        if (source !== sanitizedSource) window.localStorage.setItem(storageKey, sanitizedSource);
         const oldQuestion = value.draft?.registrationQuestion?.trim();
         const registrationQuestions = Array.isArray(value.draft?.registrationQuestions)
           ? value.draft.registrationQuestions
@@ -221,34 +259,72 @@ export function EventComposer() {
         setDraft({ ...initialDraft, ...value.draft, registrationQuestions });
         setUploadedNames(value.uploadedNames ?? []);
         if (value.remote) {
+          const requestedRemoteId = value.remote.id;
+          const restoreGeneration = contactRestoreGeneration.current;
+          const contactGeneration = contactMutationGeneration.current;
+          remoteIdRef.current = requestedRemoteId;
           setRemote(value.remote);
-          void apiRequest<EventView>(`/events/${value.remote.id}`, { authenticated: true })
+          void fetchViewerEvent(requestedRemoteId)
             .then((event) => {
-              if (readSession()?.user.id === session.user.id) {
-                setRemoteCoverURL(event.coverURL ?? "");
+              const restoreIsCurrent = (
+                contactRestoreGeneration.current === restoreGeneration
+                && contactMutationGeneration.current === contactGeneration
+                && activeOwnerId === session.user.id
+                && readSession()?.user.id === session.user.id
+                && remoteIdRef.current === requestedRemoteId
+              );
+              if (!restoreIsCurrent) return;
+              if (event.id !== requestedRemoteId) {
+                setContactRestoreState("failed");
+                return;
+              }
+              setRemoteCoverURL(event.coverURL ?? "");
+              const restoredContact = organizerContactDraftFromAuthorized(event.organizerContact);
+              if (restoredContact) {
+                setDraft((current) => ({
+                  ...current,
+                  contactKind: restoredContact.kind,
+                  contactLabel: restoredContact.label,
+                  contactValue: restoredContact.value,
+                }));
+                setContactRestoreState(null);
+              } else {
+                setContactRestoreState("required");
               }
             })
-            .catch(() => undefined);
+            .catch(() => {
+              if (
+                contactRestoreGeneration.current === restoreGeneration
+                && contactMutationGeneration.current === contactGeneration
+                && activeOwnerId === session.user.id
+                && readSession()?.user.id === session.user.id
+                && remoteIdRef.current === requestedRemoteId
+              ) setContactRestoreState("failed");
+            });
         }
       }
       setDraftHydrated(true);
 
       apiRequest<{ items: GroupOption[] }>("/me/groups", { authenticated: true })
         .then((payload) => {
-          if (readSession()?.user.id === session.user.id) setGroups(payload.items);
+          if (isComposerOperationCurrent(ownerOperation)) setGroups(payload.items);
         })
         .catch(() => undefined);
     };
 
     hydrateCurrentOwner();
-    return subscribeSessionChanges(hydrateCurrentOwner);
-  }, []);
+    const unsubscribe = subscribeSessionChanges(hydrateCurrentOwner);
+    return () => {
+      contactRestoreGeneration.current += 1;
+      unsubscribe();
+    };
+  }, [appDialog]);
 
   useEffect(() => {
     if (!draftHydrated || !draftOwnerId) return;
     window.localStorage.setItem(
       composerDraftStorageKey(draftOwnerId),
-      JSON.stringify({ draft, remote, uploadedNames }),
+      serializeComposerDraft({ draft, remote, uploadedNames }),
     );
   }, [draft, draftHydrated, draftOwnerId, remote, uploadedNames]);
 
@@ -266,6 +342,42 @@ export function EventComposer() {
 
   function update<K extends keyof DraftState>(key: K, value: DraftState[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function markContactEdited() {
+    contactMutationGeneration.current += 1;
+  }
+
+  function captureComposerOperation(): ComposerOperation | null {
+    const session = readSession();
+    const authority = mutationAuthority.current;
+    if (
+      !session
+      || !draftOwnerId
+      || authority.userId === null
+      || session.user.id !== authority.userId
+      || draftOwnerId !== authority.userId
+    ) return null;
+    return { generation: authority.generation, userId: authority.userId };
+  }
+
+  function isComposerOperationCurrent(operation: ComposerOperation): boolean {
+    const session = readSession();
+    const authority = mutationAuthority.current;
+    return authority.generation === operation.generation
+      && authority.userId === operation.userId
+      && session?.user.id === operation.userId;
+  }
+
+  function requireComposerOperation(operation: ComposerOperation): void {
+    if (!isComposerOperationCurrent(operation)) {
+      throw new Error(tr(
+        locale,
+        "登录状态已变化，请重试。",
+        "ログイン状態が変更されました。もう一度お試しください。",
+        "Your session changed. Please try again.",
+      ));
+    }
   }
 
   function updateQuestion(
@@ -307,40 +419,47 @@ export function EventComposer() {
     setMessage("");
   }
 
-  async function save(): Promise<RemoteEvent> {
+  async function save(operation: ComposerOperation): Promise<RemoteEvent> {
+    requireComposerOperation(operation);
     const body = eventPayload(draft);
-    const saved = remote
-      ? await apiRequest<RemoteEvent>(`/events/${remote.id}`, {
+    const requestedRemote = remote;
+    const response = requestedRemote
+      ? await apiRequest<unknown>(`/events/${requestedRemote.id}`, {
           method: "PATCH",
           authenticated: true,
           idempotent: true,
-          ifMatch: remote.version,
+          ifMatch: requestedRemote.version,
           body: JSON.stringify(body),
         })
-      : await apiRequest<RemoteEvent>("/events/drafts", {
+      : await apiRequest<unknown>("/events/drafts", {
           method: "POST",
           authenticated: true,
           idempotent: true,
           body: JSON.stringify(body),
         });
+    requireComposerOperation(operation);
+    const saved = requireRemoteEvent(response, locale, requestedRemote?.id);
+    remoteIdRef.current = saved.id;
     setRemote(saved);
-    await uploadPendingCovers(saved.id);
+    await uploadPendingCovers(saved.id, operation);
+    requireComposerOperation(operation);
     return saved;
   }
 
-  async function uploadPendingCovers(eventId: string) {
-    if (!draftOwnerId) throw new Error(tr(locale, "登录状态已变化，请重试。", "ログイン状態が変更されました。もう一度お試しください。", "Your session changed. Please try again."));
+  async function uploadPendingCovers(eventId: string, operation: ComposerOperation) {
+    requireComposerOperation(operation);
     const pending = covers.filter((file) => !uploadedNames.includes(file.name));
     for (const [index, file] of pending.entries()) {
+      requireComposerOperation(operation);
       let attempt = uploadAttempts.current.get(file);
       if (!attempt) {
-        attempt = createMediaUploadAttempt(file, "event_cover", draftOwnerId);
+        attempt = createMediaUploadAttempt(file, "event_cover", operation.userId);
         uploadAttempts.current.set(file, attempt);
       }
       await uploadProcessedImage({
         file,
         purpose: "event_cover",
-        ownerGeneration: draftOwnerId,
+        ownerGeneration: operation.userId,
         attempt,
         attachPath: (assetId) => `/media/${assetId}/attach/event/${eventId}`,
         attachBody: {
@@ -348,11 +467,14 @@ export function EventComposer() {
           sortOrder: uploadedNames.length + index,
         },
       });
+      requireComposerOperation(operation);
       setUploadedNames((names) => [...names, file.name]);
     }
   }
 
   async function next() {
+    const operation = captureComposerOperation();
+    if (!operation) return;
     const currentMissing = validateStep(step, draft, coverCount, locale);
     if (currentMissing.length) {
       setMessage(
@@ -363,7 +485,8 @@ export function EventComposer() {
     setBusy(true);
     setMessage("");
     try {
-      await save();
+      await save(operation);
+      requireComposerOperation(operation);
       setStep((value) => Math.min(5, value + 1));
       setMessage(
         tr(
@@ -374,25 +497,32 @@ export function EventComposer() {
         ),
       );
     } catch (error) {
-      setMessage(errorMessage(error));
+      if (isComposerOperationCurrent(operation)) setMessage(errorMessage(error));
     } finally {
-      setBusy(false);
+      if (isComposerOperationCurrent(operation)) setBusy(false);
     }
   }
 
   async function saveAndExit() {
+    const operation = captureComposerOperation();
+    if (!operation) return;
     setBusy(true);
     setMessage("");
     try {
-      await save();
+      await save(operation);
+      requireComposerOperation(operation);
       window.location.assign("/studio/events");
     } catch (error) {
-      setMessage(errorMessage(error));
-      setBusy(false);
+      if (isComposerOperationCurrent(operation)) {
+        setMessage(errorMessage(error));
+        setBusy(false);
+      }
     }
   }
 
   async function submit() {
+    const operation = captureComposerOperation();
+    if (!operation) return;
     if (missing.length) {
       setMessage(
         `${tr(locale, "提交前还需要补全", "提出前に入力してください", "Complete before submitting")}: ${missing.join(tr(locale, "、", "、", ", "))}`,
@@ -402,12 +532,14 @@ export function EventComposer() {
     setBusy(true);
     setMessage("");
     try {
-      const saved = await save();
+      const saved = await save(operation);
+      requireComposerOperation(operation);
       const quote = await apiRequest<{ id: string; amount: number }>("/quotes", {
         method: "POST",
         authenticated: true,
         body: JSON.stringify({ purpose: "event_publish", resourceId: saved.id }),
       });
+      requireComposerOperation(operation);
       await appDialog.run({
         title: tr(locale, "确认提交审核", "審査提出の確認", "Confirm submission"),
         message: tr(
@@ -418,13 +550,16 @@ export function EventComposer() {
         ),
         confirmLabel: tr(locale, "确认并提交", "確認して提出", "Confirm & submit"),
         onConfirm: async () => {
-          const result = await apiRequest<RemoteEvent>(`/events/${saved.id}/submit`, {
+          requireComposerOperation(operation);
+          const response = await apiRequest<unknown>(`/events/${saved.id}/submit`, {
             method: "POST",
             authenticated: true,
             idempotent: true,
             ifMatch: saved.version,
             body: JSON.stringify({ quoteId: quote.id }),
           });
+          requireComposerOperation(operation);
+          const result = requireRemoteEvent(response, locale, saved.id);
           setSubmitted(result);
           void trackProductEvent("event_submission_completed", {
             eventId: result.id,
@@ -432,15 +567,13 @@ export function EventComposer() {
             region: draft.regionId,
             status: result.status,
           });
-          if (draftOwnerId) {
-            window.localStorage.removeItem(composerDraftStorageKey(draftOwnerId));
-          }
+          window.localStorage.removeItem(composerDraftStorageKey(operation.userId));
         },
       });
     } catch (error) {
-      setMessage(errorMessage(error));
+      if (isComposerOperationCurrent(operation)) setMessage(errorMessage(error));
     } finally {
-      setBusy(false);
+      if (isComposerOperationCurrent(operation)) setBusy(false);
     }
   }
 
@@ -787,6 +920,106 @@ export function EventComposer() {
                   maxLength={2000}
                 />
               </label>
+
+              <section className="organizer-contact-panel" aria-labelledby="organizer-contact-title">
+                <header>
+                  <span aria-hidden="true">✓</span>
+                  <div>
+                    <h2 id="organizer-contact-title">
+                      {tr(locale, "确认后的活动联络方式", "参加確定後の連絡先", "Contact after confirmation")}
+                    </h2>
+                    <p>
+                      {tr(
+                        locale,
+                        "密文保存，仅向你和已确认参加者显示；公开列表、待审核报名和候补用户都看不到。",
+                        "暗号化して保存し、主催者と参加確定済みの方だけに表示します。公開一覧、承認待ち、キャンセル待ちには表示されません。",
+                        "Stored encrypted and shown only to you and confirmed attendees—not public listings, pending requests, or the waitlist.",
+                      )}
+                    </p>
+                  </div>
+                </header>
+                {contactRestoreState && !draft.contactValue.trim() ? (
+                  <p className="organizer-contact-restore" role={contactRestoreState === "failed" ? "alert" : "status"}>
+                    {contactRestoreState === "failed"
+                      ? tr(
+                          locale,
+                          "无法从已授权的云端草稿恢复联系方式。为保护隐私，请重新填写后再继续。",
+                          "権限のあるクラウド下書きから連絡先を復元できませんでした。プライバシー保護のため、もう一度入力してください。",
+                          "We couldn't restore the contact from the authorized cloud draft. Re-enter it to protect your privacy.",
+                        )
+                      : tr(
+                          locale,
+                          "本地草稿不会保存联系方式；请重新填写后再继续。",
+                          "端末の下書きには連絡先を保存しません。続けるにはもう一度入力してください。",
+                          "Contact details are never saved in the local draft. Re-enter them to continue.",
+                        )}
+                  </p>
+                ) : null}
+                <div className="form-grid">
+                  <label className="form-field">
+                    {tr(locale, "联系方式", "連絡方法", "Contact channel")}
+                    <select
+                      value={draft.contactKind}
+                      onChange={(event) => {
+                        const contactKind = event.target.value as DraftState["contactKind"];
+                        markContactEdited();
+                        setDraft((current) => ({ ...current, contactKind, contactValue: "" }));
+                        setContactRestoreState(null);
+                      }}
+                    >
+                      <option value="email">Email</option>
+                      <option value="line">LINE</option>
+                      <option value="website">HTTPS</option>
+                    </select>
+                  </label>
+                  <label className="form-field">
+                    {tr(locale, "显示名称（可选）", "表示名（任意）", "Display label (optional)")}
+                    <input
+                      value={draft.contactLabel}
+                      onChange={(event) => {
+                        markContactEdited();
+                        update("contactLabel", event.target.value);
+                        setContactRestoreState(null);
+                      }}
+                      placeholder={tr(locale, "例如：活动联络邮箱", "例：イベント窓口", "e.g. Event desk")}
+                      maxLength={80}
+                    />
+                  </label>
+                </div>
+                <label className="form-field">
+                  {draft.contactKind === "email"
+                    ? tr(locale, "联络邮箱", "連絡用メール", "Contact email")
+                    : draft.contactKind === "line"
+                      ? tr(locale, "LINE ID", "LINE ID", "LINE ID")
+                      : tr(locale, "HTTPS 联系页面", "HTTPS 連絡ページ", "HTTPS contact page")}
+                  <input
+                    type={draft.contactKind === "email" ? "email" : draft.contactKind === "website" ? "url" : "text"}
+                    inputMode={draft.contactKind === "email" ? "email" : draft.contactKind === "website" ? "url" : "text"}
+                    autoComplete={draft.contactKind === "email" ? "email" : draft.contactKind === "website" ? "url" : "off"}
+                    value={draft.contactValue}
+                    onChange={(event) => {
+                      markContactEdited();
+                      update("contactValue", event.target.value);
+                      setContactRestoreState(null);
+                    }}
+                    placeholder={draft.contactKind === "email"
+                      ? "host@example.jp"
+                      : draft.contactKind === "line"
+                        ? "spott_host"
+                        : "https://example.jp/contact"}
+                    maxLength={draft.contactKind === "email" ? 254 : draft.contactKind === "line" ? 64 : 500}
+                    aria-describedby="organizer-contact-format"
+                    required
+                  />
+                  <small id="organizer-contact-format">
+                    {draft.contactKind === "line"
+                      ? tr(locale, "2–64 位，仅限字母、数字、点、下划线和连字符。", "2〜64文字。英数字、ピリオド、アンダースコア、ハイフンのみ。", "2–64 characters: letters, numbers, dots, underscores, and hyphens only.")
+                      : draft.contactKind === "website"
+                        ? tr(locale, "为保护参加者，只接受 https:// 开头的页面。", "参加者保護のため https:// で始まるページのみ利用できます。", "For attendee safety, only pages beginning with https:// are accepted.")
+                        : tr(locale, "报名确认后，参加者可从结果页直接发送邮件。", "参加確定後、結果画面から直接メールを送れます。", "Confirmed attendees can email you directly from their result page.")}
+                  </small>
+                </label>
+              </section>
 
               <fieldset className="question-builder">
                 <legend>{tr(locale, "报名问题", "申込時の質問", "Registration questions")}</legend>
@@ -1164,6 +1397,12 @@ export function EventComposer() {
                         : `¥${Number(draft.amountJPY || 0).toLocaleString()}`}
                     </dd>
                   </div>
+                  <div>
+                    <dt>{tr(locale, "确认后联系", "確定後の連絡", "Confirmed contact")}</dt>
+                    <dd dir="auto">
+                      {draft.contactLabel.trim() || contactKindLabel(draft.contactKind, locale)} · {draft.contactValue || tr(locale, "待填写", "未入力", "Not set")}
+                    </dd>
+                  </div>
                 </dl>
               </div>
               <div className="submission-checklist">
@@ -1298,6 +1537,11 @@ function newQuestion(prompt = ""): RegistrationQuestionDraft {
 
 function eventPayload(draft: DraftState) {
   const title = draft.title.trim();
+  const organizerContact = organizerContactPayload({
+    kind: draft.contactKind,
+    label: draft.contactLabel,
+    value: draft.contactValue,
+  });
   const riskDetails = Object.fromEntries(
     draft.riskFlags.map((flag) => [flag, draft.riskDetails.trim()]),
   );
@@ -1321,6 +1565,7 @@ function eventPayload(draft: DraftState) {
     registrationMode: draft.registrationMode,
     waitlistEnabled: draft.waitlistEnabled,
     attendeeRequirements: draft.attendeeRequirements.trim(),
+    ...(organizerContact ? { organizerContact } : {}),
     registrationQuestions: draft.registrationQuestions
       .filter((question) => question.prompt.trim())
       .map((question) => ({
@@ -1402,6 +1647,18 @@ function validateStep(
     return [
       draft.capacity < 2 || draft.capacity > 500
         ? tr(locale, "2–500 人的人数上限", "2〜500人の定員", "Capacity between 2 and 500")
+        : "",
+      !organizerContactValid({
+        kind: draft.contactKind,
+        label: draft.contactLabel,
+        value: draft.contactValue,
+      })
+        ? tr(
+            locale,
+            "有效的活动联系方式",
+            "有効なイベント連絡先",
+            "A valid event contact channel",
+          )
         : "",
       invalidQuestion
         ? tr(
@@ -1512,6 +1769,23 @@ function registrationModeLabel(mode: DraftState["registrationMode"], locale: Loc
   if (mode === "approval") return tr(locale, "主办方审核", "主催者承認", "Host approval");
   if (mode === "invite_only") return tr(locale, "仅限邀请", "招待のみ", "Invite only");
   return tr(locale, "自动通过", "自動承認", "Automatic approval");
+}
+
+function contactKindLabel(kind: DraftState["contactKind"], locale: Locale): string {
+  if (kind === "line") return "LINE";
+  if (kind === "website") return tr(locale, "联系页面", "連絡ページ", "Contact page");
+  return tr(locale, "联络邮箱", "連絡用メール", "Contact email");
+}
+
+function requireRemoteEvent(value: unknown, locale: Locale, expectedID?: string): RemoteEvent {
+  const remote = pickComposerRemoteReference(value);
+  if (remote && (expectedID === undefined || remote.id === expectedID)) return remote;
+  throw new Error(tr(
+    locale,
+    "云端返回了无效的活动版本，请重试。",
+    "クラウドから無効なイベント版が返されました。もう一度お試しください。",
+    "The cloud returned an invalid event version. Please try again.",
+  ));
 }
 
 function regionLabel(value: string, locale: Locale): string {

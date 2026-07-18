@@ -136,6 +136,126 @@ describe("resumable registration flow", () => {
     );
   });
 
+  test("remounts every private registration fact when the dynamic route changes from A to B", async () => {
+    const user = userEvent.setup();
+    const routeA = makeDetail({
+      title: "Route A registration",
+      organizerContact: null,
+    });
+    const authorizedA = makeDetail({
+      title: "Route A registration",
+      organizerContact: {
+        kind: "email",
+        label: "Route A private desk",
+        value: "route-a-private@example.jp",
+      },
+    });
+    const routeB = makeDetail({
+      id: "019b0000-0000-7000-8100-000000000099",
+      publicSlug: "route-b-registration",
+      title: "Route B registration",
+      organizerContact: null,
+    });
+    let routeAReads = 0;
+    apiRequestMock.mockImplementation(async (path) => {
+      if (path === `/events/${routeA.id}`) {
+        routeAReads += 1;
+        return routeAReads === 1 ? routeA : authorizedA;
+      }
+      if (path === `/events/${routeB.id}`) return routeB;
+      if (path === "/quotes") {
+        return {
+          id: "019b0000-0000-7000-8500-000000000001",
+          amount: 40,
+          currency: "POINTS",
+          expiresAt: "2099-07-16T03:15:00.000Z",
+        };
+      }
+      if (path === `/events/${routeA.id}/registrations`) {
+        return {
+          id: "019b0000-0000-7000-8200-000000000001",
+          eventId: routeA.id,
+          status: "confirmed",
+          partySize: 1,
+        };
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+
+    const view = renderWithI18n(<RegistrationFlow event={routeA} navigate={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "继续核对" }));
+    await user.click(await screen.findByRole("button", { name: "确认并报名" }));
+    expect(await screen.findByText("Route A private desk")).toBeInTheDocument();
+
+    view.rerender(<RegistrationFlow event={routeB} navigate={vi.fn()} />);
+
+    expect(screen.queryByText("Route A registration")).not.toBeInTheDocument();
+    expect(screen.queryByText("Route A private desk")).not.toBeInTheDocument();
+    expect(screen.queryByText("route-a-private@example.jp")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "报名已确认" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /返回活动/ })).toHaveAttribute(
+      "href",
+      `/e/${routeB.publicSlug}`,
+    );
+    expect(await screen.findByRole("button", { name: "继续核对" })).toBeInTheDocument();
+    expect(screen.getByText("Route B registration")).toBeInTheDocument();
+    expect(apiRequestMock).toHaveBeenCalledWith(`/events/${routeB.id}`, { authenticated: true });
+    expect(apiRequestMock).not.toHaveBeenCalledWith(
+      `/events/${routeB.id}/registrations`,
+      expect.anything(),
+    );
+  });
+
+  test("fails closed when the first authorized read returns a different event", async () => {
+    const serverEvent = makeDetail({ title: "Expected registration event" });
+    const wrongEvent = makeDetail({
+      id: "019b0000-0000-7000-8100-000000000099",
+      publicSlug: "wrong-registration-event",
+      title: "Wrong registration event",
+      organizerContact: {
+        kind: "email",
+        label: "Wrong private desk",
+        value: "wrong-private@example.jp",
+      },
+    });
+    apiRequestMock.mockImplementation(async (path) => path === `/events/${serverEvent.id}`
+      ? wrongEvent
+      : { id: "unexpected" });
+
+    renderWithI18n(<RegistrationFlow event={serverEvent} navigate={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "无法确认报名资格" })).toBeInTheDocument();
+    expect(screen.queryByText("Wrong registration event")).not.toBeInTheDocument();
+    expect(screen.queryByText("Wrong private desk")).not.toBeInTheDocument();
+    expect(apiRequestMock.mock.calls.some(([path]) => path === "/quotes")).toBe(false);
+  });
+
+  test("keeps retry fail-closed when a later authorized read returns a different event", async () => {
+    const user = userEvent.setup();
+    const serverEvent = makeDetail({ title: "Expected retry event" });
+    const wrongEvent = makeDetail({
+      id: "019b0000-0000-7000-8100-000000000099",
+      publicSlug: "wrong-retry-event",
+      title: "Wrong retry event",
+    });
+    let reads = 0;
+    apiRequestMock.mockImplementation(async (path) => {
+      if (path !== `/events/${serverEvent.id}`) return { id: "unexpected" };
+      reads += 1;
+      if (reads === 1) throw new TypeError("offline");
+      return wrongEvent;
+    });
+
+    renderWithI18n(<RegistrationFlow event={serverEvent} navigate={vi.fn()} />);
+    await screen.findByRole("heading", { name: "无法确认报名资格" });
+    await user.click(screen.getByRole("button", { name: "重试" }));
+
+    expect(await screen.findByRole("heading", { name: "无法确认报名资格" })).toBeInTheDocument();
+    expect(reads).toBe(2);
+    expect(screen.queryByText("Wrong retry event")).not.toBeInTheDocument();
+    expect(apiRequestMock.mock.calls.some(([path]) => path === "/quotes")).toBe(false);
+  });
+
   test("prunes draft answers that are absent from the initial viewer-authorized event", async () => {
     const user = userEvent.setup();
     const removedQuestionId = "019b0000-0000-7000-8300-000000000008";
@@ -463,6 +583,62 @@ describe("resumable registration flow", () => {
     });
   });
 
+  test("rejects a registration success response for a different event", async () => {
+    const user = userEvent.setup();
+    const event = makeDetail();
+    const wrongEventId = "019b0000-0000-7000-8100-000000000099";
+    apiRequestMock.mockImplementation(async (path) => {
+      if (path === `/events/${event.id}`) return event;
+      if (path === "/quotes") {
+        return { id: "quote", amount: 40, currency: "POINTS", expiresAt: "2099-01-01T00:00:00.000Z" };
+      }
+      return { id: "wrong-registration", eventId: wrongEventId, status: "confirmed", partySize: 1 };
+    });
+
+    renderWithI18n(<RegistrationFlow event={event} navigate={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "继续核对" }));
+    await user.click(await screen.findByRole("button", { name: "确认并报名" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(screen.queryByText("报名已确认")).not.toBeInTheDocument();
+    expect(mocks.trackProductEvent).not.toHaveBeenCalledWith(
+      "registration_completed",
+      expect.anything(),
+    );
+  });
+
+  test("rejects a different event returned by the 409 refresh before requesting another quote", async () => {
+    const user = userEvent.setup();
+    const event = makeDetail({ title: "Expected conflict event" });
+    const wrongEvent = makeDetail({
+      id: "019b0000-0000-7000-8100-000000000099",
+      publicSlug: "wrong-conflict-event",
+      title: "Wrong conflict event",
+    });
+    let detailReads = 0;
+    const quoteResources: string[] = [];
+    apiRequestMock.mockImplementation(async (path, init) => {
+      if (path === `/events/${event.id}`) {
+        detailReads += 1;
+        return detailReads === 1 ? event : wrongEvent;
+      }
+      if (path === "/quotes") {
+        quoteResources.push(String((JSON.parse(String(init?.body)) as { resourceId?: string }).resourceId));
+        return { id: `quote-${quoteResources.length}`, amount: 40, currency: "POINTS", expiresAt: "2099-01-01T00:00:00.000Z" };
+      }
+      throw new APIError(409, { code: "EVENT_VERSION_CONFLICT", message: "changed" });
+    });
+
+    renderWithI18n(<RegistrationFlow event={event} navigate={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "继续核对" }));
+    await user.click(await screen.findByRole("button", { name: "确认并报名" }));
+
+    await waitFor(() => expect(detailReads).toBe(2));
+    expect(screen.queryByText("Wrong conflict event")).not.toBeInTheDocument();
+    expect(quoteResources).toEqual([event.id]);
+    expect(screen.queryByText("报名已确认")).not.toBeInTheDocument();
+  });
+
   test("explicit restart clears the draft and creates a new logical idempotency key", async () => {
     const user = userEvent.setup();
     const keys: string[] = [];
@@ -758,6 +934,178 @@ describe("registration party limits", () => {
 });
 
 describe("complete registration confirmation", () => {
+  test("shows committed success before contact refresh settles, then retries a real failure to success", async () => {
+    const user = userEvent.setup();
+    const publicDetail = makeDetail({ organizerContact: null });
+    const confirmedDetail = makeDetail({
+      organizerContact: { kind: "line", label: "活动 LINE", value: "spott_host" },
+    });
+    let rejectRefresh!: (error: Error) => void;
+    const pendingRefresh = new Promise<never>((_resolve, reject) => {
+      rejectRefresh = reject;
+    });
+    let detailReads = 0;
+    apiRequestMock.mockImplementation(async (path) => {
+      if (path === `/events/${publicDetail.id}`) {
+        detailReads += 1;
+        if (detailReads === 1) return publicDetail;
+        if (detailReads === 2) return pendingRefresh;
+        return confirmedDetail;
+      }
+      if (path === "/quotes") {
+        return { id: "quote", amount: 40, currency: "POINTS", expiresAt: "2099-01-01T00:00:00.000Z" };
+      }
+      return { id: "registration", eventId: publicDetail.id, status: "confirmed", partySize: 1 };
+    });
+
+    renderWithI18n(<RegistrationFlow event={publicDetail} navigate={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "继续核对" }));
+    await user.click(await screen.findByRole("button", { name: "确认并报名" }));
+
+    expect(await screen.findByRole("heading", { name: "报名已确认" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看我的活动" })).toBeInTheDocument();
+
+    rejectRefresh(new Error("contact offline"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法加载主办方联系方式");
+    await user.click(screen.getByRole("button", { name: "重新加载联系方式" }));
+
+    expect(await screen.findByRole("heading", { name: "联系主办方" })).toBeInTheDocument();
+    const lineLink = screen.getByRole("link", { name: /通过 LINE 联系/ });
+    expect(lineLink).toHaveAttribute(
+      "href",
+      "https://line.me/R/ti/p/~spott_host",
+    );
+    expect(lineLink).toHaveAttribute("target", "_blank");
+    expect(lineLink).toHaveAttribute("rel", "noopener noreferrer");
+    expect(detailReads).toBe(3);
+  });
+
+  test("ignores a stale contact refresh after the signed-in owner changes", async () => {
+    const user = userEvent.setup();
+    const publicDetail = makeDetail({ organizerContact: null });
+    const oldOwnerDetail = makeDetail({
+      organizerContact: { kind: "email", label: "Old owner only", value: "old-owner@example.jp" },
+    });
+    let resolveRefresh!: (event: typeof oldOwnerDetail) => void;
+    const pendingRefresh = new Promise<typeof oldOwnerDetail>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    let detailReads = 0;
+    apiRequestMock.mockImplementation(async (path) => {
+      if (path === `/events/${publicDetail.id}`) {
+        detailReads += 1;
+        if (detailReads === 1) return publicDetail;
+        if (detailReads === 2) return pendingRefresh;
+        return publicDetail;
+      }
+      if (path === "/quotes") {
+        return { id: "quote", amount: 40, currency: "POINTS", expiresAt: "2099-01-01T00:00:00.000Z" };
+      }
+      return { id: "registration", eventId: publicDetail.id, status: "confirmed", partySize: 1 };
+    });
+
+    renderWithI18n(<RegistrationFlow event={publicDetail} navigate={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "继续核对" }));
+    await user.click(await screen.findByRole("button", { name: "确认并报名" }));
+    expect(await screen.findByRole("heading", { name: "报名已确认" })).toBeInTheDocument();
+
+    mocks.session = { accessToken: "next-owner", user: { id: "user-c", phoneVerified: true } };
+    window.dispatchEvent(new CustomEvent("spott:session"));
+    expect(await screen.findByRole("button", { name: "继续核对" })).toBeInTheDocument();
+
+    resolveRefresh(oldOwnerDetail);
+    await waitFor(() => expect(detailReads).toBeGreaterThanOrEqual(3));
+    expect(screen.queryByText("Old owner only")).not.toBeInTheDocument();
+    expect(screen.queryByText("old-owner@example.jp")).not.toBeInTheDocument();
+  });
+
+  test("rejects a wrong-event contact detail on both the initial refresh and retry", async () => {
+    const user = userEvent.setup();
+    const publicDetail = makeDetail({ organizerContact: null });
+    const wrongEventDetail = makeDetail({
+      id: "019b0000-0000-7000-8100-000000000099",
+      publicSlug: "wrong-cached-event",
+      organizerContact: {
+        kind: "email",
+        label: "Wrong event private desk",
+        value: "wrong-event@example.jp",
+      },
+    });
+    let detailReads = 0;
+    apiRequestMock.mockImplementation(async (path) => {
+      if (path === `/events/${publicDetail.id}`) {
+        detailReads += 1;
+        return detailReads === 1 ? publicDetail : wrongEventDetail;
+      }
+      if (path === "/quotes") {
+        return { id: "quote", amount: 40, currency: "POINTS", expiresAt: "2099-01-01T00:00:00.000Z" };
+      }
+      return { id: "registration", eventId: publicDetail.id, status: "confirmed", partySize: 1 };
+    });
+
+    renderWithI18n(<RegistrationFlow event={publicDetail} navigate={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "继续核对" }));
+    await user.click(await screen.findByRole("button", { name: "确认并报名" }));
+
+    expect(await screen.findByRole("heading", { name: "报名已确认" })).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法加载主办方联系方式");
+    expect(screen.queryByText("Wrong event private desk")).not.toBeInTheDocument();
+    expect(screen.queryByText("wrong-event@example.jp")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "重新加载联系方式" }));
+    await waitFor(() => expect(detailReads).toBe(3));
+    expect(screen.getByRole("alert")).toHaveTextContent("暂时无法加载主办方联系方式");
+    expect(screen.queryByText("Wrong event private desk")).not.toBeInTheDocument();
+    expect(screen.queryByText("wrong-event@example.jp")).not.toBeInTheDocument();
+  });
+
+  test("refetches the confirmed detail and renders the newly authorized contact", async () => {
+    const user = userEvent.setup();
+    const publicDetail = makeDetail({ organizerContact: null });
+    const confirmedDetail = makeDetail({
+      organizerContact: { kind: "email", label: "活动联络邮箱", value: "host@example.jp" },
+    });
+    let detailReads = 0;
+    apiRequestMock.mockImplementation(async (path) => {
+      if (path === `/events/${publicDetail.id}`) {
+        detailReads += 1;
+        return detailReads === 1 ? publicDetail : confirmedDetail;
+      }
+      if (path === "/quotes") {
+        return { id: "quote", amount: 40, currency: "POINTS", expiresAt: "2099-01-01T00:00:00.000Z" };
+      }
+      return { id: "registration", eventId: publicDetail.id, status: "confirmed", partySize: 1 };
+    });
+
+    renderWithI18n(<RegistrationFlow event={publicDetail} navigate={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: "继续核对" }));
+    await user.click(await screen.findByRole("button", { name: "确认并报名" }));
+
+    expect(await screen.findByRole("heading", { name: "联系主办方" })).toBeInTheDocument();
+    const emailLink = screen.getByRole("link", { name: "发送邮件" });
+    expect(emailLink).toHaveAttribute("href", "mailto:host@example.jp");
+    expect(emailLink).not.toHaveAttribute("target");
+    expect(detailReads).toBe(2);
+  });
+
+  test("offers an accessible retry when the confirmed-contact refresh fails", async () => {
+    const retry = vi.fn();
+    const user = userEvent.setup();
+    const event = makeDetail({ organizerContact: null });
+    renderWithI18n(
+      <RegistrationConfirmation
+        event={event}
+        registration={{ id: "registration", eventId: event.id, status: "confirmed", partySize: 1 }}
+        contactRefreshFailed
+        onRetryContact={retry}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("暂时无法加载主办方联系方式");
+    await user.click(screen.getByRole("button", { name: "重新加载联系方式" }));
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
   test.each([
     ["confirmed", "报名已确认"],
     ["pending", "正在等待主办方确认"],
@@ -791,6 +1139,80 @@ describe("complete registration confirmation", () => {
     );
 
     expect(screen.getByText(location)).toBeInTheDocument();
+  });
+
+  test("shows the protected host contact only after confirmation with a report escape hatch", () => {
+    const event = makeDetail({
+      organizerContact: { kind: "email", label: "活动联络邮箱", value: "host@example.jp" },
+    });
+    const confirmed = renderWithI18n(
+      <RegistrationConfirmation
+        event={event}
+        registration={{ id: "registration", eventId: event.id, status: "confirmed", partySize: 1 }}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "联系主办方" })).toBeInTheDocument();
+    expect(screen.getByText("活动联络邮箱")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "发送邮件" })).toHaveAttribute("href", "mailto:host@example.jp");
+    expect(screen.getByRole("link", { name: "举报问题" })).toHaveAttribute(
+      "href",
+      `/reports/new?targetType=event&targetId=${event.id}`,
+    );
+
+    confirmed.unmount();
+    renderWithI18n(
+      <RegistrationConfirmation
+        event={event}
+        registration={{ id: "registration", eventId: event.id, status: "pending", partySize: 1 }}
+      />,
+    );
+    expect(screen.queryByRole("heading", { name: "联系主办方" })).not.toBeInTheDocument();
+    expect(screen.queryByText("host@example.jp")).not.toBeInTheDocument();
+  });
+
+  test.each(["confirmed", "checked_in"])(
+    "shows protected host contact for the authorized %s lifecycle state",
+    (status) => {
+      const event = makeDetail({
+        organizerContact: { kind: "email", label: "Authorized desk", value: "host@example.jp" },
+      });
+      renderWithI18n(
+        <RegistrationConfirmation
+          event={event}
+          registration={{ id: "registration", eventId: event.id, status, partySize: 1 }}
+        />,
+      );
+
+      expect(screen.getByRole("heading", { name: "联系主办方" })).toBeInTheDocument();
+      expect(screen.getByText("Authorized desk")).toBeInTheDocument();
+    },
+  );
+
+  test("never shows contact when the registration belongs to a different event", () => {
+    const event = makeDetail({
+      organizerContact: {
+        kind: "email",
+        label: "Route-mismatched private desk",
+        value: "route-mismatch@example.jp",
+      },
+    });
+
+    renderWithI18n(
+      <RegistrationConfirmation
+        event={event}
+        registration={{
+          id: "registration",
+          eventId: "019b0000-0000-7000-8100-000000000099",
+          status: "confirmed",
+          partySize: 1,
+        }}
+      />,
+    );
+
+    expect(screen.queryByText("Route-mismatched private desk")).not.toBeInTheDocument();
+    expect(screen.queryByText("route-mismatch@example.jp")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "联系主办方" })).not.toBeInTheDocument();
   });
 
   test("turns clipboard failure into accessible feedback and treats native share cancellation as silent", async () => {

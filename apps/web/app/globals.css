@@ -2538,6 +2538,43 @@ body:has(.studio-page) > .mobile-dock {
 }
 
 .upload-status { margin: -12px 0 0; color: #1a7558; font-size: 12px; font-weight: 750; }
+.organizer-contact-panel {
+  display: grid;
+  gap: 18px;
+  padding: clamp(20px, 4vw, 28px);
+  border: 1px solid color-mix(in srgb, var(--mint) 38%, var(--line));
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--mint) 13%, transparent), transparent 14rem),
+    var(--paper);
+  box-shadow: 0 18px 42px rgb(30 83 70 / 7%);
+}
+.organizer-contact-panel > header { display: flex; align-items: flex-start; gap: 14px; }
+.organizer-contact-panel > header > span {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--mint) 24%, white);
+  color: #17654e;
+  font-weight: 900;
+}
+.organizer-contact-panel h2 { margin: 1px 0 6px; font-size: 18px; letter-spacing: -.02em; }
+.organizer-contact-panel header p { max-width: 68ch; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
+.organizer-contact-panel input:focus,
+.organizer-contact-panel select:focus { border-color: var(--twilight); outline: 3px solid color-mix(in srgb, var(--twilight) 16%, transparent); outline-offset: 2px; }
+.organizer-contact-restore {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--coral) 30%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--coral) 7%, var(--paper));
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
 .question-builder {
   display: grid;
   gap: 18px;

@@ -36,13 +36,19 @@ import {
 
 export { RegistrationConfirmation, registrationPartyLimit };
 
-export function RegistrationFlow({
-  event,
-  navigate,
-}: {
+interface RegistrationFlowProps {
   event: EventDetail;
   navigate?: (destination: string) => void;
-}) {
+}
+
+export function RegistrationFlow(props: RegistrationFlowProps) {
+  return <RegistrationFlowRoute key={props.event.id} {...props} />;
+}
+
+function RegistrationFlowRoute({
+  event,
+  navigate,
+}: RegistrationFlowProps) {
   const { t } = useI18n();
   const [liveEvent, setLiveEvent] = useState(event);
   const [gateReady, setGateReady] = useState(false);
@@ -58,6 +64,8 @@ export function RegistrationFlow({
   const [quote, setQuote] = useState<RegistrationQuote | null>(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [result, setResult] = useState<RegistrationView | null>(null);
+  const [contactRefreshFailed, setContactRefreshFailed] = useState(false);
+  const [contactRefreshBusy, setContactRefreshBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [fieldErrors, setFieldErrors] = useState<RegistrationFieldErrors>({});
@@ -68,6 +76,7 @@ export function RegistrationFlow({
   const draftVersions = useRef(new Set([event.version]));
   const ownerUserIdRef = useRef<string | null>(null);
   const operationGeneration = useRef(0);
+  const contactRefreshGeneration = useRef(0);
 
   const full = liveEvent.capacity > 0 && liveEvent.availableCapacity === 0;
   const partyLimit = registrationPartyLimit(liveEvent);
@@ -80,6 +89,7 @@ export function RegistrationFlow({
     const nextOwnerUserId = readSession()?.user.id ?? null;
     if (nextOwnerUserId === ownerUserIdRef.current) return;
     operationGeneration.current += 1;
+    contactRefreshGeneration.current += 1;
     submitting.current = false;
     restoredOnce.current = false;
     ownerUserIdRef.current = null;
@@ -97,6 +107,8 @@ export function RegistrationFlow({
     setQuote(null);
     setQuoteLoading(false);
     setResult(null);
+    setContactRefreshFailed(false);
+    setContactRefreshBusy(false);
     setBusy(false);
     setMessage("");
     setFieldErrors({});
@@ -186,6 +198,9 @@ export function RegistrationFlow({
         let authorizedEvent: EventDetail;
         try {
           authorizedEvent = await fetchViewerEvent(event.id);
+          if (authorizedEvent.id !== event.id) {
+            throw new Error(t("registration.loadErrorBody"));
+          }
         } catch (error) {
           if (
             !cancelled
@@ -225,7 +240,7 @@ export function RegistrationFlow({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [event, gateAttempt, navigate, requestFreshQuote]);
+  }, [event, gateAttempt, navigate, requestFreshQuote, t]);
 
   useEffect(() => subscribeSessionChanges(invalidateForOwnerChange), [invalidateForOwnerChange]);
 
@@ -381,6 +396,9 @@ export function RegistrationFlow({
         }),
       });
       if (!isOwnerOperationCurrent(operation)) return;
+      if (registration.eventId !== liveEvent.id) {
+        throw new Error(t("registration.loadErrorBody"));
+      }
       void trackProductEvent("registration_completed", {
         eventId: liveEvent.id,
         registrationStatus: registration.status,
@@ -388,6 +406,12 @@ export function RegistrationFlow({
       });
       clearLogicalDrafts();
       setResult(registration);
+      if (registration.status === "confirmed" || registration.status === "checked_in") {
+        setContactRefreshFailed(false);
+        // The registration commit is authoritative. Render it immediately and
+        // refresh the newly authorized contact in the background.
+        void refreshConfirmedContact(operation, liveEvent.id);
+      }
     } catch (error) {
       if (error instanceof APIError && error.body.fieldErrors?.length) {
         const errors = Object.fromEntries(error.body.fieldErrors.map((item) => [item.field, item.message]));
@@ -412,8 +436,12 @@ export function RegistrationFlow({
     const operation = captureOwnerOperation();
     if (!operation) return;
     try {
-      const refreshed = await fetchViewerEvent(liveEvent.id);
+      const requestedEventId = liveEvent.id;
+      const refreshed = await fetchViewerEvent(requestedEventId);
       if (!isOwnerOperationCurrent(operation)) return;
+      if (refreshed.id !== requestedEventId) {
+        throw new Error(t("registration.loadErrorBody"));
+      }
       const nextPartySize = Math.min(partySize, registrationPartyLimit(refreshed));
       const feeTermsChanged = registrationFeeTermsChanged(liveEvent, refreshed);
       const nextAcceptedTerms = feeTermsChanged
@@ -469,6 +497,44 @@ export function RegistrationFlow({
     setFieldErrors({});
     setNeedsReconfirmation(false);
     setReconfirmed(false);
+    setContactRefreshFailed(false);
+  }
+
+  async function retryConfirmedContact() {
+    const operation = captureOwnerOperation();
+    if (!operation) return;
+    await refreshConfirmedContact(operation, liveEvent.id);
+  }
+
+  async function refreshConfirmedContact(
+    operation: { generation: number; userId: string },
+    eventId: string,
+  ) {
+    const refreshGeneration = ++contactRefreshGeneration.current;
+    setContactRefreshBusy(true);
+    try {
+      const confirmedEvent = await fetchViewerEvent(eventId);
+      if (confirmedEvent.id !== eventId) {
+        throw new Error("Confirmed contact response did not match the requested event.");
+      }
+      if (
+        !isOwnerOperationCurrent(operation)
+        || refreshGeneration !== contactRefreshGeneration.current
+      ) return;
+      draftVersions.current.add(confirmedEvent.version);
+      setLiveEvent(confirmedEvent);
+      setContactRefreshFailed(false);
+    } catch {
+      if (
+        isOwnerOperationCurrent(operation)
+        && refreshGeneration === contactRefreshGeneration.current
+      ) setContactRefreshFailed(true);
+    } finally {
+      if (
+        isOwnerOperationCurrent(operation)
+        && refreshGeneration === contactRefreshGeneration.current
+      ) setContactRefreshBusy(false);
+    }
   }
 
   function focusField(field: string) {
@@ -512,7 +578,17 @@ export function RegistrationFlow({
       </main>
     );
   }
-  if (result) return <RegistrationConfirmation event={liveEvent} registration={result} />;
+  if (result) {
+    return (
+      <RegistrationConfirmation
+        event={liveEvent}
+        registration={result}
+        contactRefreshFailed={contactRefreshFailed}
+        contactRefreshBusy={contactRefreshBusy}
+        onRetryContact={() => void retryConfirmedContact()}
+      />
+    );
+  }
   if (registrationCTA.intent !== "register") return <RegistrationUnavailable event={liveEvent} />;
 
   return (

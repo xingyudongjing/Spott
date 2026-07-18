@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 
+import { OrganizerContactCard } from "../../components/event/OrganizerContactCard";
 import { useI18n } from "../../components/I18nProvider";
 import type { RegistrationView } from "../../lib/client-api";
 import type { EventDetail } from "../../lib/event-contract";
@@ -13,11 +14,17 @@ import { RegistrationHeader } from "./RegistrationHeader";
 export function RegistrationConfirmation({
   event,
   registration,
+  contactRefreshFailed = false,
+  contactRefreshBusy = false,
+  onRetryContact,
 }: {
   event: EventDetail;
   registration: RegistrationView;
+  contactRefreshFailed?: boolean;
+  contactRefreshBusy?: boolean;
+  onRetryContact?: () => void;
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const [shareNotice, setShareNotice] = useState<{ message: string; error: boolean } | null>(null);
   const status = registration.status === "pending" ? "pending" : registration.status === "waitlisted" ? "waitlisted" : "confirmed";
   const title = status === "pending"
@@ -30,6 +37,10 @@ export function RegistrationConfirmation({
     : status === "waitlisted"
       ? t("registration.waitlistBody")
       : t("registration.confirmedBody");
+  const contact = (registration.status === "confirmed" || registration.status === "checked_in")
+    && registration.eventId === event.id
+    ? event.organizerContact
+    : null;
 
   function addToCalendar() {
     if (!event.startsAt || !event.endsAt) return;
@@ -79,6 +90,21 @@ export function RegistrationConfirmation({
         <p className={styles.confirmationLead}>{body}</p>
         <EventSummary event={event} />
         <p className={styles.partyConfirmation}>{t("registration.partySummary", { count: registration.partySize })}</p>
+        {contact ? (
+          <OrganizerContactCard contact={contact} eventId={event.id} locale={locale} />
+        ) : null}
+        {(registration.status === "confirmed" || registration.status === "checked_in") && contactRefreshFailed ? (
+          <div className={styles.contactRefreshError} role="alert">
+            <p>{t("registration.contactUnavailable")}</p>
+            {onRetryContact ? (
+              <button type="button" onClick={onRetryContact} disabled={contactRefreshBusy}>
+                {contactRefreshBusy
+                  ? t("registration.contactRetrying")
+                  : t("registration.contactRetry")}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <div className={styles.confirmationUtilities}>
           {event.startsAt && event.endsAt ? <button type="button" onClick={addToCalendar}>{t("event.calendar")}</button> : null}
           <button type="button" onClick={() => void share()}>{t("event.share")}</button>

@@ -65,7 +65,7 @@ describe("recoverable browser media upload", () => {
           },
         };
       }
-      if (path.endsWith("/complete")) {
+      if (path === "/media/assets/019b0000-0000-7000-8100-000000000001/complete") {
         expect(init?.idempotencyKey).toBe(attempt.completionKey);
         expect(new Headers(init?.headers).get("X-Content-SHA256")).toMatch(/^[a-f0-9]{64}$/);
         return { assetId: "019b0000-0000-7000-8100-000000000001", state: "uploaded" };
@@ -86,6 +86,9 @@ describe("recoverable browser media upload", () => {
     })).resolves.toEqual({ ok: true });
 
     expect(new Set([attempt.intentKey, attempt.completionKey, attempt.attachmentKey]).size).toBe(3);
+    expect(apiRequestMock.mock.calls.some(([path]) =>
+      path === "/media/019b0000-0000-7000-8100-000000000001/complete",
+    )).toBe(false);
     expect(gatewayFetch).toHaveBeenCalledTimes(1);
     const [url, init] = gatewayFetch.mock.calls[0]!;
     expect(String(url)).toBe("https://internal.spott.test/v1/media/upload-attempts/019b0000-0000-7000-9000-000000000001/content");

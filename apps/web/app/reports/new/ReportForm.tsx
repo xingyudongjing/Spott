@@ -178,7 +178,7 @@ export function ReportForm({
       if (!response.ok) throw new SafeReportError(copy.uploadFailed.replace("{name}", file.name));
       const contentSha256 = await sha256(file);
       if (!operationIsCurrent(generation, ownerId, expectedScope)) throw new StaleReportOperation();
-      await apiRequest(`/media/${intent.assetId}/complete`, {
+      await apiRequest(`/media/assets/${intent.assetId}/complete`, {
         method: "POST",
         authenticated: true,
         headers: { "X-Content-SHA256": contentSha256 },

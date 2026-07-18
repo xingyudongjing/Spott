@@ -2676,7 +2676,7 @@ paths:
           $ref: '#/components/responses/Error'
         '422':
           $ref: '#/components/responses/Error'
-  /media/{id}/complete:
+  /media/assets/{id}/complete:
     post:
       operationId: completeMediaUpload
       summary: Complete an upload after verifying its content hash

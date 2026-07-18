@@ -1498,7 +1498,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/media/{id}/complete": {
+    "/media/assets/{id}/complete": {
         parameters: {
             query?: never;
             header?: never;

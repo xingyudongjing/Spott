@@ -24,6 +24,12 @@ interface MediaControllerContract {
     key: string | undefined,
     hash: string | undefined,
   ): Promise<unknown>;
+  legacyComplete(
+    user: AuthenticatedUser,
+    assetId: string,
+    key: string | undefined,
+    hash: string | undefined,
+  ): Promise<unknown>;
   abandon(user: AuthenticatedUser, assetId: string, key: string | undefined): Promise<unknown>;
   attachEvent(
     user: AuthenticatedUser,
@@ -360,6 +366,25 @@ describe('MediaController mutation idempotency boundary', () => {
     },
   );
 
+  it('keeps the released completion route as an exact compatibility alias', async () => {
+    const { controller, media } = harness();
+    media.complete.mockResolvedValue({ assetId, state: 'processing' });
+
+    await expect(controller.legacyComplete(
+      user,
+      assetId,
+      canonicalKey.toUpperCase(),
+      contentHash.toUpperCase(),
+    )).resolves.toEqual({ assetId, state: 'processing' });
+
+    expect(media.complete).toHaveBeenCalledWith(
+      user,
+      assetId,
+      contentHash.toLowerCase(),
+      canonicalKey,
+    );
+  });
+
   it('normalizes and forwards separate caller-retained mutation keys', async () => {
     const { controller, media } = harness();
     const keys = Array.from({ length: 6 }, (_, index) =>
@@ -423,6 +448,16 @@ describe('Task 22 media OpenAPI boundary', () => {
       'utf8',
     );
   }
+
+  it('documents an unambiguous canonical completion path while retaining the legacy runtime alias', async () => {
+    const source = await contract();
+    const controllerSource = await readFile(new URL('./media.controller.ts', import.meta.url), 'utf8');
+
+    expect(source).toContain('  /media/assets/{id}/complete:');
+    expect(source).not.toContain('  /media/{id}/complete:');
+    expect(controllerSource).toContain("@Post('assets/:id/complete')");
+    expect(controllerSource).toContain("@Post(':id/complete')");
+  });
 
   it('documents recoverable intent creation with named credential and state-only responses', async () => {
     const source = await contract();
@@ -516,7 +551,7 @@ describe('Task 22 media OpenAPI boundary', () => {
 
     const gateway = paths.slice(
       paths.indexOf('operationId: uploadMediaAttemptContent'),
-      paths.indexOf('\n  /media/{id}/complete:'),
+      paths.indexOf('\n  /media/assets/{id}/complete:'),
     );
     expect(gateway).toContain('security: []');
     expect(gateway).toContain('name: X-Spott-Upload-Capability');

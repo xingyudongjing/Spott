@@ -141,7 +141,7 @@ export class MediaController {
     return (this.media as unknown as MediaGatewayBoundary).uploadContent(input);
   }
 
-  @Post(':id/complete')
+  @Post('assets/:id/complete')
   @HttpCode(200)
   complete(
     @CurrentUser() user: AuthenticatedUser,
@@ -151,6 +151,20 @@ export class MediaController {
   ) {
     return (this.media as unknown as MediaMutationBoundary)
       .complete(user, id, this.contentHash(hash), this.key(key));
+  }
+
+  // Compatibility for released native clients. New clients and the public
+  // contract use /media/assets/:id/complete so upload-attempt recovery and
+  // asset mutation paths are structurally unambiguous.
+  @Post(':id/complete')
+  @HttpCode(200)
+  legacyComplete(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Headers('idempotency-key') key: string | undefined,
+    @Headers('x-content-sha256') hash: string | undefined,
+  ) {
+    return this.complete(user, id, key, hash);
   }
 
   @Delete(':id')

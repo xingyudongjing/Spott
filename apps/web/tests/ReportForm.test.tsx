@@ -132,7 +132,9 @@ describe("ReportForm reliable safety submission", () => {
     let reportIndex = 0;
     apiRequestMock.mockImplementation(async (path) => {
       if (path === "/media/upload-intents") return uploadIntent([assetB, assetA][intentIndex++]!);
-      if (path.includes("/complete")) return undefined;
+      if (path === `/media/assets/${assetA}/complete` || path === `/media/assets/${assetB}/complete`) {
+        return undefined;
+      }
       if (path === "/reports") {
         reportIndex += 1;
         if (reportIndex === 1) throw new APIError(503, { message: "report transaction diagnostic" });
@@ -153,7 +155,13 @@ describe("ReportForm reliable safety submission", () => {
     await screen.findByText("Report received");
 
     expect(apiRequestMock.mock.calls.filter(([path]) => path === "/media/upload-intents")).toHaveLength(2);
-    expect(apiRequestMock.mock.calls.filter(([path]) => path.includes("/complete"))).toHaveLength(2);
+    expect(apiRequestMock.mock.calls
+      .map(([path]) => path)
+      .filter((path) => path.endsWith("/complete")))
+      .toEqual([`/media/assets/${assetB}/complete`, `/media/assets/${assetA}/complete`]);
+    expect(apiRequestMock.mock.calls.some(([path]) =>
+      path === `/media/${assetA}/complete` || path === `/media/${assetB}/complete`,
+    )).toBe(false);
     const posts = reportPosts();
     expect(JSON.parse(String(posts[0]![1]?.body)).evidenceAssetIds).toEqual([assetB, assetA]);
     expect(JSON.parse(String(posts[1]![1]?.body)).evidenceAssetIds).toEqual([assetB, assetA]);

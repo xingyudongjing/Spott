@@ -114,7 +114,7 @@ export async function uploadProcessedImage<T>(options: {
   }
   attempt.stage = "uploaded";
 
-  await apiRequest(`/media/${attempt.assetId}/complete`, {
+  await apiRequest(`/media/assets/${attempt.assetId}/complete`, {
     method: "POST",
     authenticated: true,
     idempotencyKey: attempt.completionKey,

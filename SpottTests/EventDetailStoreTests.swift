@@ -7,6 +7,7 @@ final class EventDetailStoreTests: XCTestCase {
     private let now = ISO8601DateFormatter().date(from: "2026-07-16T00:00:00Z")!
 
     func testRefreshReplacesTheDiscoverySnapshotWithStrictAuthorizedDetail() async throws {
+        let viewerID = UUID(uuidString: "019b0000-0000-7000-8100-000000000020")!
         let discoveryEvent = try makeEvent([
             "publicArea": "涩谷区",
             "coordinate": [
@@ -25,6 +26,7 @@ final class EventDetailStoreTests: XCTestCase {
             ],
             "exactAddress": "東京都千代田区丸の内1-9-1",
             "exactAddressVisibility": "confirmed",
+            "viewerRegistration": viewerRegistration("confirmed"),
         ])
         let service = EventDetailServiceStub(responses: [strictDetail])
         let store = EventDetailStore(
@@ -34,13 +36,16 @@ final class EventDetailStoreTests: XCTestCase {
             now: now
         )
 
-        XCTAssertEqual(store.locationDisclosure, .approximate("涩谷区"))
+        XCTAssertEqual(
+            store.locationDisclosure(viewerID: viewerID),
+            .approximate("涩谷区")
+        )
 
         await store.refresh()
 
         XCTAssertEqual(store.event, strictDetail)
         XCTAssertEqual(
-            store.locationDisclosure,
+            store.locationDisclosure(viewerID: viewerID),
             .exact(
                 publicArea: "涩谷区",
                 address: "東京都千代田区丸の内1-9-1",
@@ -50,6 +55,194 @@ final class EventDetailStoreTests: XCTestCase {
         XCTAssertNil(store.error)
         let requestedIdentifiers = await service.requestedIdentifiers()
         XCTAssertEqual(requestedIdentifiers, [discoveryEvent.publicSlug])
+    }
+
+    func testPendingViewerCannotReadConfirmedOnlyExactLocationFromMalformedResponse() throws {
+        let viewerID = UUID(uuidString: "019b0000-0000-7000-8100-000000000020")!
+        let malformed = try makeEvent([
+            "publicArea": "涩谷区",
+            "viewerRegistration": viewerRegistration("pending"),
+            "coordinate": [
+                "latitude": 35.681236,
+                "longitude": 139.767125,
+                "precision": "exact",
+            ],
+            "exactAddress": "東京都千代田区丸の内1-9-1",
+            "exactAddressVisibility": "confirmed",
+        ])
+        let store = EventDetailStore(
+            initialEvent: malformed,
+            service: EventDetailServiceStub(responses: []),
+            session: .verified,
+            initialViewerSnapshotIsCurrent: true,
+            now: now
+        )
+
+        XCTAssertEqual(
+            store.locationDisclosure(viewerID: viewerID),
+            .approximate("涩谷区")
+        )
+    }
+
+    func testConfirmedContactIsHiddenUntilThisSessionRefreshesTheViewerSnapshot() async throws {
+        let stale = try makeEvent([
+            "viewerRegistration": viewerRegistration("confirmed"),
+            "organizerContact": organizerContact,
+        ])
+        let authorized = try makeEvent([
+            "viewerRegistration": viewerRegistration("confirmed"),
+            "organizerContact": organizerContact,
+        ])
+        let viewerID = UUID(uuidString: "019b0000-0000-7000-8100-000000000020")!
+        let store = EventDetailStore(
+            initialEvent: stale,
+            service: EventDetailServiceStub(responses: [authorized]),
+            session: .verified,
+            now: now
+        )
+
+        XCTAssertFalse(store.hasAuthoritativeViewerSnapshot)
+        XCTAssertNil(
+            OrganizerContactDisclosurePolicy.contactForEventDetail(
+                event: store.event,
+                viewerID: viewerID,
+                viewerSnapshotIsCurrent: store.hasAuthoritativeViewerSnapshot
+            )
+        )
+
+        await store.refresh()
+
+        XCTAssertTrue(store.hasAuthoritativeViewerSnapshot)
+        XCTAssertEqual(
+            OrganizerContactDisclosurePolicy.contactForEventDetail(
+                event: store.event,
+                viewerID: viewerID,
+                viewerSnapshotIsCurrent: store.hasAuthoritativeViewerSnapshot
+            )?.value,
+            "host@example.com"
+        )
+
+        store.invalidateViewerSnapshot()
+
+        XCTAssertFalse(store.hasAuthoritativeViewerSnapshot)
+        XCTAssertNil(
+            OrganizerContactDisclosurePolicy.contactForEventDetail(
+                event: store.event,
+                viewerID: UUID(),
+                viewerSnapshotIsCurrent: store.hasAuthoritativeViewerSnapshot
+            )
+        )
+    }
+
+    func testFreshSessionBoundRouteShowsContactThenInvalidationHidesContactAndExactLocation() throws {
+        let fresh = try makeEvent([
+            "publicArea": "涩谷区",
+            "viewerRegistration": viewerRegistration("confirmed"),
+            "organizerContact": organizerContact,
+            "coordinate": [
+                "latitude": 35.681236,
+                "longitude": 139.767125,
+                "precision": "exact",
+            ],
+            "exactAddress": "東京都千代田区丸の内1-9-1",
+            "exactAddressVisibility": "confirmed",
+        ])
+        let viewerID = UUID(uuidString: "019b0000-0000-7000-8100-000000000020")!
+        let store = EventDetailStore(
+            initialEvent: fresh,
+            service: EventDetailServiceStub(responses: []),
+            session: .verified,
+            initialViewerSnapshotIsCurrent: true,
+            now: now
+        )
+
+        XCTAssertTrue(store.hasAuthoritativeViewerSnapshot)
+        XCTAssertEqual(
+            OrganizerContactDisclosurePolicy.contactForEventDetail(
+                event: store.event,
+                viewerID: viewerID,
+                viewerSnapshotIsCurrent: store.hasAuthoritativeViewerSnapshot
+            )?.value,
+            "host@example.com"
+        )
+        XCTAssertEqual(
+            store.locationDisclosure(viewerID: viewerID),
+            .exact(
+                publicArea: "涩谷区",
+                address: "東京都千代田区丸の内1-9-1",
+                coordinate: fresh.coordinate
+            )
+        )
+
+        store.invalidateViewerSnapshot()
+
+        XCTAssertNil(
+            OrganizerContactDisclosurePolicy.contactForEventDetail(
+                event: store.event,
+                viewerID: UUID(),
+                viewerSnapshotIsCurrent: store.hasAuthoritativeViewerSnapshot
+            )
+        )
+        XCTAssertEqual(
+            store.locationDisclosure(viewerID: UUID()),
+            .approximate("涩谷区")
+        )
+    }
+
+    func testSessionInvalidationRejectsALateViewerScopedRefresh() async throws {
+        let stale = try makeEvent([
+            "title": "Old account snapshot",
+            "viewerRegistration": viewerRegistration("confirmed"),
+            "organizerContact": organizerContact,
+        ])
+        let lateResponse = try makeEvent([
+            "title": "Late old-account response",
+            "viewerRegistration": viewerRegistration("confirmed"),
+            "organizerContact": organizerContact,
+        ])
+        let service = EventDetailServiceStub(
+            responses: [lateResponse],
+            responseDelay: .milliseconds(150)
+        )
+        let store = EventDetailStore(
+            initialEvent: stale,
+            service: service,
+            session: .verified,
+            now: now
+        )
+
+        let oldRefresh = Task { await store.refresh() }
+        while await service.requestedIdentifiers().isEmpty {
+            await Task.yield()
+        }
+        store.invalidateViewerSnapshot()
+        await oldRefresh.value
+
+        XCTAssertFalse(store.hasAuthoritativeViewerSnapshot)
+        XCTAssertEqual(store.event.title, "Old account snapshot")
+    }
+
+    func testRefreshRejectsViewerDetailsForADifferentEventRoute() async throws {
+        let initial = try makeEvent(["title": "Expected event"])
+        let wrongEvent = try makeEvent([
+            "id": "019b0000-0000-7000-8100-000000000099",
+            "title": "Wrong event",
+            "viewerRegistration": viewerRegistration("confirmed"),
+            "organizerContact": organizerContact,
+        ])
+        let store = EventDetailStore(
+            initialEvent: initial,
+            service: EventDetailServiceStub(responses: [wrongEvent]),
+            session: .verified,
+            now: now
+        )
+
+        await store.refresh()
+
+        XCTAssertEqual(store.event.id, initial.id)
+        XCTAssertEqual(store.event.title, "Expected event")
+        XCTAssertFalse(store.hasAuthoritativeViewerSnapshot)
+        XCTAssertEqual(store.error?.id, "EVENT_ROUTE_MISMATCH")
     }
 
     func testStrictResponseWithoutAddressNeverPromotesApproximateLocation() async throws {
@@ -437,6 +630,14 @@ final class EventDetailStoreTests: XCTestCase {
             "offerExpiresAt": NSNull(),
         ]
     }
+
+    private var organizerContact: [String: Any] {
+        [
+            "kind": "email",
+            "label": "Host support",
+            "value": "host@example.com",
+        ]
+    }
 }
 
 private final class EventDetailTestClock: @unchecked Sendable {
@@ -464,15 +665,24 @@ private actor EventDetailServiceStub: EventDetailServing {
 
     private var responses: [EventSummary]
     private let failure: Failure?
+    private let responseDelay: Duration?
     private var identifiers: [String] = []
 
-    init(responses: [EventSummary], failure: Failure? = nil) {
+    init(
+        responses: [EventSummary],
+        failure: Failure? = nil,
+        responseDelay: Duration? = nil
+    ) {
         self.responses = responses
         self.failure = failure
+        self.responseDelay = responseDelay
     }
 
     func event(identifier: String) async throws -> EventSummary {
         identifiers.append(identifier)
+        if let responseDelay {
+            try await Task.sleep(for: responseDelay)
+        }
         if let failure {
             switch failure {
             case .api:

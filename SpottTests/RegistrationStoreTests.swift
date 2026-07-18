@@ -6,6 +6,7 @@ import XCTest
 final class RegistrationStoreTests: XCTestCase {
     private let now = ISO8601DateFormatter().date(from: "2026-07-16T00:00:00Z")!
     private let fixedKey = UUID(uuidString: "019b0000-0000-7000-8300-000000000001")!
+    private let viewerID = UUID(uuidString: "019b0000-0000-7000-8300-000000000002")!
 
     func testDismissalPolicyProtectsWaitlistChoiceAndReviewProgress() {
         XCTAssertTrue(
@@ -57,6 +58,7 @@ final class RegistrationStoreTests: XCTestCase {
             draft: draft,
             service: RegistrationServiceStub(),
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -81,6 +83,7 @@ final class RegistrationStoreTests: XCTestCase {
             event: event,
             service: service,
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -102,6 +105,7 @@ final class RegistrationStoreTests: XCTestCase {
             event: try makeEvent(),
             service: service,
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -121,6 +125,7 @@ final class RegistrationStoreTests: XCTestCase {
             draft: .init(partySize: 2, attendeeNote: "keep"),
             service: service,
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -152,6 +157,7 @@ final class RegistrationStoreTests: XCTestCase {
             ),
             service: service,
             itineraryRefresher: refresher,
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -188,6 +194,7 @@ final class RegistrationStoreTests: XCTestCase {
             ),
             service: service,
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -247,6 +254,7 @@ final class RegistrationStoreTests: XCTestCase {
             draft: .init(answers: [questionID: .text("first valid answer")]),
             service: versionService,
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -281,6 +289,7 @@ final class RegistrationStoreTests: XCTestCase {
             event: event,
             service: service,
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -315,6 +324,7 @@ final class RegistrationStoreTests: XCTestCase {
             event: initial,
             service: service,
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -330,6 +340,254 @@ final class RegistrationStoreTests: XCTestCase {
         XCTAssertNil(store.confirmationRefreshError)
         let detailRequestCount = await service.detailRequestCount()
         XCTAssertEqual(detailRequestCount, 1)
+    }
+
+    func testFailedAttendeeDetailRefreshCanRetryWithoutRepeatingRegistration() async throws {
+        let initial = try makeEvent()
+        let authorized = try makeEvent([
+            "registrationStatus": "confirmed",
+            "organizerContact": [
+                "kind": "email",
+                "label": "当日联系",
+                "value": "host@example.com",
+            ],
+        ])
+        let service = RegistrationServiceStub(
+            quotes: [quote(id: 1)],
+            registrationResults: [
+                .success(makeRegistration(eventID: initial.id, status: "confirmed")),
+            ],
+            eventResults: [.offline, .delayedSuccess(authorized, .milliseconds(150))]
+        )
+        let store = RegistrationStore(
+            event: initial,
+            service: service,
+            itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
+            idempotencyKey: fixedKey,
+            now: now
+        )
+        await store.prepareReview()
+
+        await store.submit()
+
+        XCTAssertEqual(store.step, .confirmation)
+        XCTAssertNotNil(store.confirmationRefreshError)
+        XCTAssertNil(store.confirmation?.event.organizerContact)
+
+        let retry = Task { await store.retryConfirmationRefresh() }
+        while await service.detailRequestCount() < 2 {
+            await Task.yield()
+        }
+
+        XCTAssertTrue(store.isRefreshingConfirmation)
+        XCTAssertNotNil(store.confirmationRefreshError)
+
+        await retry.value
+
+        XCTAssertNil(store.confirmationRefreshError)
+        XCTAssertEqual(store.confirmation?.event.organizerContact?.value, "host@example.com")
+        let registrationRequestCount = await service.registrationRequestCount()
+        let detailRequestCount = await service.detailRequestCount()
+        XCTAssertEqual(registrationRequestCount, 1)
+        XCTAssertEqual(detailRequestCount, 2)
+    }
+
+    func testConfirmationRefreshRejectsAnEventFromTheWrongRoute() async throws {
+        let initial = try makeEvent()
+        let mismatched = try makeEvent([
+            "id": "019b0000-0000-7000-8300-000000000099",
+            "registrationStatus": "confirmed",
+            "organizerContact": [
+                "kind": "email",
+                "label": NSNull(),
+                "value": "wrong-event@example.com",
+            ],
+        ])
+        let service = RegistrationServiceStub(
+            quotes: [quote(id: 1)],
+            registrationResults: [
+                .success(makeRegistration(eventID: initial.id, status: "confirmed")),
+            ],
+            eventResults: [.offline, .success(mismatched)]
+        )
+        let store = RegistrationStore(
+            event: initial,
+            service: service,
+            itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
+            idempotencyKey: fixedKey,
+            now: now
+        )
+        await store.prepareReview()
+        await store.submit()
+
+        await store.retryConfirmationRefresh()
+
+        XCTAssertEqual(store.confirmation?.event.id, initial.id)
+        XCTAssertNil(store.confirmation?.event.organizerContact)
+        XCTAssertNotNil(store.confirmationRefreshError)
+    }
+
+    func testInitialConfirmationRefreshRejectsAnEventFromTheWrongRoute() async throws {
+        let initial = try makeEvent()
+        let mismatched = try makeEvent([
+            "id": "019b0000-0000-7000-8300-000000000098",
+            "registrationStatus": "confirmed",
+            "organizerContact": [
+                "kind": "email",
+                "label": NSNull(),
+                "value": "wrong-event@example.com",
+            ],
+        ])
+        let service = RegistrationServiceStub(
+            quotes: [quote(id: 1)],
+            registrationResults: [
+                .success(makeRegistration(eventID: initial.id, status: "confirmed")),
+            ],
+            eventResults: [.success(mismatched)]
+        )
+        let store = RegistrationStore(
+            event: initial,
+            service: service,
+            itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
+            idempotencyKey: fixedKey,
+            now: now
+        )
+        await store.prepareReview()
+
+        await store.submit()
+
+        XCTAssertEqual(store.confirmation?.event.id, initial.id)
+        XCTAssertNil(store.confirmation?.event.organizerContact)
+        XCTAssertNotNil(store.confirmationRefreshError)
+    }
+
+    func testRegistrationResponseForAnotherEventNeverEntersConfirmation() async throws {
+        let initial = try makeEvent()
+        let service = RegistrationServiceStub(
+            quotes: [quote(id: 1)],
+            registrationResults: [
+                .success(
+                    makeRegistration(
+                        eventID: UUID(
+                            uuidString: "019b0000-0000-7000-8300-000000000097"
+                        )!,
+                        status: "confirmed"
+                    )
+                ),
+            ]
+        )
+        let store = RegistrationStore(
+            event: initial,
+            service: service,
+            itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
+            idempotencyKey: fixedKey,
+            now: now
+        )
+        await store.prepareReview()
+
+        await store.submit()
+
+        XCTAssertEqual(store.step, .review)
+        XCTAssertNil(store.confirmation)
+        XCTAssertEqual(store.error?.id, "REGISTRATION_EVENT_MISMATCH")
+    }
+
+    func testRegistrationResponseForAnotherViewerNeverEntersConfirmation() async throws {
+        let initial = try makeEvent()
+        let service = RegistrationServiceStub(
+            quotes: [quote(id: 1)],
+            registrationResults: [
+                .success(
+                    makeRegistration(
+                        eventID: initial.id,
+                        status: "confirmed",
+                        userID: UUID(
+                            uuidString: "019b0000-0000-7000-8300-000000000096"
+                        )!
+                    )
+                ),
+            ]
+        )
+        let store = RegistrationStore(
+            event: initial,
+            service: service,
+            itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
+            idempotencyKey: fixedKey,
+            now: now
+        )
+        await store.prepareReview()
+
+        await store.submit()
+
+        XCTAssertEqual(store.step, .review)
+        XCTAssertNil(store.confirmation)
+        XCTAssertEqual(store.error?.id, "REGISTRATION_VIEWER_MISMATCH")
+    }
+
+    func testRegistrationResponseWithoutABoundViewerFailsClosed() async throws {
+        let initial = try makeEvent()
+        let service = RegistrationServiceStub(
+            quotes: [quote(id: 1)],
+            registrationResults: [
+                .success(
+                    makeRegistration(
+                        eventID: initial.id,
+                        status: "confirmed"
+                    )
+                ),
+            ]
+        )
+        let store = RegistrationStore(
+            event: initial,
+            service: service,
+            itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: nil,
+            idempotencyKey: fixedKey,
+            now: now
+        )
+        await store.prepareReview()
+
+        await store.submit()
+
+        XCTAssertEqual(store.step, .review)
+        XCTAssertNil(store.confirmation)
+        XCTAssertEqual(store.error?.id, "REGISTRATION_VIEWER_MISMATCH")
+    }
+
+    func testRegistrationReviewShowsConfirmedOnlyExactAddressAsApproximate() throws {
+        let confirmedOnly = try makeEvent([
+            "publicArea": "涩谷区",
+            "exactAddress": "東京都渋谷区1-2-3",
+            "exactAddressVisibility": "confirmed",
+            "coordinate": [
+                "latitude": 35.681236,
+                "longitude": 139.767125,
+                "precision": "exact",
+            ],
+        ])
+        let publicEvent = try makeEvent([
+            "publicArea": "涩谷区",
+            "exactAddress": "東京都渋谷区1-2-3",
+            "exactAddressVisibility": "public",
+        ])
+
+        XCTAssertEqual(
+            RegistrationReviewLocationDisclosure.resolve(event: confirmedOnly),
+            .approximate("涩谷区")
+        )
+        XCTAssertEqual(
+            RegistrationReviewLocationDisclosure.resolve(event: publicEvent),
+            .exact(
+                publicArea: "涩谷区",
+                address: "東京都渋谷区1-2-3",
+                coordinate: nil
+            )
+        )
     }
 
     func testConflictRefreshesEventAndQuoteThenRequiresExplicitReconfirmation() async throws {
@@ -352,6 +610,7 @@ final class RegistrationStoreTests: XCTestCase {
             draft: .init(partySize: 2, attendeeNote: "保留输入"),
             service: service,
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -392,6 +651,7 @@ final class RegistrationStoreTests: XCTestCase {
             event: initial,
             service: service,
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -441,6 +701,7 @@ final class RegistrationStoreTests: XCTestCase {
             draft: .init(answers: [removedQuestionID: .text("stale private answer")]),
             service: service,
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -472,6 +733,7 @@ final class RegistrationStoreTests: XCTestCase {
             event: event,
             service: service,
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             clock: clock.now
         )
@@ -512,6 +774,7 @@ final class RegistrationStoreTests: XCTestCase {
             ),
             service: service,
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -543,6 +806,7 @@ final class RegistrationStoreTests: XCTestCase {
             draft: .init(partySize: 20),
             service: service,
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -574,6 +838,7 @@ final class RegistrationStoreTests: XCTestCase {
             event: event,
             service: service,
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -609,6 +874,7 @@ final class RegistrationStoreTests: XCTestCase {
             draft: .init(partySize: 2, attendeeNote: "仍然属于已放弃的草稿"),
             service: service,
             itineraryRefresher: refresher,
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             now: now
         )
@@ -644,8 +910,9 @@ final class RegistrationStoreTests: XCTestCase {
                 event: try makeEvent(),
                 draft: .init(partySize: 2, attendeeNote: "keep"),
                 service: service,
-                itineraryRefresher: ItineraryRefreshSpy(),
-                idempotencyKey: fixedKey,
+            itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
+            idempotencyKey: fixedKey,
                 locale: Locale(identifier: identifier),
                 now: now
             )
@@ -692,6 +959,7 @@ final class RegistrationStoreTests: XCTestCase {
             ),
             service: service,
             itineraryRefresher: ItineraryRefreshSpy(),
+            expectedViewerID: viewerID,
             idempotencyKey: fixedKey,
             locale: Locale(identifier: "en"),
             now: now
@@ -738,8 +1006,9 @@ final class RegistrationStoreTests: XCTestCase {
                 event: event,
                 draft: .init(partySize: 2, attendeeNote: "提交后清除"),
                 service: service,
-                itineraryRefresher: refresher,
-                idempotencyKey: fixedKey,
+            itineraryRefresher: refresher,
+            expectedViewerID: viewerID,
+            idempotencyKey: fixedKey,
                 now: now
             )
             await store.prepareReview()
@@ -887,11 +1156,15 @@ final class RegistrationStoreTests: XCTestCase {
         )
     }
 
-    private func makeRegistration(eventID: UUID, status: String) -> Registration {
+    private func makeRegistration(
+        eventID: UUID,
+        status: String,
+        userID: UUID? = nil
+    ) -> Registration {
         Registration(
             id: UUID(),
             eventId: eventID,
-            userId: UUID(),
+            userId: userID ?? viewerID,
             status: status,
             partySize: 2,
             attendeeNote: nil,
@@ -931,9 +1204,16 @@ private actor RegistrationServiceStub: RegistrationServing {
         case api(APIError)
     }
 
+    enum EventResult: Sendable {
+        case success(EventSummary)
+        case delayedSuccess(EventSummary, Duration)
+        case offline
+    }
+
     private var quotes: [Quote]
     private var registrationResults: [RegistrationResult]
     private let refreshedEvent: EventSummary?
+    private var eventResults: [EventResult]
     private let registrationDelay: Duration?
     private var quoteRequests = 0
     private var registrationRequests = 0
@@ -947,11 +1227,13 @@ private actor RegistrationServiceStub: RegistrationServing {
         quotes: [Quote] = [],
         registrationResults: [RegistrationResult] = [],
         refreshedEvent: EventSummary? = nil,
+        eventResults: [EventResult] = [],
         registrationDelay: Duration? = nil
     ) {
         self.quotes = quotes
         self.registrationResults = registrationResults
         self.refreshedEvent = refreshedEvent
+        self.eventResults = eventResults
         self.registrationDelay = registrationDelay
     }
 
@@ -1009,6 +1291,15 @@ private actor RegistrationServiceStub: RegistrationServing {
 
     func event(identifier: String) async throws -> EventSummary {
         detailRequests += 1
+        if !eventResults.isEmpty {
+            switch eventResults.removeFirst() {
+            case .success(let event): return event
+            case .delayedSuccess(let event, let delay):
+                try await Task.sleep(for: delay)
+                return event
+            case .offline: throw URLError(.notConnectedToInternet)
+            }
+        }
         guard let refreshedEvent else { throw StubError.missingResponse }
         return refreshedEvent
     }

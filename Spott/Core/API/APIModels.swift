@@ -129,6 +129,109 @@ struct EventOrganizer: Codable, Hashable, Sendable {
     let trust: OrganizerTrust
 }
 
+struct OrganizerContact: Codable, Hashable, Sendable {
+    enum Kind: String, Codable, Hashable, Sendable {
+        case email
+        case line
+        case website
+    }
+
+    let kind: Kind
+    let label: String?
+    let value: String
+
+    var actionURL: URL? {
+        switch kind {
+        case .email:
+            var components = URLComponents()
+            components.scheme = "mailto"
+            components.path = value
+            return components.url
+        case .line:
+            return URL(string: "https://line.me/R/ti/p/~\(value)")
+        case .website:
+            return URL(string: value)
+        }
+    }
+
+    init(kind: Kind, label: String?, value: String) throws {
+        let normalizedLabel = label?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedLabel,
+           normalizedLabel.isEmpty || normalizedLabel.count > 80 {
+            throw ValidationError.invalidLabel
+        }
+        guard Self.isValid(value: value, for: kind) else {
+            throw ValidationError.invalidValue
+        }
+        self.kind = kind
+        self.label = normalizedLabel
+        self.value = value
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            kind: container.decode(Kind.self, forKey: .kind),
+            label: container.decodeIfPresent(String.self, forKey: .label),
+            value: container.decode(String.self, forKey: .value)
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(label, forKey: .label)
+        try container.encode(value, forKey: .value)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, label, value
+    }
+
+    private enum ValidationError: Error {
+        case invalidLabel
+        case invalidValue
+    }
+
+    private static func isValid(value: String, for kind: Kind) -> Bool {
+        guard value == value.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return false
+        }
+        switch kind {
+        case .email:
+            return value.count <= 254
+                && value.range(
+                    of: #"^[A-Za-z0-9!'_+~-]+(?:\.[A-Za-z0-9!'_+~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"#,
+                    options: .regularExpression
+                ) != nil
+        case .line:
+            return value.range(
+                of: #"^[A-Za-z0-9._-]{2,64}$"#,
+                options: .regularExpression
+            ) != nil
+        case .website:
+            guard value.count <= 500,
+                  value.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+                  !containsControlCharacters(value),
+                  let decodedValue = value.removingPercentEncoding,
+                  !containsControlCharacters(decodedValue),
+                  let components = URLComponents(string: value) else {
+                return false
+            }
+            return components.scheme == "https"
+                && components.host?.isEmpty == false
+                && components.user == nil
+                && components.password == nil
+        }
+    }
+
+    private static func containsControlCharacters(_ value: String) -> Bool {
+        value.unicodeScalars.contains {
+            CharacterSet.controlCharacters.contains($0)
+        }
+    }
+}
+
 struct ViewerRegistration: Codable, Hashable, Sendable {
     enum Status: String, Codable, Sendable {
         case pending
@@ -188,6 +291,7 @@ struct EventSummary: Codable, Identifiable, Hashable, Sendable {
     var posterEnabled: Bool? = nil
     var exactAddressVisibility: String? = nil
     var registrationQuestions: [RegistrationQuestion]? = nil
+    var organizerContact: OrganizerContact? = nil
 
     var remaining: Int { availableCapacity }
     var organizerName: String? { organizer.name }
@@ -197,6 +301,63 @@ struct EventSummary: Codable, Identifiable, Hashable, Sendable {
         if fee.isFree { return "¥0" }
         if let amount = fee.amountJPY { return "¥\(amount.formatted())" }
         return [fee.collectorName, fee.method].compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+enum OrganizerContactDisclosurePolicy {
+    static func contactForEventDetail(
+        event: EventSummary,
+        viewerID: UUID?,
+        viewerSnapshotIsCurrent: Bool
+    ) -> OrganizerContact? {
+        guard let contact = event.organizerContact else { return nil }
+        guard viewerMayReadPrivateDetails(
+            event: event,
+            viewerID: viewerID,
+            viewerSnapshotIsCurrent: viewerSnapshotIsCurrent
+        ) else { return nil }
+        return contact
+    }
+
+    static func viewerMayReadPrivateDetails(
+        event: EventSummary,
+        viewerID: UUID?,
+        viewerSnapshotIsCurrent: Bool
+    ) -> Bool {
+        guard let viewerID else { return false }
+        if viewerID == event.organizerId { return true }
+        guard viewerSnapshotIsCurrent else { return false }
+        guard let status = event.viewerRegistration?.status,
+              status == .confirmed || status == .checkedIn else {
+            return false
+        }
+        return true
+    }
+
+    static func contactForConfirmation(
+        event: EventSummary,
+        registration: Registration,
+        viewerID: UUID?
+    ) -> OrganizerContact? {
+        guard registrationMayReadPrivateDetails(
+            event: event,
+            registration: registration,
+            viewerID: viewerID
+        ) else {
+            return nil
+        }
+        return event.organizerContact
+    }
+
+    static func registrationMayReadPrivateDetails(
+        event: EventSummary,
+        registration: Registration,
+        viewerID: UUID?
+    ) -> Bool {
+        guard let viewerID else { return false }
+        return registration.userId == viewerID
+            && registration.eventId == event.id
+            && (registration.status == "confirmed" || registration.status == "checked_in")
     }
 }
 
@@ -410,6 +571,7 @@ struct EventDraftInput: Codable, Sendable {
     var posterEnabled: Bool = true
     var exactAddressVisibility: String = "confirmed"
     var registrationQuestions: [Question] = []
+    var organizerContact: OrganizerContact? = nil
 }
 
 enum RegistrationQuestionKind: String, Codable, Hashable, Sendable {
@@ -511,7 +673,7 @@ struct DiscoveryPage: Codable, Sendable {
         serverTime: Date,
         queryExplanationId: String
     ) {
-        self.items = items.map(\.discoverySafeSummary)
+        self.items = items.map(\.discoveryListSafeSummary)
         self.nextCursor = nextCursor
         self.hasMore = hasMore
         self.serverTime = serverTime
@@ -1539,7 +1701,7 @@ enum JSONValue: Codable, Hashable, Sendable {
 }
 
 extension EventSummary {
-    var discoverySafeSummary: EventSummary {
+    var discoveryListSafeSummary: EventSummary {
         var result = self
         if let coordinate = result.coordinate,
            coordinate.precision == .exact
@@ -1550,6 +1712,7 @@ extension EventSummary {
             result.coordinate = nil
         }
         result.exactAddress = nil
+        result.organizerContact = nil
         result.attendeeRequirements = nil
         result.riskFlags = nil
         result.riskDetails = nil
@@ -1560,6 +1723,52 @@ extension EventSummary {
         result.exactAddressVisibility = nil
         result.registrationQuestions = nil
         return result
+    }
+
+    var discoverySafeSummary: EventSummary {
+        let publicSummary = discoveryListSafeSummary
+        return EventSummary(
+            id: publicSummary.id,
+            publicSlug: publicSummary.publicSlug,
+            organizerId: publicSummary.organizerId,
+            status: publicSummary.status,
+            title: publicSummary.title,
+            description: publicSummary.description,
+            category: publicSummary.category,
+            startsAt: publicSummary.startsAt,
+            endsAt: publicSummary.endsAt,
+            deadlineAt: publicSummary.deadlineAt,
+            displayTimeZone: publicSummary.displayTimeZone,
+            region: publicSummary.region,
+            publicArea: publicSummary.publicArea,
+            capacity: publicSummary.capacity,
+            confirmedCount: publicSummary.confirmedCount,
+            availableCapacity: publicSummary.availableCapacity,
+            coverURL: publicSummary.coverURL,
+            tags: publicSummary.tags,
+            organizer: EventOrganizer(
+                id: publicSummary.organizer.id,
+                name: publicSummary.organizer.name,
+                handle: publicSummary.organizer.handle,
+                viewerFollowing: false,
+                trust: publicSummary.organizer.trust
+            ),
+            favorited: false,
+            registrationStatus: nil,
+            viewerRegistration: nil,
+            registrationMode: publicSummary.registrationMode,
+            waitlistEnabled: publicSummary.waitlistEnabled,
+            format: publicSummary.format,
+            primaryLocale: publicSummary.primaryLocale,
+            supportedLocales: publicSummary.supportedLocales,
+            localeConfirmed: publicSummary.localeConfirmed,
+            availableActions: [],
+            version: publicSummary.version,
+            updatedAt: publicSummary.updatedAt,
+            coordinate: publicSummary.coordinate,
+            exactAddress: nil,
+            fee: publicSummary.fee
+        )
     }
 
     static let samples: [EventSummary] = [

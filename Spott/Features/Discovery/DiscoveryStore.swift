@@ -461,49 +461,7 @@ final class DiscoveryStore {
 
 private extension EventSummary {
     var viewerNeutralDiscoverySummary: EventSummary {
-        let safe = discoverySafeSummary
-        return EventSummary(
-            id: safe.id,
-            publicSlug: safe.publicSlug,
-            organizerId: safe.organizerId,
-            status: safe.status,
-            title: safe.title,
-            description: safe.description,
-            category: safe.category,
-            startsAt: safe.startsAt,
-            endsAt: safe.endsAt,
-            deadlineAt: safe.deadlineAt,
-            displayTimeZone: safe.displayTimeZone,
-            region: safe.region,
-            publicArea: safe.publicArea,
-            capacity: safe.capacity,
-            confirmedCount: safe.confirmedCount,
-            availableCapacity: safe.availableCapacity,
-            coverURL: safe.coverURL,
-            tags: safe.tags,
-            organizer: EventOrganizer(
-                id: safe.organizer.id,
-                name: safe.organizer.name,
-                handle: safe.organizer.handle,
-                viewerFollowing: false,
-                trust: safe.organizer.trust
-            ),
-            favorited: false,
-            registrationStatus: nil,
-            viewerRegistration: nil,
-            registrationMode: safe.registrationMode,
-            waitlistEnabled: safe.waitlistEnabled,
-            format: safe.format,
-            primaryLocale: safe.primaryLocale,
-            supportedLocales: safe.supportedLocales,
-            localeConfirmed: safe.localeConfirmed,
-            availableActions: [],
-            version: safe.version,
-            updatedAt: safe.updatedAt,
-            coordinate: safe.coordinate,
-            exactAddress: nil,
-            fee: safe.fee
-        )
+        discoverySafeSummary
     }
 }
 

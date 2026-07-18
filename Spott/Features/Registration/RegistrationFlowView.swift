@@ -93,6 +93,7 @@ struct RegistrationFlowView: View {
                 NavigationStack {
                     RegistrationConfirmationView(
                         confirmation: fixtureConfirmation(kind: kind),
+                        viewerID: fixtureViewerID,
                         locale: locale,
                         onViewItinerary: {
                             openItinerary(registrationID: fixtureRegistrationID)
@@ -115,7 +116,11 @@ struct RegistrationFlowView: View {
             flowScreen
 #endif
         }
-        .id("\(model.session?.sessionId.uuidString ?? "guest")-\(locale.identifier)")
+        .id(
+            "\(model.session?.sessionId.uuidString ?? "guest")-"
+                + "\(model.session?.user.id.uuidString ?? "no-user")-"
+                + locale.identifier
+        )
     }
 
     private var flowScreen: some View {
@@ -124,6 +129,7 @@ struct RegistrationFlowView: View {
             draft: draft,
             service: model.api,
             itineraryRefresher: RegistrationItineraryRefreshNotifier(),
+            viewerID: model.session?.user.id,
             locale: locale,
             onCompletion: onCompletion,
             onViewItinerary: openItinerary
@@ -152,6 +158,12 @@ struct RegistrationFlowView: View {
         case .pending: "pending"
         case .waitlisted: "waitlisted"
         }
+        var fixtureEvent = event
+        fixtureEvent.organizerContact = try? OrganizerContact(
+            kind: .line,
+            label: nil,
+            value: "weekend_host"
+        )
         return .init(
             kind: kind,
             registration: .init(
@@ -168,12 +180,16 @@ struct RegistrationFlowView: View {
                 rewardPoints: nil,
                 checkinMethod: nil
             ),
-            event: event
+            event: fixtureEvent
         )
     }
 
     private var fixtureRegistrationID: UUID {
         UUID(uuidString: "019b0000-0000-7000-8800-000000000001")!
+    }
+
+    private var fixtureViewerID: UUID {
+        UUID(uuidString: "019b0000-0000-7000-8800-000000000002")!
     }
 #endif
 }
@@ -186,10 +202,12 @@ private struct RegistrationFlowScreen: View {
     @State private var pageIndex = 0
     @State private var showDiscardConfirmation = false
     @State private var deliveredRegistrationID: UUID?
+    @State private var operationTask: Task<Void, Never>?
     @FocusState private var focusedField: RegistrationField?
     @AccessibilityFocusState private var accessibilityFocusedField: RegistrationField?
 
     private let locale: Locale
+    private let viewerID: UUID?
     private let onCompletion: (Registration) -> Void
     private let onViewItinerary: (UUID) -> Void
 
@@ -198,6 +216,7 @@ private struct RegistrationFlowScreen: View {
         draft: DeferredRegistrationDraft,
         service: any RegistrationServing,
         itineraryRefresher: any RegistrationItineraryRefreshing,
+        viewerID: UUID?,
         locale: Locale,
         onCompletion: @escaping (Registration) -> Void,
         onViewItinerary: @escaping (UUID) -> Void
@@ -208,10 +227,12 @@ private struct RegistrationFlowScreen: View {
                 draft: draft,
                 service: service,
                 itineraryRefresher: itineraryRefresher,
+                expectedViewerID: viewerID,
                 locale: locale
             )
         )
         self.locale = locale
+        self.viewerID = viewerID
         self.onCompletion = onCompletion
         self.onViewItinerary = onViewItinerary
     }
@@ -251,8 +272,11 @@ private struct RegistrationFlowScreen: View {
                     if let confirmation = store.confirmation {
                         RegistrationConfirmationView(
                             confirmation: confirmation,
+                            viewerID: viewerID,
                             locale: locale,
                             refreshMessage: store.confirmationRefreshError,
+                            isRefreshing: store.isRefreshingConfirmation,
+                            onRetryRefresh: retryConfirmationRefresh,
                             onViewItinerary: viewItinerary,
                             onDone: dismiss.callAsFunction
                         )
@@ -277,6 +301,11 @@ private struct RegistrationFlowScreen: View {
         }
         .onChange(of: store.firstInvalidField) { _, field in
             focusFirstInvalidField(field)
+        }
+        .onDisappear {
+            operationTask?.cancel()
+            operationTask = nil
+            store.abandon()
         }
     }
 
@@ -306,7 +335,8 @@ private struct RegistrationFlowScreen: View {
             }
             return
         }
-        Task { await prepareReview() }
+        operationTask?.cancel()
+        operationTask = Task { await prepareReview() }
     }
 
     private func prepareReview() async {
@@ -318,7 +348,8 @@ private struct RegistrationFlowScreen: View {
 
     private func submit() {
         guard !store.isSubmitting else { return }
-        Task { await submitAsync() }
+        operationTask?.cancel()
+        operationTask = Task { await submitAsync() }
     }
 
     private func submitAsync() async {
@@ -367,6 +398,11 @@ private struct RegistrationFlowScreen: View {
         guard let registrationID = store.confirmation?.registration.id else { return }
         onViewItinerary(registrationID)
         dismiss()
+    }
+
+    private func retryConfirmationRefresh() {
+        operationTask?.cancel()
+        operationTask = Task { await store.retryConfirmationRefresh() }
     }
 
     private func focusFirstInvalidField(_ field: RegistrationField?) {
@@ -842,7 +878,9 @@ private struct RegistrationReviewView: View {
                 EventFactsView(
                     presentation: EventFactsPresentation(
                         event: store.event,
-                        disclosure: locationDisclosure,
+                        disclosure: RegistrationReviewLocationDisclosure.resolve(
+                            event: store.event
+                        ),
                         locale: locale
                     )
                 )
@@ -898,22 +936,31 @@ private struct RegistrationReviewView: View {
         .accessibilityIdentifier("registration.review")
     }
 
-    private var locationDisclosure: EventLocationDisclosure {
-        if let exact = store.event.exactAddress?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !exact.isEmpty,
-           let area = store.event.publicArea?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !area.isEmpty {
-            return .exact(publicArea: area, address: exact, coordinate: store.event.coordinate)
+    private func text(_ key: String.LocalizationValue) -> String {
+        CoreJourneyLocalization.text(key, locale: locale)
+    }
+}
+
+enum RegistrationReviewLocationDisclosure {
+    static func resolve(event: EventSummary) -> EventLocationDisclosure {
+        let area = event.publicArea?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let exactAddress = event.exactAddress?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if event.exactAddressVisibility == "public",
+           let area, !area.isEmpty,
+           let exactAddress, !exactAddress.isEmpty {
+            return .exact(
+                publicArea: area,
+                address: exactAddress,
+                coordinate: event.coordinate
+            )
         }
-        if let area = store.event.publicArea?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !area.isEmpty {
+        if let area, !area.isEmpty {
             return .approximate(area)
         }
         return .unavailable
-    }
-
-    private func text(_ key: String.LocalizationValue) -> String {
-        CoreJourneyLocalization.text(key, locale: locale)
     }
 }
 

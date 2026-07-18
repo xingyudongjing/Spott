@@ -5,6 +5,7 @@ import UIKit
 
 struct EventComposerView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.locale) private var locale
     @State private var step = 0
     @State private var title = ""
     @State private var description = ""
@@ -46,29 +47,81 @@ struct EventComposerView: View {
     @State private var checkinMode = "dynamic_qr"
     @State private var commentPermission = "participants"
     @State private var posterEnabled = true
+    @State private var organizerContactDraft = EventComposerContactDraft()
+    @State private var contactRecoveryBusy = false
 
     @State private var savedAt: Date?
     @State private var remoteDraft: EventSummary?
     @State private var busy = false
     @State private var error: UserFacingError?
     @State private var submitted = false
+    @State private var boundSessionIdentity: EventComposerSessionIdentity?
+    @State private var sessionGeneration: UInt64 = 0
 
     private let steps = ["内容", "时间地点", "报名", "费用风险", "社群互动", "预览"]
 
     var body: some View {
         Group {
-            if model.session == nil { signedOutState }
+            if EventComposerContactUITestFixture.isEnabled {
+                if !canRenderCurrentDraft { secureDraftLoadingState }
+                else { composer }
+            } else if model.session == nil { signedOutState }
             else if model.session?.user.phoneVerified != true { phoneGate }
+            else if !canRenderCurrentDraft { secureDraftLoadingState }
             else if submitted { submittedState }
             else { composer }
         }
         .background(SpottColor.canvas.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        .task(id: model.session?.sessionId) {
-            groups = (try? await model.api.groups().items) ?? []
-            await ensureCloudDraft()
+        .task(id: currentSessionTaskKey) {
+            sessionGeneration &+= 1
+            let generation = sessionGeneration
+            await bindComposerToCurrentSession(generation: generation)
         }
-        .onChange(of: photoItems) { _, items in Task { await loadPhotos(items) } }
+        .onChange(of: photoItems) { _, items in
+            let context = currentRequestContext
+            Task { await loadPhotos(items, context: context) }
+        }
+    }
+
+    private var currentSessionIdentity: EventComposerSessionIdentity? {
+        if EventComposerContactUITestFixture.isEnabled {
+            return EventComposerContactUITestFixture.identity
+        }
+        guard let session = model.session else { return nil }
+        return EventComposerSessionIdentity(
+            sessionID: session.sessionId,
+            userID: session.user.id
+        )
+    }
+
+    private var currentSessionTaskKey: String {
+        if EventComposerContactUITestFixture.isEnabled {
+            return "composer-contact-ui-fixture"
+        }
+        guard let session = model.session else { return "guest" }
+        return "\(session.sessionId.uuidString)|\(session.user.id.uuidString)|\(session.user.phoneVerified)"
+    }
+
+    private var canRenderCurrentDraft: Bool {
+        EventComposerSessionPresentation.canRenderSensitiveDraft(
+            boundIdentity: boundSessionIdentity,
+            currentIdentity: currentSessionIdentity
+        )
+    }
+
+    private var secureDraftLoadingState: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.large)
+            Text(EventComposerContactCopy(locale: locale).syncingTitle)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(SpottColor.muted)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(SpottMetric.pageInset)
+        .accessibilityIdentifier("event.composer.secure_session_loading")
     }
 
     private var signedOutState: some View {
@@ -328,6 +381,13 @@ struct EventComposerView: View {
                 Picker("评论权限", selection: $commentPermission) { Text("关闭评论").tag("disabled"); Text("仅参与者").tag("participants"); Text("仅社群成员").tag("group_members") }
                 Toggle("审核通过后生成分享海报", isOn: $posterEnabled)
             }
+            EventComposerContactEditor(
+                draft: $organizerContactDraft,
+                locale: locale,
+                isEditingDisabled: busy || contactRecoveryBusy,
+                isRecovering: contactRecoveryBusy,
+                onRetryRecovery: retryContactRecovery
+            )
         }
     }
 
@@ -341,6 +401,10 @@ struct EventComposerView: View {
                 PreviewRow(title: "人数", value: "\(capacity)")
                 PreviewRow(title: "确认", value: registrationModeTitle)
                 PreviewRow(title: "费用", value: isFree ? "免费" : "¥\(amountText)")
+                PreviewRow(
+                    title: EventComposerContactCopy(locale: locale).title,
+                    value: contactPreviewValue
+                )
                 PreviewRow(title: "发布积分", value: "100（提交时冻结）")
             }
             SurfaceCard {
@@ -405,40 +469,110 @@ struct EventComposerView: View {
             commentPermission: commentPermission,
             posterEnabled: posterEnabled,
             exactAddressVisibility: exactAddressVisibility,
-            registrationQuestions: questions
+            registrationQuestions: questions,
+            organizerContact: organizerContactDraft.contactForDraftSave()
         )
     }
 
     private func advance() {
+        guard let context = currentRequestContext,
+              requestStillCurrent(context) else { return }
         if let validation = validationError(for: step) { error = validation; return }
+        let contactPayload = organizerContactDraft.contactForDraftSave()
+        let input = draftInput
         busy = true; error = nil
         Task {
+            defer {
+                if requestStillCurrent(context) {
+                    busy = false
+                }
+            }
             do {
+                guard requestStillCurrent(context) else { return }
                 var draft: EventSummary
-                if let remoteDraft {
-                    draft = try await model.api.updateEventDraft(id: remoteDraft.id, version: remoteDraft.version, draft: draftInput)
+                if let existingDraft = remoteDraft {
+                    let response = try await model.api.updateEventDraft(
+                        id: existingDraft.id,
+                        version: existingDraft.version,
+                        draft: input
+                    )
+                    try requireExpectedDraftResponse(
+                        response,
+                        expectedID: existingDraft.id,
+                        expectedOrganizerID: context.identity.userID
+                    )
+                    draft = response
                 } else {
-                    draft = try await model.api.createEventDraft(draftInput)
+                    let response = try await model.api.createEventDraft(input)
+                    try requireExpectedDraftResponse(
+                        response,
+                        expectedID: nil,
+                        expectedOrganizerID: context.identity.userID
+                    )
+                    draft = response
+                }
+                guard requestStillCurrent(context) else { return }
+                guard organizerContactDraft.reconcileAuthorizedResponse(
+                    draft,
+                    expectedContact: contactPayload != nil
+                ) else {
+                    throw EventComposerContactError.authorizedContactUnavailable
                 }
                 remoteDraft = draft
                 if step == 0 {
                     for index in photos.indices where photos[index].assetID == nil {
                         let id = try await model.api.uploadEventImage(data: photos[index].data, filename: photos[index].filename, mimeType: photos[index].mimeType, eventID: draft.id, sortOrder: index)
+                        guard requestStillCurrent(context) else { return }
                         photos[index].assetID = id
                     }
-                    if let refreshed = try? await model.api.event(identifier: draft.id.uuidString.lowercased()) { draft = refreshed; remoteDraft = refreshed }
+                    let refreshed = try? await model.api.event(
+                        identifier: draft.id.uuidString.lowercased()
+                    )
+                    guard optionalResponseStillCurrent(
+                        refreshed,
+                        context: context
+                    ) else { return }
+                    if let refreshed {
+                        try requireExpectedDraftResponse(
+                            refreshed,
+                            expectedID: draft.id,
+                            expectedOrganizerID: context.identity.userID
+                        )
+                        draft = refreshed
+                        guard organizerContactDraft.reconcileAuthorizedResponse(
+                            refreshed,
+                            expectedContact: contactPayload != nil
+                        ) else {
+                            throw EventComposerContactError.authorizedContactUnavailable
+                        }
+                        remoteDraft = refreshed
+                    }
                 }
                 reconcileQuestions(from: draft)
                 savedAt = .now
                 if step < steps.count - 1 {
                     withAnimation(.snappy) { step += 1 }
                 } else {
+                    _ = try organizerContactDraft.contactForSubmission()
                     let quote = try await model.api.quote(purpose: "event_publish", resourceID: draft.id)
+                    guard requestStillCurrent(context) else { return }
                     let submittedEvent = try await model.api.submitEvent(
                         id: draft.id,
                         version: draft.version,
                         quoteID: quote.id
                     )
+                    guard requestStillCurrent(context) else { return }
+                    try requireExpectedDraftResponse(
+                        submittedEvent,
+                        expectedID: draft.id,
+                        expectedOrganizerID: context.identity.userID
+                    )
+                    guard organizerContactDraft.reconcileAuthorizedResponse(
+                        submittedEvent,
+                        expectedContact: true
+                    ) else {
+                        throw EventComposerContactError.authorizedContactUnavailable
+                    }
                     remoteDraft = submittedEvent
                     model.trackAnalytics(.eventSubmissionCompleted(
                         eventID: submittedEvent.id,
@@ -448,8 +582,13 @@ struct EventComposerView: View {
                     ))
                     submitted = true
                 }
-            } catch { self.error = AppModel.map(error) }
-            busy = false
+            } catch let contactError as EventComposerContactError {
+                guard requestStillCurrent(context) else { return }
+                self.error = contactUserFacingError(contactError)
+            } catch {
+                guard requestStillCurrent(context) else { return }
+                self.error = AppModel.map(error)
+            }
         }
     }
 
@@ -470,18 +609,32 @@ struct EventComposerView: View {
             if !isFree && (Int(amountText) ?? 0) <= 0 { return invalid("请填写有效的活动费用。") }
             if !isFree && (collectorName.nilIfBlank == nil || refundPolicy.nilIfBlank == nil) { return invalid("收费活动必须填写收款主体与退款规则。") }
             if !riskFlags.isEmpty && riskNote.trimmingCharacters(in: .whitespacesAndNewlines).count < 10 { return invalid("请说明风险与对应保护措施。") }
+        case 4, 5:
+            do {
+                _ = try organizerContactDraft.contactForSubmission()
+            } catch let contactError as EventComposerContactError {
+                return contactUserFacingError(contactError)
+            } catch {
+                return contactUserFacingError(.invalid)
+            }
         default: break
         }
         return nil
     }
 
-    private func loadPhotos(_ items: [PhotosPickerItem]) async {
+    private func loadPhotos(
+        _ items: [PhotosPickerItem],
+        context: EventComposerRequestContext?
+    ) async {
+        guard let context, requestStillCurrent(context) else { return }
         var loaded: [ComposerPhoto] = []
         for (index, item) in items.prefix(6).enumerated() {
             guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+            guard requestStillCurrent(context) else { return }
             let type = item.supportedContentTypes.first ?? .jpeg
             loaded.append(.init(data: data, mimeType: type.preferredMIMEType ?? "image/jpeg", filename: "spott-event-\(index + 1).\(type.preferredFilenameExtension ?? "jpg")"))
         }
+        guard requestStillCurrent(context) else { return }
         photos = loaded
     }
 
@@ -541,14 +694,72 @@ struct EventComposerView: View {
         }
     }
 
-    private func ensureCloudDraft() async {
-        guard model.session?.user.phoneVerified == true, remoteDraft == nil else { return }
+    private func bindComposerToCurrentSession(generation: UInt64) async {
+        if EventComposerContactUITestFixture.isEnabled {
+            let identity = EventComposerContactUITestFixture.identity
+            if boundSessionIdentity != identity {
+                resetDraftFields()
+                groups = []
+                step = 4
+                organizerContactDraft.updateKind(.line)
+                organizerContactDraft.updateLabel("当日 LINE")
+                organizerContactDraft.updateValue("spott_host")
+                boundSessionIdentity = identity
+            }
+            return
+        }
+
+        guard let identity = currentSessionIdentity,
+              model.session?.user.phoneVerified == true else {
+            resetDraftFields()
+            groups = []
+            boundSessionIdentity = nil
+            return
+        }
+
+        if boundSessionIdentity != identity {
+            resetDraftFields()
+            groups = []
+            boundSessionIdentity = identity
+        }
+        let context = EventComposerRequestContext(
+            identity: identity,
+            generation: generation
+        )
+        guard requestStillCurrent(context) else { return }
+
+        let loadedGroups = (try? await model.api.groups().items) ?? []
+        guard requestStillCurrent(context) else { return }
+        groups = loadedGroups
+        await ensureCloudDraft(for: context)
+    }
+
+    private func ensureCloudDraft(
+        for context: EventComposerRequestContext
+    ) async {
+        guard requestStillCurrent(context),
+              model.session?.user.phoneVerified == true,
+              remoteDraft == nil else { return }
         do {
             let draft = try await model.api.createBlankEventDraft()
+            guard requestStillCurrent(context) else { return }
+            try requireExpectedDraftResponse(
+                draft,
+                expectedID: nil,
+                expectedOrganizerID: context.identity.userID
+            )
+            guard organizerContactDraft.reconcileAuthorizedResponse(
+                draft,
+                expectedContact: false
+            ) else {
+                error = contactUserFacingError(.authorizedContactUnavailable)
+                return
+            }
             remoteDraft = draft
             savedAt = .now
             error = nil
         } catch {
+            guard requestStillCurrent(context) else { return }
             self.error = AppModel.map(error)
         }
     }
@@ -565,15 +776,187 @@ struct EventComposerView: View {
             )
         }
     }
+
+    private func retryContactRecovery() {
+        guard let context = currentRequestContext,
+              requestStillCurrent(context),
+              let remoteDraft,
+              !contactRecoveryBusy else { return }
+        contactRecoveryBusy = true
+        Task {
+            defer {
+                if requestStillCurrent(context) {
+                    contactRecoveryBusy = false
+                }
+            }
+            do {
+                let refreshed = try await model.api.event(
+                    identifier: remoteDraft.id.uuidString.lowercased()
+                )
+                guard requestStillCurrent(context) else { return }
+                try requireExpectedDraftResponse(
+                    refreshed,
+                    expectedID: remoteDraft.id,
+                    expectedOrganizerID: context.identity.userID
+                )
+                guard organizerContactDraft.reconcileAuthorizedResponse(
+                    refreshed,
+                    expectedContact: false
+                ) else {
+                    error = contactUserFacingError(.authorizedContactUnavailable)
+                    return
+                }
+                self.remoteDraft = refreshed
+                error = nil
+                savedAt = .now
+            } catch {
+                guard requestStillCurrent(context) else { return }
+                self.error = AppModel.map(error)
+            }
+        }
+    }
+
+    private var contactPreviewValue: String {
+        let copy = EventComposerContactCopy(locale: locale)
+        guard let contact = organizerContactDraft.contactForDraftSave() else {
+            return copy.missingMessage
+        }
+        let label = contact.label ?? copy.title(for: contact.kind)
+        return "\(label) · \(contact.value)"
+    }
+
+    private func contactUserFacingError(
+        _ error: EventComposerContactError
+    ) -> UserFacingError {
+        let copy = EventComposerContactCopy(locale: locale)
+        switch error {
+        case .missing:
+            return .init(
+                id: "DRAFT_CONTACT_REQUIRED",
+                message: copy.missingMessage,
+                retryable: false
+            )
+        case .invalid:
+            return .init(
+                id: "DRAFT_CONTACT_INVALID",
+                message: copy.invalidMessage,
+                retryable: false
+            )
+        case .authorizedContactUnavailable:
+            return .init(
+                id: "DRAFT_CONTACT_RESTORE_REQUIRED",
+                message: copy.recoveryFailedMessage,
+                retryable: true
+            )
+        }
+    }
     private var registrationModeTitle: String { switch registrationMode { case "approval": "局头审核"; case "invite_only": "仅限邀请"; default: "自动确认" } }
     private var riskOptions: [(String, String)] { [("alcohol", "包含酒精"), ("late_night", "深夜时段"), ("family", "亲子活动"), ("minors", "涉及未成年人"), ("outdoor", "户外活动"), ("mountain", "山地活动"), ("water", "涉水活动"), ("high_fee", "高额费用"), ("career", "职业招募"), ("investment", "投资相关"), ("gender_limited", "性别限制")] }
 
+    private var currentRequestContext: EventComposerRequestContext? {
+        guard let identity = currentSessionIdentity else { return nil }
+        return EventComposerRequestContext(
+            identity: identity,
+            generation: sessionGeneration
+        )
+    }
+
+    private func requestStillCurrent(
+        _ context: EventComposerRequestContext
+    ) -> Bool {
+        EventComposerSessionPresentation.canAcceptResponse(
+            context,
+            boundIdentity: boundSessionIdentity,
+            currentIdentity: currentSessionIdentity,
+            currentGeneration: sessionGeneration
+        )
+    }
+
+    private func optionalResponseStillCurrent<Response>(
+        _ response: Response?,
+        context: EventComposerRequestContext
+    ) -> Bool {
+        EventComposerOptionalResponsePolicy.canContinue(
+            after: response,
+            context: context,
+            boundIdentity: boundSessionIdentity,
+            currentIdentity: currentSessionIdentity,
+            currentGeneration: sessionGeneration
+        )
+    }
+
+    private func requireExpectedDraftResponse(
+        _ event: EventSummary,
+        expectedID: UUID?,
+        expectedOrganizerID: UUID
+    ) throws {
+        guard EventComposerDraftResponsePolicy.accepts(
+            event,
+            expectedID: expectedID,
+            expectedOrganizerID: expectedOrganizerID
+        ) else {
+            throw APIError(
+                status: 409,
+                code: "DRAFT_RESPONSE_MISMATCH",
+                message: "The server returned another event resource.",
+                retryable: true
+            )
+        }
+    }
+
     private func reset() {
-        step = 0; title = ""; description = ""; tags = []; photos = []; photoItems = []
-        publicArea = ""; exactAddress = ""; attendeeRequirements = ""; questions = []
-        newQuestion = ""; newQuestionKind = .text; newQuestionRequired = false; newQuestionOptions = ""
-        amountText = ""; collectorName = ""; paymentMethod = ""; paymentDeadlineText = ""; refundPolicy = ""; riskFlags = []; riskNote = ""
-        remoteDraft = nil; savedAt = nil; submitted = false; error = nil
+        resetDraftFields()
+        if let context = currentRequestContext,
+           requestStillCurrent(context) {
+            Task { await ensureCloudDraft(for: context) }
+        }
+    }
+
+    private func resetDraftFields() {
+        let start = Date.now.addingTimeInterval(86_400 * 7)
+        step = 0
+        title = ""
+        description = ""
+        category = "city-walk"
+        tags = []
+        newTag = ""
+        photoItems = []
+        photos = []
+        startsAt = start
+        endsAt = start.addingTimeInterval(7_200)
+        deadlineAt = start.addingTimeInterval(-86_400)
+        region = "tokyo"
+        publicArea = ""
+        exactAddress = ""
+        exactAddressVisibility = "confirmed"
+        capacity = 12
+        registrationMode = "automatic"
+        waitlistEnabled = true
+        attendeeRequirements = ""
+        questions = []
+        newQuestion = ""
+        newQuestionKind = .text
+        newQuestionRequired = false
+        newQuestionOptions = ""
+        isFree = true
+        amountText = ""
+        collectorName = ""
+        paymentMethod = ""
+        paymentDeadlineText = ""
+        refundPolicy = ""
+        riskFlags = []
+        riskNote = ""
+        groupID = nil
+        checkinMode = "dynamic_qr"
+        commentPermission = "participants"
+        posterEnabled = true
+        organizerContactDraft = EventComposerContactDraft()
+        contactRecoveryBusy = false
+        remoteDraft = nil
+        savedAt = nil
+        busy = false
+        submitted = false
+        error = nil
     }
 }
 

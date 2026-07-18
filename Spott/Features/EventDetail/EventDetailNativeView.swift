@@ -8,11 +8,18 @@ struct EventDetailView: View {
     private let event: EventSummary
     private let sourceTab: AppTab
     private let refreshOnAppear: Bool
+    private let initialViewerSnapshotIsCurrent: Bool
 
-    init(event: EventSummary, sourceTab: AppTab, refreshOnAppear: Bool = true) {
+    init(
+        event: EventSummary,
+        sourceTab: AppTab,
+        refreshOnAppear: Bool = true,
+        initialViewerSnapshotIsCurrent: Bool = false
+    ) {
         self.event = event
         self.sourceTab = sourceTab
         self.refreshOnAppear = refreshOnAppear
+        self.initialViewerSnapshotIsCurrent = initialViewerSnapshotIsCurrent
     }
 
     var body: some View {
@@ -22,9 +29,14 @@ struct EventDetailView: View {
             session: ctaSession,
             locale: locale,
             sourceTab: sourceTab,
-            refreshOnAppear: refreshOnAppear
+            refreshOnAppear: refreshOnAppear,
+            initialViewerSnapshotIsCurrent: initialViewerSnapshotIsCurrent
         )
-        .id("\(model.session?.sessionId.uuidString ?? "guest")-\(locale.identifier)-\(event.id)")
+        .id(
+            "\(model.session?.sessionId.uuidString ?? "guest")-"
+                + "\(model.session?.user.id.uuidString ?? "anonymous")-"
+                + "\(locale.identifier)-\(event.id)"
+        )
     }
 
     private var ctaSession: EventCTASession {
@@ -66,13 +78,15 @@ private struct EventDetailNativeScreen: View {
         session: EventCTASession,
         locale: Locale,
         sourceTab: AppTab,
-        refreshOnAppear: Bool
+        refreshOnAppear: Bool,
+        initialViewerSnapshotIsCurrent: Bool
     ) {
         _store = State(
             initialValue: EventDetailStore(
                 initialEvent: initialEvent,
                 service: service,
                 session: session,
+                initialViewerSnapshotIsCurrent: initialViewerSnapshotIsCurrent,
                 locale: locale
             )
         )
@@ -109,7 +123,9 @@ private struct EventDetailNativeScreen: View {
                     EventFactsView(
                         presentation: EventFactsPresentation(
                             event: store.event,
-                            disclosure: store.locationDisclosure,
+                            disclosure: store.locationDisclosure(
+                                viewerID: model.session?.user.id
+                            ),
                             locale: locale
                         )
                     )
@@ -129,6 +145,22 @@ private struct EventDetailNativeScreen: View {
                         OrganizerTrustView(organizer: store.event.organizer, locale: locale)
                     }
                     .buttonStyle(.plain)
+
+                    if let organizerContact {
+                        if canReportOrganizer {
+                            OrganizerContactCard(
+                                contact: organizerContact,
+                                locale: locale,
+                                onReportHost: reportOrganizer
+                            )
+                        } else {
+                            OrganizerContactCard(
+                                contact: organizerContact,
+                                locale: locale,
+                                onReportHost: nil
+                            )
+                        }
+                    }
 
                     EventTextSection(
                         title: text("journey.detail.about"),
@@ -223,6 +255,7 @@ private struct EventDetailNativeScreen: View {
             await resumeDeferredRegistrationIfNeeded()
         }
         .onChange(of: sessionFingerprint) { _, _ in
+            store.invalidateViewerSnapshot()
             store.session = ctaSession
             Task { await refresh() }
         }
@@ -324,7 +357,9 @@ private struct EventDetailNativeScreen: View {
     }
 
     private var sessionFingerprint: String {
-        "\(model.session?.sessionId.uuidString ?? "guest")-\(model.session?.user.phoneVerified == true)"
+        "\(model.session?.sessionId.uuidString ?? "guest")-"
+            + "\(model.session?.user.id.uuidString ?? "anonymous")-"
+            + "\(model.session?.user.phoneVerified == true)"
     }
 
     private var ctaSession: EventCTASession {
@@ -339,11 +374,31 @@ private struct EventDetailNativeScreen: View {
     }
 
     private var mapQuery: String? {
-        switch store.locationDisclosure {
+        switch store.locationDisclosure(viewerID: model.session?.user.id) {
         case .exact(_, let address, _): address
         case .approximate(let publicArea): publicArea
         case .unavailable: nil
         }
+    }
+
+    private var organizerContact: OrganizerContact? {
+        OrganizerContactDisclosurePolicy.contactForEventDetail(
+            event: store.event,
+            viewerID: model.session?.user.id,
+            viewerSnapshotIsCurrent: store.hasAuthoritativeViewerSnapshot
+        )
+    }
+
+    private var canReportOrganizer: Bool {
+        model.session?.user.id != store.event.organizerId
+    }
+
+    private func reportOrganizer() {
+        reportTarget = .init(
+            type: .user,
+            targetID: store.event.organizerId,
+            displayName: store.event.organizer.name
+        )
     }
 
     private func startIfNeeded() async {

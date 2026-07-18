@@ -188,6 +188,19 @@ final class SpottUITests: XCTestCase {
 
         let confirmation = app.descendants(matching: .any)["registration.confirmation"]
         XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        let contactCard = app.descendants(matching: .any)["registration.contact.card"]
+        XCTAssertTrue(contactCard.waitForExistence(timeout: 3))
+        let contactAction = app.descendants(matching: .any)["registration.contact.action"]
+        let reportAction = app.descendants(matching: .any)["registration.contact.report"]
+        XCTAssertTrue(contactAction.waitForExistence(timeout: 3))
+        XCTAssertTrue(reportAction.waitForExistence(timeout: 3))
+        for _ in 0..<4 where !contactAction.isHittable || !reportAction.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(contactAction.isHittable)
+        XCTAssertTrue(reportAction.isHittable)
+        XCTAssertGreaterThanOrEqual(contactAction.frame.height, 44)
+        XCTAssertGreaterThanOrEqual(reportAction.frame.height, 44)
         let itineraryButton = app.descendants(matching: .any)[
             "registration.confirmation.view_itinerary"
         ]
@@ -197,6 +210,48 @@ final class SpottUITests: XCTestCase {
         itineraryButton.tap()
         XCTAssertTrue(app.tabBars.buttons["行程"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.tabBars.buttons["行程"].isSelected)
+    }
+
+    @MainActor
+    func testComposerContactEditorRemainsUsableAtLargestAccessibilityText() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-spott-ui-test-navigation-fixture",
+            "-spott-ui-test-composer-contact",
+            "-UIPreferredContentSizeCategoryName",
+            "UICTContentSizeCategoryAccessibilityExtraExtraExtraLarge",
+        ]
+        app.launch()
+
+        let createTab = app.tabBars.buttons["创建"]
+        XCTAssertTrue(createTab.waitForExistence(timeout: 5))
+        createTab.tap()
+
+        let editor = app.descendants(matching: .any)[
+            "event.composer.contact.editor"
+        ]
+        let kind = app.descendants(matching: .any)[
+            "event.composer.contact.kind"
+        ]
+        let value = app.descendants(matching: .any)[
+            "event.composer.contact.value"
+        ]
+        let privacy = app.descendants(matching: .any)[
+            "event.composer.contact.privacy"
+        ]
+
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertTrue(kind.waitForExistence(timeout: 3))
+        XCTAssertTrue(value.waitForExistence(timeout: 3))
+        XCTAssertTrue(privacy.waitForExistence(timeout: 3))
+
+        for _ in 0..<6 where !value.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(value.isHittable)
+        XCTAssertGreaterThanOrEqual(value.frame.height, 48)
+        value.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
     }
 
     @MainActor

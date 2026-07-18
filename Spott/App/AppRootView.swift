@@ -140,6 +140,40 @@ struct RoutedEventCopy: Equatable {
     }
 }
 
+struct RoutedEventSnapshotPresentation {
+    let event: EventSummary?
+    let isCurrent: Bool
+
+    static func resolve(
+        event: EventSummary?,
+        boundLoadIdentity: String?,
+        currentLoadIdentity: String,
+        isAuthoritative: Bool
+    ) -> RoutedEventSnapshotPresentation {
+        guard boundLoadIdentity == currentLoadIdentity else {
+            return .init(
+                event: event?.discoverySafeSummary,
+                isCurrent: false
+            )
+        }
+        return .init(event: event, isCurrent: isAuthoritative)
+    }
+
+    static func response(
+        _ event: EventSummary,
+        matches reference: EventRouteReference
+    ) -> Bool {
+        if let expectedID = reference.id {
+            return event.id == expectedID
+        }
+        let identifier = reference.identifier
+        if let expectedID = UUID(uuidString: identifier) {
+            return event.id == expectedID
+        }
+        return event.publicSlug == identifier
+    }
+}
+
 private struct RoutedEventView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.locale) private var locale
@@ -148,16 +182,32 @@ private struct RoutedEventView: View {
     @State private var event: EventSummary?
     @State private var error: UserFacingError?
     @State private var refreshEventOnAppear = true
+    @State private var initialViewerSnapshotIsCurrent = false
+    @State private var eventLoadIdentity: String?
 
     private var copy: RoutedEventCopy { RoutedEventCopy(locale: locale) }
+    private var sessionFingerprint: String {
+        "\(model.session?.sessionId.uuidString ?? "guest")-"
+            + "\(model.session?.user.id.uuidString ?? "anonymous")"
+    }
+    private var loadIdentity: String {
+        "\(reference.id?.uuidString ?? "none")-\(reference.slug)-\(sessionFingerprint)"
+    }
 
     var body: some View {
+        let presentation = RoutedEventSnapshotPresentation.resolve(
+            event: event,
+            boundLoadIdentity: eventLoadIdentity,
+            currentLoadIdentity: loadIdentity,
+            isAuthoritative: initialViewerSnapshotIsCurrent
+        )
         Group {
-            if let event {
+            if let event = presentation.event {
                 EventDetailView(
                     event: event,
                     sourceTab: sourceTab,
-                    refreshOnAppear: refreshEventOnAppear
+                    refreshOnAppear: refreshEventOnAppear,
+                    initialViewerSnapshotIsCurrent: presentation.isCurrent
                 )
             } else if let error {
                 SpottStateCard(
@@ -175,13 +225,30 @@ private struct RoutedEventView: View {
             }
         }
         .background(SpottColor.canvas.ignoresSafeArea())
-        .task(id: reference) { await load(force: false) }
+        .task(id: loadIdentity) { await load(force: false) }
     }
 
     private func load(force: Bool) async {
-        if !force, let cached = model.router.cachedEvent(for: reference) {
-            event = cached
+        let requestedSessionFingerprint = sessionFingerprint
+        let requestedLoadIdentity = loadIdentity
+        let snapshotChanged = eventLoadIdentity != nil
+            && eventLoadIdentity != requestedLoadIdentity
+
+        if force || snapshotChanged {
+            event = nil
+            eventLoadIdentity = nil
             error = nil
+            refreshEventOnAppear = false
+            initialViewerSnapshotIsCurrent = false
+        }
+
+        if !force,
+           !snapshotChanged,
+           let cached = model.router.cachedEvent(for: reference) {
+            event = cached.discoverySafeSummary
+            eventLoadIdentity = requestedLoadIdentity
+            error = nil
+            initialViewerSnapshotIsCurrent = false
             refreshEventOnAppear = !model.usesNavigationUITestFixture
             return
         }
@@ -195,11 +262,31 @@ private struct RoutedEventView: View {
         }
         do {
             let current = try await model.api.event(identifier: reference.identifier)
+            try Task.checkCancellation()
+            guard requestedSessionFingerprint == sessionFingerprint,
+                  requestedLoadIdentity == loadIdentity else { return }
+            guard RoutedEventSnapshotPresentation.response(current, matches: reference) else {
+                error = .init(
+                    id: "EVENT_ROUTE_MISMATCH",
+                    message: CoreJourneyLocalization.text(
+                        "journey.error.event_incomplete",
+                        locale: locale
+                    ),
+                    retryable: false
+                )
+                return
+            }
             model.router.cache(event: current)
             event = current
+            eventLoadIdentity = requestedLoadIdentity
             error = nil
             refreshEventOnAppear = false
+            initialViewerSnapshotIsCurrent = true
+        } catch is CancellationError {
+            return
         } catch {
+            guard requestedSessionFingerprint == sessionFingerprint,
+                  requestedLoadIdentity == loadIdentity else { return }
             if event == nil { self.error = AppModel.map(error) }
         }
     }

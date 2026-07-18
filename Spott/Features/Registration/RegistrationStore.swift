@@ -67,9 +67,11 @@ final class RegistrationStore {
     private(set) var idempotencyKey: UUID?
     private(set) var confirmation: RegistrationConfirmation?
     private(set) var confirmationRefreshError: String?
+    private(set) var isRefreshingConfirmation = false
 
     @ObservationIgnored private let service: any RegistrationServing
     @ObservationIgnored private let itineraryRefresher: any RegistrationItineraryRefreshing
+    @ObservationIgnored private let expectedViewerID: UUID?
     @ObservationIgnored private let locale: Locale
     @ObservationIgnored private let clock: @Sendable () -> Date
     @ObservationIgnored private var lifecycleGeneration = 0
@@ -81,6 +83,7 @@ final class RegistrationStore {
         draft: DeferredRegistrationDraft = .init(),
         service: any RegistrationServing,
         itineraryRefresher: any RegistrationItineraryRefreshing,
+        expectedViewerID: UUID? = nil,
         idempotencyKey: UUID = UUID(),
         locale: Locale = .current,
         clock: @escaping @Sendable () -> Date = { .now }
@@ -93,6 +96,7 @@ final class RegistrationStore {
         acceptedTerms = event.fee?.isFree != false || draft.acceptedTerms
         self.service = service
         self.itineraryRefresher = itineraryRefresher
+        self.expectedViewerID = expectedViewerID
         self.idempotencyKey = idempotencyKey
         seedIdempotencyKey = idempotencyKey
         self.locale = locale
@@ -104,6 +108,7 @@ final class RegistrationStore {
         draft: DeferredRegistrationDraft = .init(),
         service: any RegistrationServing,
         itineraryRefresher: any RegistrationItineraryRefreshing,
+        expectedViewerID: UUID? = nil,
         idempotencyKey: UUID = UUID(),
         locale: Locale = .current,
         now: Date
@@ -113,6 +118,7 @@ final class RegistrationStore {
             draft: draft,
             service: service,
             itineraryRefresher: itineraryRefresher,
+            expectedViewerID: expectedViewerID,
             idempotencyKey: idempotencyKey,
             locale: locale,
             clock: { now }
@@ -209,6 +215,13 @@ final class RegistrationStore {
             try Task.checkCancellation()
             guard generation == lifecycleGeneration,
                   self.idempotencyKey == idempotencyKey else { return }
+            guard registration.eventId == event.id else {
+                throw RegistrationStoreError.unexpectedEvent
+            }
+            guard let expectedViewerID,
+                  registration.userId == expectedViewerID else {
+                throw RegistrationStoreError.unexpectedViewer
+            }
             guard let kind = RegistrationConfirmationKind(status: registration.status) else {
                 throw RegistrationStoreError.unsupportedSuccessStatus
             }
@@ -229,6 +242,9 @@ final class RegistrationStore {
                 try Task.checkCancellation()
                 guard generation == lifecycleGeneration,
                       confirmation?.registration.id == registration.id else { return }
+                guard authorizedEvent.id == event.id else {
+                    throw RegistrationStoreError.unexpectedEvent
+                }
                 event = authorizedEvent
                 confirmation = .init(
                     kind: kind,
@@ -278,6 +294,51 @@ final class RegistrationStore {
         }
     }
 
+    func retryConfirmationRefresh() async {
+        guard step == .confirmation,
+              !isRefreshingConfirmation,
+              let currentConfirmation = confirmation else { return }
+        let generation = lifecycleGeneration
+        isRefreshingConfirmation = true
+        defer {
+            if generation == lifecycleGeneration {
+                isRefreshingConfirmation = false
+            }
+        }
+
+        do {
+            let identifier = currentConfirmation.event.publicSlug.isEmpty
+                ? currentConfirmation.event.id.uuidString.lowercased()
+                : currentConfirmation.event.publicSlug
+            let authorizedEvent = try await service.event(identifier: identifier)
+            try Task.checkCancellation()
+            guard generation == lifecycleGeneration,
+                  confirmation?.registration.id == currentConfirmation.registration.id else {
+                return
+            }
+            guard authorizedEvent.id == currentConfirmation.event.id else {
+                throw RegistrationStoreError.unexpectedEvent
+            }
+            event = authorizedEvent
+            confirmation = .init(
+                kind: currentConfirmation.kind,
+                registration: currentConfirmation.registration,
+                event: authorizedEvent
+            )
+            confirmationRefreshError = nil
+        } catch is CancellationError {
+            return
+        } catch {
+            guard generation == lifecycleGeneration,
+                  confirmation?.registration.id == currentConfirmation.registration.id else {
+                return
+            }
+            confirmationRefreshError = localized(
+                "journey.confirmation.refresh_failed"
+            )
+        }
+    }
+
     func returnToForm() {
         guard step == .review else { return }
         quote = nil
@@ -295,6 +356,7 @@ final class RegistrationStore {
         quote = nil
         confirmation = nil
         confirmationRefreshError = nil
+        isRefreshingConfirmation = false
         error = nil
         validationErrors = [:]
         firstInvalidField = nil
@@ -516,6 +578,20 @@ final class RegistrationStore {
                 retryable: true
             )
         }
+        if case RegistrationStoreError.unexpectedEvent = error {
+            return .init(
+                id: "REGISTRATION_EVENT_MISMATCH",
+                message: localized("journey.error.action"),
+                retryable: false
+            )
+        }
+        if case RegistrationStoreError.unexpectedViewer = error {
+            return .init(
+                id: "REGISTRATION_VIEWER_MISMATCH",
+                message: localized("journey.error.action"),
+                retryable: false
+            )
+        }
         return .init(
             id: "NETWORK_UNAVAILABLE",
             message: localized("journey.error.network"),
@@ -529,6 +605,8 @@ final class RegistrationStore {
 
     private enum RegistrationStoreError: Error {
         case unsupportedSuccessStatus
+        case unexpectedEvent
+        case unexpectedViewer
     }
 }
 

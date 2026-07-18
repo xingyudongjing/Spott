@@ -670,7 +670,7 @@ final class DiscoveryStoreTests: XCTestCase {
         model.discovery.replaceWithFixture([personalized])
         model.show(event: personalized)
         let reference = EventRouteReference(event: personalized)
-        XCTAssertNotNil(model.router.cachedEvent(for: reference)?.viewerRegistration)
+        XCTAssertNil(model.router.cachedEvent(for: reference)?.viewerRegistration)
 
         model.signOut()
 
@@ -681,6 +681,36 @@ final class DiscoveryStoreTests: XCTestCase {
         XCTAssertFalse(displayed.organizer.viewerFollowing)
         XCTAssertTrue(displayed.availableActions.isEmpty)
         XCTAssertNil(model.router.cachedEvent(for: reference))
+    }
+
+    func testRouterEventSnapshotsAreAlwaysPublicAndViewerNeutral() throws {
+        var personalized = try Self.personalizedEvent(id: 1, title: "Private route")
+        personalized.organizerContact = try OrganizerContact(
+            kind: .email,
+            label: "Host",
+            value: "host@example.com"
+        )
+        personalized.exactAddress = "東京都千代田区1-1"
+        personalized.coordinate = .init(
+            latitude: 35.681236,
+            longitude: 139.767125,
+            precision: .exact
+        )
+        let router = AppRouter()
+        let reference = EventRouteReference(event: personalized)
+
+        router.show(event: personalized)
+        assertViewerNeutral(router.cachedEvent(for: reference))
+
+        router.cache(event: personalized)
+        assertViewerNeutral(router.cachedEvent(for: reference))
+
+        router.deferRegistration(
+            for: personalized,
+            action: .register,
+            requiring: .login
+        )
+        assertViewerNeutral(router.cachedEvent(for: reference))
     }
 
     func testSwitchingAccountsClearsPersonalizedDiscoveryAndRouterCache() throws {
@@ -712,6 +742,32 @@ final class DiscoveryStoreTests: XCTestCase {
         XCTAssertFalse(displayed.organizer.viewerFollowing)
         XCTAssertTrue(displayed.availableActions.isEmpty)
         XCTAssertNil(model.router.cachedEvent(for: reference))
+    }
+
+    private func assertViewerNeutral(
+        _ event: EventSummary?,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard let event else {
+            XCTFail("Expected a cached public event snapshot", file: file, line: line)
+            return
+        }
+        XCTAssertNil(event.viewerRegistration, file: file, line: line)
+        XCTAssertNil(event.registrationStatus, file: file, line: line)
+        XCTAssertFalse(event.favorited, file: file, line: line)
+        XCTAssertTrue(event.availableActions.isEmpty, file: file, line: line)
+        XCTAssertFalse(event.organizer.viewerFollowing, file: file, line: line)
+        XCTAssertNil(event.organizerContact, file: file, line: line)
+        XCTAssertNil(event.exactAddress, file: file, line: line)
+        XCTAssertNil(event.coordinate, file: file, line: line)
+        XCTAssertNil(event.attendeeRequirements, file: file, line: line)
+        XCTAssertNil(event.riskFlags, file: file, line: line)
+        XCTAssertNil(event.riskDetails, file: file, line: line)
+        XCTAssertNil(event.checkinMode, file: file, line: line)
+        XCTAssertNil(event.commentPermission, file: file, line: line)
+        XCTAssertNil(event.posterEnabled, file: file, line: line)
+        XCTAssertNil(event.exactAddressVisibility, file: file, line: line)
     }
 
     func testEmptyAndFatalErrorHaveDistinctStates() async {

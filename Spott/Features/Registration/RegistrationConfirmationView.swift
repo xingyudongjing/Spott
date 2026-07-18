@@ -47,24 +47,34 @@ struct RegistrationConfirmationView: View {
     }
 
     let confirmation: RegistrationConfirmation
+    let viewerID: UUID?
     let locale: Locale
     let refreshMessage: String?
+    let isRefreshing: Bool
+    let onRetryRefresh: (() -> Void)?
     let onViewItinerary: () -> Void
     let onDone: () -> Void
 
     @State private var isAddingToCalendar = false
     @State private var calendarFeedback: CalendarFeedback?
+    @State private var reportTarget: SafetyReportTarget?
 
     init(
         confirmation: RegistrationConfirmation,
+        viewerID: UUID?,
         locale: Locale,
         refreshMessage: String? = nil,
+        isRefreshing: Bool = false,
+        onRetryRefresh: (() -> Void)? = nil,
         onViewItinerary: @escaping () -> Void,
         onDone: @escaping () -> Void
     ) {
         self.confirmation = confirmation
+        self.viewerID = viewerID
         self.locale = locale
         self.refreshMessage = refreshMessage
+        self.isRefreshing = isRefreshing
+        self.onRetryRefresh = onRetryRefresh
         self.onViewItinerary = onViewItinerary
         self.onDone = onDone
     }
@@ -78,13 +88,7 @@ struct RegistrationConfirmationView: View {
             VStack(alignment: .leading, spacing: 24) {
                 confirmationHeader
 
-                if let refreshMessage {
-                    Label(refreshMessage, systemImage: "arrow.clockwise.circle")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("registration.confirmation.refresh_notice")
-                }
+                refreshNotice
 
                 EventFactsView(
                     presentation: EventFactsPresentation(
@@ -93,6 +97,14 @@ struct RegistrationConfirmationView: View {
                         locale: locale
                     )
                 )
+
+                if let organizerContact {
+                    OrganizerContactCard(
+                        contact: organizerContact,
+                        locale: locale,
+                        onReportHost: reportHost
+                    )
+                }
 
                 VStack(spacing: 0) {
                     LabeledContent(text("journey.registration.status_label")) {
@@ -168,6 +180,66 @@ struct RegistrationConfirmationView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("registration.confirmation")
+        .sheet(item: $reportTarget) { target in
+            NavigationStack { SafetyReportView(target: target) }
+        }
+    }
+
+    @ViewBuilder
+    private var refreshNotice: some View {
+        if let refreshMessage {
+            VStack(alignment: .leading, spacing: 10) {
+                Label(refreshMessage, systemImage: "arrow.clockwise.circle")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let onRetryRefresh {
+                    Button(action: onRetryRefresh) {
+                        HStack(spacing: 7) {
+                            if isRefreshing {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                            Text(
+                                text(
+                                    isRefreshing
+                                        ? "journey.contact.refreshing"
+                                        : "journey.contact.retry"
+                                )
+                            )
+                        }
+                        .frame(minHeight: 44)
+                    }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+                    .disabled(isRefreshing)
+                    .accessibilityIdentifier("registration.contact.retry")
+                }
+            }
+            .padding(14)
+            .background(
+                SpottColor.amber.opacity(0.10),
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
+            .accessibilityIdentifier("registration.confirmation.refresh_notice")
+        }
+    }
+
+    private var organizerContact: OrganizerContact? {
+        OrganizerContactDisclosurePolicy.contactForConfirmation(
+            event: confirmation.event,
+            registration: confirmation.registration,
+            viewerID: viewerID
+        )
+    }
+
+    private func reportHost() {
+        reportTarget = .init(
+            type: .user,
+            targetID: confirmation.event.organizerId,
+            displayName: confirmation.event.organizer.name
+        )
     }
 
     private var confirmationHeader: some View {
@@ -248,9 +320,16 @@ struct RegistrationConfirmationView: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let exactAddress = confirmation.event.exactAddress?
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let mayReadExactLocation = confirmation.event.exactAddressVisibility == "public"
+            || OrganizerContactDisclosurePolicy.registrationMayReadPrivateDetails(
+                event: confirmation.event,
+                registration: confirmation.registration,
+                viewerID: viewerID
+            )
 
         if let publicArea, !publicArea.isEmpty,
-           let exactAddress, !exactAddress.isEmpty {
+           let exactAddress, !exactAddress.isEmpty,
+           mayReadExactLocation {
             return .exact(
                 publicArea: publicArea,
                 address: exactAddress,

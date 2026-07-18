@@ -19,6 +19,7 @@ final class EventDetailStore {
     private(set) var event: EventSummary
     private(set) var error: UserFacingError?
     private(set) var isRefreshing = false
+    private(set) var hasAuthoritativeViewerSnapshot = false
     private(set) var temporalRevision = 0
     var session: EventCTASession
 
@@ -32,12 +33,14 @@ final class EventDetailStore {
         initialEvent: EventSummary,
         service: any EventDetailServing,
         session: EventCTASession,
+        initialViewerSnapshotIsCurrent: Bool = false,
         locale: Locale = .current,
         clock: (@Sendable () -> Date)? = nil
     ) {
         event = initialEvent
         self.service = service
         self.session = session
+        hasAuthoritativeViewerSnapshot = initialViewerSnapshotIsCurrent
         self.locale = locale
         self.clock = clock ?? { service.authoritativeNow() }
     }
@@ -46,6 +49,7 @@ final class EventDetailStore {
         initialEvent: EventSummary,
         service: any EventDetailServing,
         session: EventCTASession,
+        initialViewerSnapshotIsCurrent: Bool = false,
         locale: Locale = .current,
         now: Date
     ) {
@@ -53,6 +57,7 @@ final class EventDetailStore {
             initialEvent: initialEvent,
             service: service,
             session: session,
+            initialViewerSnapshotIsCurrent: initialViewerSnapshotIsCurrent,
             locale: locale,
             clock: { now }
         )
@@ -89,10 +94,24 @@ final class EventDetailStore {
     }
 
     var locationDisclosure: EventLocationDisclosure {
+        locationDisclosure(viewerID: nil)
+    }
+
+    func locationDisclosure(viewerID: UUID?) -> EventLocationDisclosure {
         let publicArea = event.publicArea?.trimmingCharacters(in: .whitespacesAndNewlines)
         let exactAddress = event.exactAddress?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mayReadExactLocation = event.exactAddressVisibility == "public"
+            || (
+                session.authenticated
+                    && OrganizerContactDisclosurePolicy.viewerMayReadPrivateDetails(
+                        event: event,
+                        viewerID: viewerID,
+                        viewerSnapshotIsCurrent: hasAuthoritativeViewerSnapshot
+                    )
+            )
         if let publicArea, !publicArea.isEmpty,
-           let exactAddress, !exactAddress.isEmpty {
+           let exactAddress, !exactAddress.isEmpty,
+           mayReadExactLocation {
             return .exact(
                 publicArea: publicArea,
                 address: exactAddress,
@@ -109,8 +128,10 @@ final class EventDetailStore {
         refreshTask?.cancel()
         generation += 1
         let requestGeneration = generation
+        hasAuthoritativeViewerSnapshot = false
         isRefreshing = true
         error = nil
+        let expectedEventID = event.id
         let identifier = event.publicSlug.isEmpty
             ? event.id.uuidString.lowercased()
             : event.publicSlug
@@ -123,7 +144,13 @@ final class EventDetailStore {
             let refreshed = try await request.value
             try Task.checkCancellation()
             guard requestGeneration == generation else { return }
-            if hasIncompletePublishedContract(refreshed) {
+            if refreshed.id != expectedEventID {
+                error = .init(
+                    id: "EVENT_ROUTE_MISMATCH",
+                    message: localized("journey.error.event_incomplete"),
+                    retryable: false
+                )
+            } else if hasIncompletePublishedContract(refreshed) {
                 error = .init(
                     id: "EVENT_DATA_INCOMPLETE",
                     message: localized("journey.error.event_incomplete"),
@@ -131,6 +158,7 @@ final class EventDetailStore {
                 )
             } else {
                 event = refreshed
+                hasAuthoritativeViewerSnapshot = true
             }
         } catch is CancellationError {
             // A newer refresh or the owning view cancelled this result.
@@ -143,6 +171,14 @@ final class EventDetailStore {
             isRefreshing = false
             refreshTask = nil
         }
+    }
+
+    func invalidateViewerSnapshot() {
+        refreshTask?.cancel()
+        refreshTask = nil
+        generation += 1
+        hasAuthoritativeViewerSnapshot = false
+        isRefreshing = false
     }
 
     private func hasIncompletePublishedContract(_ event: EventSummary) -> Bool {

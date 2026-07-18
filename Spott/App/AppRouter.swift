@@ -149,7 +149,7 @@ final class AppRouter {
 
     func show(event: EventSummary, in tab: AppTab? = nil) {
         let reference = EventRouteReference(event: event)
-        eventSnapshots[reference] = event
+        eventSnapshots[reference] = event.discoverySafeSummary
         push(.event(reference), in: tab, selectingExplicitTab: tab != nil)
     }
 
@@ -171,7 +171,7 @@ final class AppRouter {
     }
 
     func cache(event: EventSummary) {
-        eventSnapshots[EventRouteReference(event: event)] = event
+        eventSnapshots[EventRouteReference(event: event)] = event.discoverySafeSummary
     }
 
     @discardableResult
@@ -211,7 +211,7 @@ final class AppRouter {
         requiring gate: AppGate
     ) {
         let reference = EventRouteReference(event: event)
-        eventSnapshots[reference] = event
+        eventSnapshots[reference] = event.discoverySafeSummary
         deferredRegistrationIntent = .init(
             event: reference,
             action: action,

@@ -27,9 +27,43 @@ export function eventTime(
   const formatter = new Intl.DateTimeFormat(intlLocale(locale), {
     timeZone, hour: "2-digit", minute: "2-digit", hour12: false,
   });
-  return end
-    ? `${formatter.format(new Date(start))}–${formatter.format(new Date(end))}`
-    : formatter.format(new Date(start));
+  const startDate = new Date(start);
+  if (!end) return formatter.format(startDate);
+
+  const endDate = new Date(end);
+  const endPrefix = eventEndPrefix(startDate, endDate, locale, timeZone);
+  return `${formatter.format(startDate)}–${endPrefix}${formatter.format(endDate)}`;
+}
+
+function eventEndPrefix(
+  start: Date,
+  end: Date,
+  locale: Locale = "zh-Hans",
+  timeZone = "Asia/Tokyo",
+): string {
+  const dayDifference = calendarDay(end, timeZone) - calendarDay(start, timeZone);
+  if (dayDifference === 1) return `${formatMessage(locale, "event.nextDay")} `;
+  if (dayDifference <= 1) return "";
+
+  const endDate = new Intl.DateTimeFormat(intlLocale(locale), {
+    timeZone,
+    year: "numeric",
+    month: locale === "en" ? "short" : "long",
+    day: "numeric",
+  }).format(end);
+  return `${endDate} · `;
+}
+
+function calendarDay(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value);
+  return Date.UTC(value("year"), value("month") - 1, value("day")) / 86_400_000;
 }
 
 export function eventDay(

@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { EventResults, MapEventPreview } from "../app/components/discovery/EventResults";
 import { EventMap, eventMarkerFacts } from "../app/components/discovery/EventMap";
 import { PreviewModeProvider } from "../app/components/PreviewModeProvider";
+import { messages } from "../app/i18n/messages";
 import { eventFixture, makeEvent, makePage, renderWithI18n } from "./event-fixtures";
 
 const mapBoundary = vi.hoisted(() => ({
@@ -16,6 +17,10 @@ const mapBoundary = vi.hoisted(() => ({
   markerElements: [] as HTMLElement[],
   mapOptions: null as Record<string, unknown> | null,
   markerOptions: [] as Array<Record<string, unknown>>,
+  addControl: vi.fn(),
+  navigationOptions: null as Record<string, unknown> | null,
+  resizeObserverCallback: null as ResizeObserverCallback | null,
+  resizeObserverDisconnect: vi.fn(),
   bounds: {
     getWest: () => 139.6,
     getSouth: () => 35.5,
@@ -26,7 +31,15 @@ const mapBoundary = vi.hoisted(() => ({
 
 vi.mock("maplibre-gl", () => {
   class MapBoundary {
-    constructor(options: Record<string, unknown>) { mapBoundary.mapOptions = options; }
+    constructor(options: Record<string, unknown>) {
+      mapBoundary.mapOptions = options;
+      const canvas = document.createElement("canvas");
+      const locale = options.locale as Record<string, string> | undefined;
+      canvas.setAttribute("aria-label", locale?.["Map.Title"] ?? "Map");
+      canvas.setAttribute("role", "region");
+      (options.container as HTMLElement).appendChild(canvas);
+    }
+    addControl(control: unknown, position?: string) { mapBoundary.addControl(control, position); return this; }
     on(name: string, handler: (...args: unknown[]) => void) { mapBoundary.handlers.set(name, handler); return this; }
     off(name: string) { mapBoundary.handlers.delete(name); return this; }
     once(name: string, handler: (...args: unknown[]) => void) { mapBoundary.onceHandlers.set(name, handler); return this; }
@@ -43,7 +56,10 @@ vi.mock("maplibre-gl", () => {
     addTo() { return this; }
     remove() { return this; }
   }
-  return { Map: MapBoundary, Marker: MarkerBoundary };
+  class NavigationControlBoundary {
+    constructor(options: Record<string, unknown>) { mapBoundary.navigationOptions = options; }
+  }
+  return { Map: MapBoundary, Marker: MarkerBoundary, NavigationControl: NavigationControlBoundary };
 });
 
 vi.mock("next/link", () => ({
@@ -61,6 +77,10 @@ beforeEach(() => {
   mapBoundary.markerElements.length = 0;
   mapBoundary.mapOptions = null;
   mapBoundary.markerOptions.length = 0;
+  mapBoundary.addControl.mockReset();
+  mapBoundary.navigationOptions = null;
+  mapBoundary.resizeObserverCallback = null;
+  mapBoundary.resizeObserverDisconnect.mockReset();
 });
 
 describe("MapLibre adapter", () => {
@@ -88,6 +108,7 @@ describe("MapLibre adapter", () => {
         styleURL="https://media.spott.jp/map/style.json"
         mapLabel="活动地图"
         loadingLabel="正在加载地图…"
+        emptyLabel="这些活动暂未提供可公开显示的地图位置。"
         approximateLabel="约在此区域"
         onBoundsChange={vi.fn()}
         onFailure={vi.fn()}
@@ -100,6 +121,65 @@ describe("MapLibre adapter", () => {
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
   });
 
+  test("uses MapLibre zoom controls without adding a location or compass permission surface", async () => {
+    render(
+      <EventMap
+        events={[eventFixture]}
+        styleURL="https://media.spott.jp/map/style.json"
+        mapLabel="活动地图"
+        loadingLabel="正在加载地图…"
+        emptyLabel="这些活动暂未提供可公开显示的地图位置。"
+        zoomInLabel="放大地图"
+        zoomOutLabel="缩小地图"
+        approximateLabel="约在此区域"
+        onBoundsChange={vi.fn()}
+        onFailure={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(mapBoundary.addControl).toHaveBeenCalledTimes(1));
+    expect(mapBoundary.navigationOptions).toEqual({
+      showCompass: false,
+      showZoom: true,
+      visualizePitch: false,
+    });
+    expect(mapBoundary.mapOptions).toMatchObject({
+      locale: {
+        "Map.Title": "活动地图",
+        "NavigationControl.ZoomIn": "放大地图",
+        "NavigationControl.ZoomOut": "缩小地图",
+      },
+    });
+    expect(mapBoundary.addControl).toHaveBeenCalledWith(expect.anything(), "top-right");
+  });
+
+  test("exposes one localized map region instead of nesting a second region around MapLibre", async () => {
+    render(
+      <EventMap
+        events={[eventFixture]}
+        styleURL="https://media.spott.jp/map/style.json"
+        mapLabel="活动地图"
+        loadingLabel="正在加载地图…"
+        emptyLabel="这些活动暂未提供可公开显示的地图位置。"
+        approximateLabel="约在此区域"
+        onBoundsChange={vi.fn()}
+        onFailure={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(mapBoundary.mapOptions).not.toBeNull());
+    expect(screen.getAllByRole("region")).toHaveLength(1);
+    expect(screen.getByRole("region", { name: "活动地图" })).toHaveProperty("tagName", "CANVAS");
+  });
+
+  test("provides localized zoom control labels in Chinese, Japanese, and English", () => {
+    const labelKeys = ["discover.zoomIn", "discover.zoomOut"] as const;
+
+    expect(labelKeys.map((key) => messages["zh-Hans"][key])).toEqual(["放大地图", "缩小地图"]);
+    expect(labelKeys.map((key) => messages.ja[key])).toEqual(["地図を拡大", "地図を縮小"]);
+    expect(labelKeys.map((key) => messages.en[key])).toEqual(["Zoom in", "Zoom out"]);
+  });
+
   test("normalizes one real camera move and tears down the WebGL boundary", async () => {
     const onBoundsChange = vi.fn();
     const { unmount } = render(
@@ -108,6 +188,7 @@ describe("MapLibre adapter", () => {
         styleURL="https://media.spott.jp/map/style.json"
         mapLabel="活动地图"
         loadingLabel="正在加载地图…"
+        emptyLabel="这些活动暂未提供可公开显示的地图位置。"
         approximateLabel="约在此区域"
         onBoundsChange={onBoundsChange}
         onFailure={vi.fn()}
@@ -137,6 +218,56 @@ describe("MapLibre adapter", () => {
     expect(mapBoundary.remove).toHaveBeenCalledTimes(1);
   });
 
+  test("defers resize work to one animation frame and cancels it during teardown", async () => {
+    let scheduledFrame: FrameRequestCallback | null = null;
+    const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      scheduledFrame = callback;
+      return 42;
+    });
+    const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: ResizeObserverCallback) { mapBoundary.resizeObserverCallback = callback; }
+      observe() {}
+      unobserve() {}
+      disconnect() { mapBoundary.resizeObserverDisconnect(); }
+    });
+
+    try {
+      const { unmount } = render(
+        <EventMap
+          events={[eventFixture]}
+          styleURL="https://media.spott.jp/map/style.json"
+          mapLabel="活动地图"
+          loadingLabel="正在加载地图…"
+          emptyLabel="这些活动暂未提供可公开显示的地图位置。"
+          approximateLabel="约在此区域"
+          onBoundsChange={vi.fn()}
+          onFailure={vi.fn()}
+        />,
+      );
+      await waitFor(() => expect(mapBoundary.resizeObserverCallback).not.toBeNull());
+
+      act(() => {
+        mapBoundary.resizeObserverCallback?.([], {} as ResizeObserver);
+        mapBoundary.resizeObserverCallback?.([], {} as ResizeObserver);
+      });
+      expect(mapBoundary.resize).not.toHaveBeenCalled();
+      expect(requestFrame).toHaveBeenCalledTimes(1);
+
+      act(() => { scheduledFrame?.(0); });
+      expect(mapBoundary.resize).toHaveBeenCalledTimes(1);
+
+      act(() => { mapBoundary.resizeObserverCallback?.([], {} as ResizeObserver); });
+      unmount();
+      expect(cancelFrame).toHaveBeenCalledWith(42);
+      expect(mapBoundary.resizeObserverDisconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+      requestFrame.mockRestore();
+      cancelFrame.mockRestore();
+    }
+  });
+
   test("turns a marker selection into an actionable localized detail preview", async () => {
     const onSelect = vi.fn();
     render(
@@ -145,6 +276,7 @@ describe("MapLibre adapter", () => {
         styleURL="https://media.spott.jp/map/style.json"
         mapLabel="活动地图"
         loadingLabel="正在加载地图…"
+        emptyLabel="这些活动暂未提供可公开显示的地图位置。"
         approximateLabel="约在此区域"
         onBoundsChange={vi.fn()}
         onFailure={vi.fn()}
@@ -175,6 +307,7 @@ describe("MapLibre adapter", () => {
         styleURL="https://media.spott.jp/map/style.json"
         mapLabel="活动地图"
         loadingLabel="正在加载地图…"
+        emptyLabel="这些活动暂未提供可公开显示的地图位置。"
         approximateLabel="约在此区域"
         selectedEventId={null}
         onBoundsChange={onBoundsChange}
@@ -193,6 +326,7 @@ describe("MapLibre adapter", () => {
         styleURL="https://media.spott.jp/map/style.json"
         mapLabel="活动地图"
         loadingLabel="正在加载地图…"
+        emptyLabel="这些活动暂未提供可公开显示的地图位置。"
         approximateLabel="约在此区域"
         selectedEventId={eventFixture.id}
         onBoundsChange={onBoundsChange}
@@ -208,6 +342,7 @@ describe("MapLibre adapter", () => {
         styleURL="https://media.spott.jp/map/style.json"
         mapLabel="活动地图"
         loadingLabel="正在加载地图…"
+        emptyLabel="这些活动暂未提供可公开显示的地图位置。"
         approximateLabel="约在此区域"
         selectedEventId={null}
         onBoundsChange={onBoundsChange}
@@ -245,6 +380,7 @@ describe("MapLibre adapter", () => {
         styleURL="https://media.spott.jp/map/style.json"
         mapLabel="活动地图"
         loadingLabel="正在加载地图…"
+        emptyLabel="这些活动暂未提供可公开显示的地图位置。"
         approximateLabel="约在此区域"
         onBoundsChange={vi.fn()}
         onFailure={vi.fn()}
@@ -261,6 +397,54 @@ describe("MapLibre adapter", () => {
     expect(offsets[2]).toEqual([0, 0]);
   });
 
+  test("shows a localized empty map state when results expose no public coordinate", async () => {
+    renderWithI18n(
+      <EventResults
+        page={makePage([makeEvent({ coordinate: null })])}
+        loading={false}
+        refreshing={false}
+        loadingMore={false}
+        error={null}
+        mode="map"
+        mapStyleURL="https://media.spott.jp/map/style.json"
+        mapAttempt={0}
+        selectedEventId={eventFixture.id}
+        onRetry={vi.fn()}
+        onReset={vi.fn()}
+        onLoadMore={vi.fn()}
+        onBoundsChange={vi.fn()}
+        onMapFailure={vi.fn()}
+        onRetryMap={vi.fn()}
+        onUseList={vi.fn()}
+        onSelectEvent={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(mapBoundary.onceHandlers.has("idle")).toBe(true));
+    act(() => { mapBoundary.onceHandlers.get("idle")?.(); });
+    expect(await screen.findByText("这些活动暂未提供可公开显示的地图位置。")).toBeVisible();
+    expect(screen.queryByRole("region", { name: `${eventFixture.title} 活动预览` })).not.toBeInTheDocument();
+  });
+
+  test("keeps a non-empty empty-state announcement for invalid untyped callers", async () => {
+    render(
+      <EventMap
+        events={[]}
+        styleURL="https://media.spott.jp/map/style.json"
+        mapLabel="Event map"
+        loadingLabel="Loading map…"
+        emptyLabel={undefined as never}
+        approximateLabel="Approximate area"
+        onBoundsChange={vi.fn()}
+        onFailure={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(mapBoundary.onceHandlers.has("idle")).toBe(true));
+    act(() => { mapBoundary.onceHandlers.get("idle")?.(); });
+    expect(await screen.findByRole("status")).not.toBeEmptyDOMElement();
+  });
+
   test("fails once when the map cannot become idle before its loading deadline", async () => {
     vi.useFakeTimers();
     const onFailure = vi.fn();
@@ -270,6 +454,7 @@ describe("MapLibre adapter", () => {
         styleURL="https://media.spott.jp/map/style.json"
         mapLabel="活动地图"
         loadingLabel="正在加载地图…"
+        emptyLabel="这些活动暂未提供可公开显示的地图位置。"
         approximateLabel="约在此区域"
         loadTimeoutMs={1_000}
         onBoundsChange={vi.fn()}
@@ -296,6 +481,7 @@ describe("MapLibre adapter", () => {
         styleURL="http://127.0.0.1:4201/style.json"
         mapLabel="活动地图"
         loadingLabel="正在加载地图…"
+        emptyLabel="这些活动暂未提供可公开显示的地图位置。"
         approximateLabel="约在此区域"
         loadTimeoutMs={1_000}
         onBoundsChange={vi.fn()}

@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import type { MapBounds } from "../../lib/discovery-query";
 import type { EventPage, EventSummary } from "../../lib/event-contract";
 import { useI18n } from "../I18nProvider";
+import { ChevronIcon, PinIcon } from "../icons";
 import { PreviewModeLink as Link } from "../PreviewModeLink";
 import { usePreviewMode } from "../PreviewModeProvider";
 import { DiscoveryEmpty, DiscoveryError, DiscoveryLoading } from "./DiscoveryState";
@@ -65,7 +66,7 @@ export function EventResults({
 
   const hasItems = page.items.length > 0;
   const selectedEvent = selectedEventId
-    ? page.items.find((event) => event.id === selectedEventId)
+    ? page.items.find((event) => event.id === selectedEventId && event.coordinate !== null)
     : undefined;
   return (
     <>
@@ -96,6 +97,9 @@ export function EventResults({
                 selectedEventId={selectedEventId}
                 mapLabel={t("discover.mapRegion")}
                 loadingLabel={t("discover.mapLoading")}
+                emptyLabel={t("discover.mapEmpty")}
+                zoomInLabel={t("discover.zoomIn")}
+                zoomOutLabel={t("discover.zoomOut")}
                 approximateLabel={t("discover.approximate")}
                 onBoundsChange={onBoundsChange}
                 onFailure={onMapFailure}
@@ -142,10 +146,10 @@ export function MapEventPreview({ event }: { event: EventSummary }) {
     >
       <div>
         <strong>{event.title}</strong>
-        <span>{event.publicArea || t("event.areaTBA")}</span>
+        <span><PinIcon />{event.publicArea || t("event.areaTBA")}</span>
       </div>
       <Link href={`/e/${event.publicSlug}`} prefetch={isReadOnly ? false : undefined}>
-        {t("discover.viewDetails")}
+        <span>{t("discover.viewDetails")}</span><ChevronIcon />
       </Link>
     </section>
   );

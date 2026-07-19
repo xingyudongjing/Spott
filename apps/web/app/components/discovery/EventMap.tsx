@@ -32,6 +32,9 @@ export function EventMap({
   selectedEventId,
   mapLabel,
   loadingLabel,
+  emptyLabel = "No public map locations are available.",
+  zoomInLabel = "Zoom in",
+  zoomOutLabel = "Zoom out",
   approximateLabel,
   loadTimeoutMs = 10_000,
   onBoundsChange,
@@ -44,6 +47,9 @@ export function EventMap({
   selectedEventId?: string | null;
   mapLabel: string;
   loadingLabel: string;
+  emptyLabel: string;
+  zoomInLabel?: string;
+  zoomOutLabel?: string;
   approximateLabel: string;
   loadTimeoutMs?: number;
   onBoundsChange: (bounds: MapBounds) => void;
@@ -54,6 +60,7 @@ export function EventMap({
   const markerElementsRef = useRef(new Map<string, HTMLButtonElement>());
   const selectedEventIdRef = useRef(selectedEventId);
   const [loading, setLoading] = useState(true);
+  const hasMappableEvents = events.some((event) => event.coordinate !== null);
 
   useEffect(() => {
     selectedEventIdRef.current = selectedEventId;
@@ -76,6 +83,7 @@ export function EventMap({
     let map: MapLibreMap | null = null;
     let markers: MapLibreMarker[] = [];
     let resizeObserver: ResizeObserver | null = null;
+    let resizeFrame: number | null = null;
     let moveTimer: ReturnType<typeof setTimeout> | null = null;
     let loadTimer: ReturnType<typeof setTimeout> | null = null;
     let handleMoveEnd: ((event: MapEventType["moveend"] & object) => void) | null = null;
@@ -118,7 +126,17 @@ export function EventMap({
               ? { bounds: discoveredBounds, fitBoundsOptions: { padding: 56, maxZoom: 11 } }
               : { center: first ? [first.longitude, first.latitude] : [138.2529, 36.2048], zoom: first ? 11 : 4 }),
           attributionControl: false,
+          locale: {
+            "Map.Title": mapLabel,
+            "NavigationControl.ZoomIn": zoomInLabel,
+            "NavigationControl.ZoomOut": zoomOutLabel,
+          },
         });
+        map.addControl(new maplibre.NavigationControl({
+          showCompass: false,
+          showZoom: true,
+          visualizePitch: false,
+        }), "top-right");
 
         handleMoveEnd = (event) => {
           if (!map || ignoreProgrammaticMove || !event.originalEvent) return;
@@ -141,7 +159,7 @@ export function EventMap({
 
         map.on("moveend", handleMoveEnd);
         map.on("error", fail);
-        map.once("idle", markReady);
+        void map.once("idle", markReady);
 
         markers = facts.map((fact) => {
           const markerElement = document.createElement("button");
@@ -168,7 +186,13 @@ export function EventMap({
         });
 
         if (typeof ResizeObserver !== "undefined") {
-          resizeObserver = new ResizeObserver(() => map?.resize());
+          resizeObserver = new ResizeObserver(() => {
+            if (resizeFrame !== null) return;
+            resizeFrame = window.requestAnimationFrame(() => {
+              resizeFrame = null;
+              if (!disposed) map?.resize();
+            });
+          });
           resizeObserver.observe(container);
         }
       } catch {
@@ -180,6 +204,7 @@ export function EventMap({
       disposed = true;
       if (loadTimer) clearTimeout(loadTimer);
       if (moveTimer) clearTimeout(moveTimer);
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
       resizeObserver?.disconnect();
       markers.forEach((marker) => marker.remove());
       markers = [];
@@ -189,15 +214,29 @@ export function EventMap({
       map?.remove();
       map = null;
     };
-  }, [approximateLabel, bounds, events, loadTimeoutMs, onBoundsChange, onFailure, onSelect, styleURL]);
+  }, [approximateLabel, bounds, events, loadTimeoutMs, mapLabel, onBoundsChange, onFailure, onSelect, styleURL, zoomInLabel, zoomOutLabel]);
 
   return (
-    <div className={styles.mapShell}>
-      <div ref={containerRef} className={styles.mapCanvas} role="region" aria-label={mapLabel} />
+    <div
+      className={styles.mapShell}
+      data-state={loading ? "loading" : hasMappableEvents ? "ready" : "empty"}
+    >
+      <div ref={containerRef} className={styles.mapCanvas} />
       {loading ? (
         <div className={styles.mapLoading} role="status" aria-live="polite">
           <span className={styles.mapLoadingSpinner} aria-hidden="true" />
           <span>{loadingLabel}</span>
+        </div>
+      ) : null}
+      {!loading && !hasMappableEvents ? (
+        <div className={styles.mapEmpty} role="status" aria-live="polite">
+          <span className={styles.mapEmptyMark} aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 1 1 14 0Z" />
+              <circle cx="12" cy="10" r="2.25" />
+            </svg>
+          </span>
+          <span>{emptyLabel}</span>
         </div>
       ) : null}
     </div>

@@ -21,6 +21,12 @@ describe("responsive discovery safeguards", () => {
     expect(styles).toContain("prefers-reduced-motion: reduce");
     expect(styles).toContain("content-visibility: auto");
     expect(styles).toMatch(/\.mapMarker\s*\{[\s\S]*?width:\s*46px;[\s\S]*?height:\s*46px;/);
+    expect(styles).toMatch(/\.mapMarker\[aria-pressed="true"\]::after\s*\{[\s\S]*?transform:\s*scale\(1\.2\);/);
+    expect(styles).toMatch(/:global\(\.maplibregl-ctrl-group\)[\s\S]*?backdrop-filter:\s*blur\(16px\);/);
+    expect(styles).toMatch(/:global\(\.maplibregl-ctrl-group button\)\s*\{[\s\S]*?width:\s*44px;[\s\S]*?height:\s*44px;/);
+    expect(styles).toMatch(/:global\(\.maplibregl-ctrl-zoom-in\)::after\s*\{[\s\S]*?border-left:\s*2px solid currentColor;/);
+    expect(styles).toMatch(/:global\(\.maplibregl-ctrl-zoom-out\)::before\s*\{[\s\S]*?border-top:\s*2px solid currentColor;/);
+    expect(styles).not.toMatch(/:global\(\.maplibregl-ctrl-zoom-(?:in|out)\)::before\s*\{[\s\S]*?linear-gradient/);
     expect(styles).toMatch(/\.filterDialog::backdrop/);
     expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.regionField\s*\{\s*display:\s*none;/);
     expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.filterRail\s*>\s*label\s*\{\s*display:\s*none;/);
@@ -31,6 +37,7 @@ describe("responsive discovery safeguards", () => {
     expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.eventCard\[data-featured="true"\][\s\S]*?\.coverFrame\s*\{[\s\S]*?aspect-ratio:\s*16\s*\/\s*9;/);
     expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.mapLayout \.eventLink\s*\{\s*grid-template-columns:\s*132px minmax\(0, 1fr\);/);
     expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.mapLayout \.eventFacts span:nth-child\(n\+2\)\s*\{\s*display:\s*inline-flex;/);
+    expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.mapShell\s*\{[\s\S]*?min-height:\s*340px;/);
     expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.capacity\s*\{[\s\S]*?grid-column:\s*1\s*\/\s*-1;/);
     expect(styles).toMatch(/@media \(max-width: 780px\)[\s\S]*?\.capacity strong\s*\{[\s\S]*?white-space:\s*normal;/);
     expect(styles).toMatch(/\.eventLink:focus-visible\s*\{/);

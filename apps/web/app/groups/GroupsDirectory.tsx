@@ -219,6 +219,10 @@ export function GroupsDirectory() {
                     {group.categoryId ? <span>{localizedCategoryName(group.categoryId, t)}</span> : null}
                   </div>
                   <h2 id={`group-card-title-${group.id}`}>{group.name}</h2>
+                  <div className="group-tile-meta">
+                    <span><UsersIcon size={16} /> {t("group.members", { count: group.memberCount })}</span>
+                    <span>{t("group.capacity", { count: group.capacity })}</span>
+                  </div>
                   <span className="sr-only" id={`group-card-context-${group.id}`}>
                     {accessibleGroupContext(group, kind, locale, t)}
                   </span>
@@ -242,10 +246,6 @@ export function GroupsDirectory() {
                       <strong>{group.announcementSummary[0].title}</strong>
                     </div>
                   ) : null}
-                  <div className="group-tile-meta">
-                    <span><UsersIcon size={16} /> {t("group.members", { count: group.memberCount })}</span>
-                    <span>{t("group.capacity", { count: group.capacity })}</span>
-                  </div>
                 </div>
                 <span className="group-tile-arrow" aria-hidden="true"><ArrowIcon /></span>
               </Link>

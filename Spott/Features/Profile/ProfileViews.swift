@@ -875,48 +875,319 @@ private struct TransactionRow: View {
 
 struct NotificationsView: View {
     @Environment(AppModel.self) private var model
-    @State private var items: [NotificationItem] = []
-    @State private var loading = true
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.locale) private var locale
+    @State private var store = NotificationCenterStore()
 
     var body: some View {
-        Group {
-            if loading { ProgressView() }
-            else if items.isEmpty {
-                SpottStateCard(icon: "bell.slash", title: "没有新通知", message: "候补、取消和安全通知会保留在这里。", actionTitle: nil) {}
-                    .padding(SpottMetric.pageInset)
-            } else {
-                List(items) { item in
-                    Button { markRead(item) } label: {
-                        HStack(spacing: 13) {
-                            Image(systemName: notificationIcon(item.type))
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(item.readAt == nil ? SpottColor.twilight : SpottColor.muted)
-                                .frame(width: 38, height: 38)
-                                .background(Color.black.opacity(0.045), in: Circle())
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(notificationTitle(item.type)).font(.subheadline.weight(.semibold))
-                                Text(item.createdAt.formatted(.relative(presentation: .named))).font(.caption).foregroundStyle(SpottColor.muted)
-                            }
-                            Spacer()
-                            if item.readAt == nil { Circle().fill(SpottColor.twilight).frame(width: 7, height: 7) }
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(SpottColor.surface)
-                }
-                .scrollContentBackground(.hidden)
+        VStack(spacing: 0) {
+            if let notice = store.notice {
+                noticeBanner(notice)
             }
+            content
         }
         .background(SpottColor.canvas.ignoresSafeArea())
-        .navigationTitle("通知")
-        .task { items = (try? await model.api.notifications().items) ?? []; loading = false }
+        .navigationTitle(copy.title)
+        .task(id: NotificationCenterTaskID(locale: notificationLocale)) {
+            await load(isRefresh: store.hasRetainedPresentation)
+        }
     }
 
-    private func markRead(_ item: NotificationItem) {
-        Task { try? await model.api.markNotificationRead(item.id); items = (try? await model.api.notifications().items) ?? items }
+    @ViewBuilder
+    private var content: some View {
+        switch store.phase {
+        case .loading:
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityLabel(copy.loading)
+        case .empty:
+            ScrollView {
+                NotificationCenterStateCard(
+                    icon: "bell.slash",
+                    title: copy.emptyTitle,
+                    message: copy.emptyMessage,
+                    actionTitle: nil,
+                    action: nil
+                )
+                .padding(SpottMetric.pageInset)
+            }
+            .refreshable { await load(isRefresh: true) }
+        case .failed:
+            ScrollView {
+                NotificationCenterStateCard(
+                    icon: "wifi.exclamationmark",
+                    title: copy.loadFailureTitle,
+                    message: copy.loadFailureMessage,
+                    actionTitle: copy.retry
+                ) {
+                    Task { await load() }
+                }
+                .padding(SpottMetric.pageInset)
+            }
+            .refreshable { await load() }
+        case .content(let items):
+            List {
+                ForEach(items) { item in
+                    Button {
+                        Task {
+                            await store.select(
+                                item,
+                                navigate: { try await model.openAndWait(url: $0) },
+                                markRead: { try await model.api.markNotificationRead($0) },
+                                onNotice: { notice in
+                                    model.banner = .init(
+                                        title: copy.notice(notice),
+                                        tone: .warning
+                                    )
+                                }
+                            )
+                        }
+                    } label: {
+                        NotificationCenterRow(
+                            item: item,
+                            copy: copy,
+                            dynamicTypeSize: dynamicTypeSize,
+                            locale: locale
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(store.isSelecting(item.id))
+                    .listRowBackground(SpottColor.surface)
+                    .accessibilityHint(
+                        item.destinationURL == nil
+                            ? copy.staysInCenterHint
+                            : copy.opensDestinationHint
+                    )
+                }
+                paginationFooter
+            }
+            .scrollContentBackground(.hidden)
+            .refreshable { await load(isRefresh: true) }
+        }
     }
-    private func notificationIcon(_ type: String) -> String { type.contains("waitlist") ? "hourglass" : type.contains("cancel") ? "calendar.badge.exclamationmark" : type.contains("point") ? "sparkles" : "bell" }
-    private func notificationTitle(_ type: String) -> String { type.contains("cancel") ? "活动已取消" : type.contains("waitlist") ? "候补名额已开放" : type.contains("point") ? "积分有新变化" : "活动有新变化" }
+
+    private var notificationLocale: EventLocale {
+        NotificationCenterLocale.eventLocale(for: locale)
+    }
+
+    private var copy: NotificationCenterCopy {
+        NotificationCenterCopy(locale: locale)
+    }
+
+    private func load(isRefresh: Bool = false) async {
+        await store.load(isRefresh: isRefresh) {
+            try await model.api.notifications(
+                locale: NotificationCenterLocale.eventLocale(for: locale),
+                cursor: $0
+            )
+        }
+    }
+
+    private func loadMore() async {
+        await store.loadNextPage {
+            try await model.api.notifications(
+                locale: NotificationCenterLocale.eventLocale(for: locale),
+                cursor: $0
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var paginationFooter: some View {
+        if store.paginationFailed {
+            VStack(spacing: 8) {
+                Text(copy.paginationFailure)
+                    .font(.footnote)
+                    .foregroundStyle(SpottColor.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button(copy.retry) {
+                    Task {
+                        await store.retryPagination {
+                            try await model.api.notifications(
+                                locale: NotificationCenterLocale.eventLocale(for: locale),
+                                cursor: $0
+                            )
+                        }
+                    }
+                }
+                .frame(minHeight: NotificationCenterLayout.minimumTouchTarget)
+            }
+            .frame(maxWidth: .infinity)
+            .listRowBackground(SpottColor.surface)
+        } else if store.hasMore {
+            ProgressView()
+                .frame(maxWidth: .infinity, minHeight: NotificationCenterLayout.minimumTouchTarget)
+                .listRowBackground(SpottColor.surface)
+                .task(id: store.paginationTaskID) { await loadMore() }
+        }
+    }
+
+    private func noticeBanner(_ notice: NotificationCenterNotice) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            if NotificationCenterLayout.showsLeadingIcon(for: dynamicTypeSize) {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .foregroundStyle(SpottColor.amber)
+                    .accessibilityHidden(true)
+            }
+            Text(copy.notice(notice))
+                .font(.footnote)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button {
+                store.dismissNotice()
+            } label: {
+                Image(systemName: "xmark")
+                    .frame(
+                        minWidth: NotificationCenterLayout.minimumTouchTarget,
+                        minHeight: NotificationCenterLayout.minimumTouchTarget
+                    )
+            }
+            .accessibilityLabel(copy.dismiss)
+        }
+        .padding(.leading, SpottMetric.pageInset)
+        .padding(.trailing, 8)
+        .padding(.vertical, 6)
+        .background(SpottColor.amber.opacity(0.14))
+        .accessibilityElement(children: .contain)
+    }
+}
+
+private struct NotificationCenterStateCard: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let icon: String
+    let title: String
+    let message: String
+    let actionTitle: String?
+    let action: (() -> Void)?
+
+    private var presentation: NotificationCenterStateCardPresentation {
+        NotificationCenterStateCardPresentation(dynamicTypeSize: dynamicTypeSize)
+    }
+
+    var body: some View {
+        VStack(spacing: 15) {
+            if presentation.showsDecorativeIcon {
+                Image(systemName: icon)
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(SpottColor.muted)
+                    .frame(width: 54, height: 54)
+                    .background(SpottColor.ink.opacity(0.045), in: Circle())
+                    .accessibilityHidden(true)
+            }
+            VStack(spacing: 6) {
+                Text(title)
+                    .font(.title3.bold())
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(SpottColor.muted)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let actionTitle, let action {
+                Button(actionTitle, action: action)
+                    .font(.subheadline.weight(.semibold))
+                    .frame(
+                        minWidth: presentation.minimumActionWidth,
+                        minHeight: presentation.minimumActionHeight
+                    )
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 220)
+        .padding(22)
+        .background(
+            SpottColor.surface,
+            in: RoundedRectangle(
+                cornerRadius: SpottMetric.cardRadius,
+                style: .continuous
+            )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: SpottMetric.cardRadius)
+                .stroke(SpottColor.divider)
+        )
+    }
+}
+
+private struct NotificationCenterRow: View {
+    let item: NotificationItem
+    let copy: NotificationCenterCopy
+    let dynamicTypeSize: DynamicTypeSize
+    let locale: Locale
+
+    var body: some View {
+        TimelineView(
+            .periodic(
+                from: .now,
+                by: NotificationCenterLayout.timestampRefreshInterval
+            )
+        ) { context in
+            content(
+                timestampText: NotificationTimestampFormatter.string(
+                    for: item.createdAt,
+                    relativeTo: context.date,
+                    locale: locale
+                )
+            )
+        }
+    }
+
+    private func content(timestampText: String) -> some View {
+        HStack(alignment: .top, spacing: 13) {
+            if NotificationCenterLayout.showsLeadingIcon(for: dynamicTypeSize) {
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(item.readAt == nil ? SpottColor.twilight : SpottColor.muted)
+                    .frame(width: 38, height: 38)
+                    .background(Color.black.opacity(0.045), in: Circle())
+                    .accessibilityHidden(true)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(item.title)
+                    .font(.subheadline.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(item.body)
+                    .font(.subheadline)
+                    .foregroundStyle(SpottColor.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(timestampText)
+                    .font(.caption)
+                    .foregroundStyle(SpottColor.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 4)
+            if item.readAt == nil {
+                Circle()
+                    .fill(SpottColor.twilight)
+                    .frame(width: 7, height: 7)
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(
+            maxWidth: .infinity,
+            minHeight: NotificationCenterLayout.minimumTouchTarget,
+            alignment: .leading
+        )
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            item.accessibilitySummary(timestamp: timestampText, unreadLabel: copy.unread)
+        )
+    }
+
+    private var icon: String {
+        switch item.type {
+        case "waitlist.offered": "hourglass"
+        case "event.cancelled": "calendar.badge.exclamationmark"
+        case "group.announcement": "megaphone"
+        case "group.dissolution_scheduled": "person.3.sequence"
+        default: item.type.contains("point") ? "sparkles" : "bell"
+        }
+    }
 }
 
 struct AchievementsView: View {

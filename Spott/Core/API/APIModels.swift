@@ -1775,9 +1775,14 @@ struct MediaProcessingState: Codable, Sendable {
     let moderationState: String
 }
 
-struct NotificationItem: Codable, Identifiable, Sendable {
+struct NotificationItem: Codable, Identifiable, Sendable, Equatable {
     let id: UUID
     let type: String
+    let locale: EventLocale
+    let templateVersion: Int
+    let title: String
+    let body: String
+    let variables: [String: JSONValue]
     let resourceType: String?
     let resourcePublicId: String?
     let createdAt: Date
@@ -1806,19 +1811,41 @@ struct APIProblem: Codable, Sendable {
 }
 
 enum JSONValue: Codable, Hashable, Sendable {
-    case string(String), number(Double), bool(Bool), object([String: JSONValue]), array([JSONValue]), null
+    case string(String), number(Decimal), bool(Bool), object([String: JSONValue]), array([JSONValue]), null
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() { self = .null }
         else if let value = try? container.decode(Bool.self) { self = .bool(value) }
-        else if let value = try? container.decode(Double.self) { self = .number(value) }
+        else if let value = try? container.decode(Decimal.self) { self = .number(value) }
         else if let value = try? container.decode(String.self) { self = .string(value) }
         else if let value = try? container.decode([String: JSONValue].self) { self = .object(value) }
         else { self = .array(try container.decode([JSONValue].self)) }
     }
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        switch self { case .string(let value): try container.encode(value); case .number(let value): try container.encode(value); case .bool(let value): try container.encode(value); case .object(let value): try container.encode(value); case .array(let value): try container.encode(value); case .null: try container.encodeNil() }
+        switch self {
+        case .string(let value):
+            try container.encode(value)
+        case .number(let value):
+            guard !value.isNaN else {
+                throw EncodingError.invalidValue(
+                    value,
+                    .init(
+                        codingPath: encoder.codingPath,
+                        debugDescription: "JSON numbers must be finite"
+                    )
+                )
+            }
+            try container.encode(value)
+        case .bool(let value):
+            try container.encode(value)
+        case .object(let value):
+            try container.encode(value)
+        case .array(let value):
+            try container.encode(value)
+        case .null:
+            try container.encodeNil()
+        }
     }
 }
 

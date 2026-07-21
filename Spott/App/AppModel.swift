@@ -266,40 +266,55 @@ final class AppModel {
     func open(url: URL) {
         Task { @MainActor in
             do {
-                switch router.route(url: url) {
-                case .opened, .rejected:
-                    return
-                case .requiresResolution(.group(let identifier, let targetTab)):
-                    let group = try await api.group(identifier: identifier)
-                    router.push(.group(group.id), in: targetTab, selectingExplicitTab: true)
-                case .requiresResolution(.share(let code)):
-                    let resolution = try await api.resolveShareLink(code: code)
-                    await openShareResolution(resolution)
-                case .requiresResolution:
-                    return
-                }
+                _ = try await openAndWait(url: url)
             } catch {
                 banner = .init(title: Self.map(error).message, tone: .warning)
             }
         }
     }
 
-    private func openShareResolution(_ resolution: ShareLinkResolution) async {
+    /// Completes any server-backed deep-link resolution before reporting success.
+    @discardableResult
+    func openAndWait(url: URL) async throws -> Bool {
+        try Task.checkCancellation()
+        switch router.route(url: url) {
+        case .opened:
+            return true
+        case .rejected:
+            return false
+        case .requiresResolution(.group(let identifier, let targetTab)):
+            let group = try await api.group(identifier: identifier)
+            try Task.checkCancellation()
+            router.push(.group(group.id), in: targetTab, selectingExplicitTab: true)
+            return true
+        case .requiresResolution(.share(let code)):
+            let resolution = try await api.resolveShareLink(code: code)
+            try Task.checkCancellation()
+            return try await openShareResolution(resolution)
+        case .requiresResolution:
+            return false
+        }
+    }
+
+    private func openShareResolution(_ resolution: ShareLinkResolution) async throws -> Bool {
         switch resolution.resourceType {
         case "event":
-            if let event = try? await api.event(identifier: resolution.resourceId.uuidString.lowercased()) {
-                router.show(event: event, in: .discovery)
-            }
+            let event = try await api.event(identifier: resolution.resourceId.uuidString.lowercased())
+            try Task.checkCancellation()
+            router.show(event: event, in: .discovery)
+            return true
         case "group":
             router.push(.group(resolution.resourceId), in: .groups, selectingExplicitTab: true)
+            return true
         case "profile":
             router.push(
                 .profile(resolution.resourceId.uuidString.lowercased()),
                 in: .profile,
                 selectingExplicitTab: true
             )
+            return true
         default:
-            break
+            return false
         }
     }
 

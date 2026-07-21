@@ -162,13 +162,30 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         try await send(URLRequest(url: environment.baseURL.appending(path: "wallet")))
     }
 
-    func notifications() async throws -> CursorPage<NotificationItem> {
-        try await send(URLRequest(url: environment.baseURL.appending(path: "notifications")))
+    func notifications(
+        locale: EventLocale,
+        cursor: String? = nil,
+        limit: Int = 20
+    ) async throws -> CursorPage<NotificationItem> {
+        var components = URLComponents(
+            url: environment.baseURL.appending(path: "notifications"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "locale", value: locale.rawValue),
+            cursor.map { URLQueryItem(name: "cursor", value: $0) },
+            URLQueryItem(name: "limit", value: String(limit)),
+        ].compactMap { $0 }
+        return try await send(URLRequest(url: components.url!))
     }
 
     func markNotificationRead(_ id: UUID) async throws {
         var request = URLRequest(url: environment.baseURL.appending(path: "notifications/items/\(id.uuidString.lowercased())/read"))
         request.httpMethod = "PUT"
+        request.setValue(
+            id.uuidString.lowercased(),
+            forHTTPHeaderField: "Idempotency-Key"
+        )
         let _: EmptyResponse = try await send(request)
     }
 

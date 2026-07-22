@@ -33,5 +33,5 @@
 
 1. `[x]` 从同一冻结源提交、同一合成 fixture 捕获 Web 发现、活动详情、社群、Host 与 iOS 三语标准字号画面；schema-v2 来源清单绑定 `f587d47e7d71e1c82e764364e135abd39e162215`。
 2. `[x]` 生成 `03-full-page-rhythm-desktop.png` 和 `05-community-1440x900.png`，用真实 Host 捕获更新 `06`，并保留被否决的 `03-community-rejected.png` 作为历史证据。
-3. `[x]` 最终浏览器构建在 1440×900、390×844、320、768、1024、200% 等价重排、减少动态和强制色下通过无溢出、清晰度、键盘菜单和焦点验收；证据见 `.superpowers/sdd/marketing-browser-final-report.md`。
+3. `[x]` 最终浏览器构建在 1440×900、390×844、320、768、1024、200% 等价重排、减少动态和强制色下通过无溢出、清晰度、键盘菜单和焦点验收；证据见 `docs/design/evidence/2026-07-23-marketing-browser/browser-final-report.md`。
 4. `[ ]` 产品所有者查看公开部署预览并明确接受具体候选后，才把相应条目改为 `ACCEPTED`；当前仍没有擅自写入任何接受结论。

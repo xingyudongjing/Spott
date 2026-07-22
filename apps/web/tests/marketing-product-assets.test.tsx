@@ -38,6 +38,17 @@ function ruleBodies(selector: string): readonly string[] {
 }
 
 describe("marketing product evidence", () => {
+  test("keeps the language control intentional instead of ellipsizing its label at 320px", () => {
+    const narrowScreenStyles = marketingStyles.slice(
+      marketingStyles.indexOf("@media (max-width: 374px)"),
+      marketingStyles.indexOf("@media (prefers-reduced-motion: reduce)"),
+    );
+
+    expect(narrowScreenStyles).toMatch(
+      /\.languagePicker summary > span\s*\{[^}]*display:\s*none;/,
+    );
+  });
+
   test.each(["hero", "detail", "community", "host", "cross"] as const)(
     "offers AVIF and WebP sources for every %s product image while keeping PNG fallback",
     (variant) => {

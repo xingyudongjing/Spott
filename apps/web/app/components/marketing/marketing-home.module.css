@@ -1783,9 +1783,7 @@
   }
 
   .languagePicker summary > span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    display: none;
   }
 
   .menuToggle {

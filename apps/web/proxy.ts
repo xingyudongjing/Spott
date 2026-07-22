@@ -30,6 +30,16 @@ function isTrustedIPPreviewRequest(request: NextRequest): boolean {
   return mode === "read-only" || mode === "internal-test";
 }
 
+function persistLocaleCookie(response: NextResponse, request: NextRequest, locale: Locale): void {
+  response.cookies.set("spott_locale", locale, {
+    httpOnly: false,
+    sameSite: "lax",
+    secure: request.nextUrl.protocol === "https:",
+    path: "/",
+    maxAge: 31_536_000,
+  });
+}
+
 export function proxy(request: NextRequest) {
   const canonicalOrigin = configuredCanonicalOrigin(process.env);
   if (!isTrustedIPPreviewRequest(request) && request.nextUrl.origin !== canonicalOrigin) {
@@ -66,6 +76,7 @@ export function proxy(request: NextRequest) {
     ) {
       response.headers.set("X-Robots-Tag", "noindex, nofollow");
     }
+    if (marketingLocale !== null) persistLocaleCookie(response, request, marketingLocale);
     return response;
   }
 
@@ -81,13 +92,7 @@ export function proxy(request: NextRequest) {
   if (request.nextUrl.searchParams.size > 0) {
     response.headers.set("X-Robots-Tag", "noindex, nofollow");
   }
-  response.cookies.set("spott_locale", locale, {
-    httpOnly: false,
-    sameSite: "lax",
-    secure: request.nextUrl.protocol === "https:",
-    path: "/",
-    maxAge: 31_536_000,
-  });
+  persistLocaleCookie(response, request, locale);
   return response;
 }
 

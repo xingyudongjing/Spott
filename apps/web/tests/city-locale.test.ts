@@ -38,6 +38,48 @@ describe("Tokyo locale URLs", () => {
     expect(response.cookies.get("spott_locale")?.value).toBe(locale);
   });
 
+  it.each([
+    ["/", "zh-Hans"],
+    ["/ja", "ja"],
+    ["/en", "en"],
+  ] as const)("persists the %s marketing locale for the Web product journey", (path, locale) => {
+    const response = proxy(new NextRequest(`https://spott.jp${path}`));
+    const cookie = response.headers.get("set-cookie") ?? "";
+
+    expect(response.cookies.get("spott_locale")?.value).toBe(locale);
+    expect(cookie).toContain("Path=/");
+    expect(cookie).toContain("Max-Age=31536000");
+    expect(cookie).toContain("SameSite=lax");
+    expect(cookie).toContain("Secure");
+  });
+
+  it("redirects a noncanonical marketing locale before persisting it", () => {
+    const response = proxy(new NextRequest("https://www.spott.jp/en"));
+
+    expect(response.status).toBe(308);
+    expect(response.headers.get("location")).toBe("https://spott.jp/en");
+    expect(response.cookies.get("spott_locale")).toBeUndefined();
+  });
+
+  it("persists the locale without Secure only on an authenticated HTTP preview request", () => {
+    const previousProfile = process.env.SPOTT_DEPLOYMENT_PROFILE;
+    process.env.SPOTT_DEPLOYMENT_PROFILE = "ip-preview";
+    try {
+      const response = proxy(new NextRequest("http://18.178.203.117/ja", {
+        headers: { "x-spott-preview-mode": "read-only" },
+      }));
+      const cookie = response.headers.get("set-cookie") ?? "";
+
+      expect(response.status).toBe(200);
+      expect(response.cookies.get("spott_locale")?.value).toBe("ja");
+      expect(cookie).toContain("SameSite=lax");
+      expect(cookie).not.toContain("Secure");
+    } finally {
+      if (previousProfile === undefined) delete process.env.SPOTT_DEPLOYMENT_PROFILE;
+      else process.env.SPOTT_DEPLOYMENT_PROFILE = previousProfile;
+    }
+  });
+
   it("redirects www before a locale rewrite or Cookie mutation", () => {
     const response = proxy(new NextRequest("https://www.spott.jp/ja/tokyo?availableOnly=true"));
 

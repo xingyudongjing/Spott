@@ -174,6 +174,8 @@ describe("product website security and navigation contracts", () => {
     const user = userEvent.setup();
     render(<MarketingMenu {...menuProps} />);
 
+    expect(screen.getByLabelText(menuProps.languageLabel))
+      .toHaveAccessibleName(menuProps.languageLabel);
     const openButton = screen.getByRole("button", { name: menuProps.menuOpenLabel });
     await user.click(openButton);
 

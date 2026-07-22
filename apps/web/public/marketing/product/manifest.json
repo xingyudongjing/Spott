@@ -1,0 +1,946 @@
+{
+  "schemaVersion": 2,
+  "source": {
+    "commit": "f587d47e7d71e1c82e764364e135abd39e162215",
+    "treeState": "clean"
+  },
+  "capturePolicy": "real-rendered-product-surfaces-only",
+  "assets": [
+    {
+      "locale": "en",
+      "platform": "ios",
+      "surface": "community-directory",
+      "uiState": "localized-signed-out-directory",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "ios-community-demo-20260722"
+      },
+      "captureCommand": "xcodebuild test -only-testing:SpottUITests/GroupCommunityAccessibilityUITests/testEnglishStandardCommunityUIAndLocalizedDemoFixture",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "standard",
+      "file": "ios-community-en-light.png",
+      "capturedAt": "2026-07-22T14:49:14.943Z",
+      "viewport": {
+        "width": 1206,
+        "height": 2622
+      },
+      "formats": {
+        "png": {
+          "bytes": 1709442,
+          "sha256": "52adb29084947fdfca8c8bb7a2e6639362af6df0549866f3310d984c0e88a01b"
+        },
+        "webp": {
+          "bytes": 97154,
+          "sha256": "ce0d320861e266424e345733c53ea24dc4509b626e998b1ebc730d6bc4a4c74c"
+        },
+        "avif": {
+          "bytes": 83639,
+          "sha256": "4c14ab42508b5011363ca106f68fd7ff07c5ecf04e10e2ee89f06bf875176f82"
+        }
+      }
+    },
+    {
+      "locale": "ja",
+      "platform": "ios",
+      "surface": "community-directory",
+      "uiState": "localized-signed-out-directory-accessibility-xxxl",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "ios-community-demo-20260722"
+      },
+      "captureCommand": "xcodebuild test -only-testing:SpottUITests/GroupCommunityAccessibilityUITests/testJapaneseMaximumAccessibilityCommunityUIAndLocalizedDemoFixture",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "accessibility-xxxl",
+      "file": "ios-community-ja-ax5.png",
+      "capturedAt": "2026-07-22T14:52:34.012Z",
+      "viewport": {
+        "width": 1206,
+        "height": 2622
+      },
+      "formats": {
+        "png": {
+          "bytes": 930166,
+          "sha256": "227a3ea29237d7d8cc454fe766f7017e38722d0c5ad4d34cfd9f43f5aeb241be"
+        },
+        "webp": {
+          "bytes": 64382,
+          "sha256": "3abb0d078efa8578f9dfdcd4526de0564e648913fafb681998aa4a2bff0dddec"
+        },
+        "avif": {
+          "bytes": 57011,
+          "sha256": "1cad882437ce27277abe2a9f8986aeb7e0fa916bb967fbcb33b64e55be7cda2f"
+        }
+      }
+    },
+    {
+      "locale": "ja",
+      "platform": "ios",
+      "surface": "community-directory",
+      "uiState": "localized-signed-out-directory",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "ios-community-demo-20260722"
+      },
+      "captureCommand": "xcrun simctl ui booted appearance dark && xcodebuild test -only-testing:SpottUITests/GroupCommunityAccessibilityUITests/testJapaneseStandardCommunityUIAndLocalizedDemoFixture",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "dark",
+      "textScale": "standard",
+      "file": "ios-community-ja-dark.png",
+      "capturedAt": "2026-07-22T14:54:10.344Z",
+      "viewport": {
+        "width": 1206,
+        "height": 2622
+      },
+      "formats": {
+        "png": {
+          "bytes": 1215408,
+          "sha256": "0dd01cb20a40e75abd0d428a64cb6d027e52e7f210617a1a5b93cec756842dfc"
+        },
+        "webp": {
+          "bytes": 89616,
+          "sha256": "acde285c654196db585bfaba50b58b700c8d301233f1ab4b6ecdd50cc8fa903a"
+        },
+        "avif": {
+          "bytes": 78443,
+          "sha256": "6311651273d9f5de9e33f43c0db8724b8044222d119ca9466f64aadb4e9529a4"
+        }
+      }
+    },
+    {
+      "locale": "ja",
+      "platform": "ios",
+      "surface": "community-directory",
+      "uiState": "localized-signed-out-directory",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "ios-community-demo-20260722"
+      },
+      "captureCommand": "xcodebuild test -only-testing:SpottUITests/GroupCommunityAccessibilityUITests/testJapaneseStandardCommunityUIAndLocalizedDemoFixture",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "standard",
+      "file": "ios-community-ja-light.png",
+      "capturedAt": "2026-07-22T14:49:14.935Z",
+      "viewport": {
+        "width": 1206,
+        "height": 2622
+      },
+      "formats": {
+        "png": {
+          "bytes": 1730041,
+          "sha256": "ab06ece22a1644d56cfed8368c82736386c6f59861b4b137064b5232b012ce01"
+        },
+        "webp": {
+          "bytes": 91294,
+          "sha256": "8c4d02af26f738ca9ee021ee757b9d165b977a8f730ef95b5cbbac8869e66094"
+        },
+        "avif": {
+          "bytes": 78309,
+          "sha256": "e6189520b7311496f405f964dd4ac4284664294031628f4337e9ab65b0443fb0"
+        }
+      }
+    },
+    {
+      "locale": "zh-Hans",
+      "platform": "ios",
+      "surface": "community-directory",
+      "uiState": "localized-signed-out-directory",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "ios-community-demo-20260722"
+      },
+      "captureCommand": "xcodebuild test -only-testing:SpottUITests/GroupCommunityAccessibilityUITests/testChineseStandardCommunityUIAndLocalizedDemoFixture",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "standard",
+      "file": "ios-community-zh-Hans-light.png",
+      "capturedAt": "2026-07-22T14:49:14.921Z",
+      "viewport": {
+        "width": 1206,
+        "height": 2622
+      },
+      "formats": {
+        "png": {
+          "bytes": 1744747,
+          "sha256": "9be39bffcb0c88486052c9ae9acebac48089aa61a991da294fa6404d7b76044d"
+        },
+        "webp": {
+          "bytes": 92430,
+          "sha256": "9c672619ab6bc7ac0c2397504fc41a38330e319b63dfaa22f766257e8beef82b"
+        },
+        "avif": {
+          "bytes": 78050,
+          "sha256": "0fc0c05c97e80e80b6699ae66c5e4d16e6d1094e69323ec6c526037e3b8cece3"
+        }
+      }
+    },
+    {
+      "locale": "en",
+      "platform": "web",
+      "surface": "event-discovery",
+      "uiState": "localized-upcoming-event-results",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-discovery-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-discover-en-desktop.png",
+      "capturedAt": "2026-07-22T14:36:19.846Z",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "formats": {
+        "png": {
+          "bytes": 237839,
+          "sha256": "78ae475ab69b74a73883df33e0674fd5df50be9cbeeb6887727e41b6979d3830"
+        },
+        "webp": {
+          "bytes": 51136,
+          "sha256": "5694443f470a7e833f8b5136493068a428aa9a152fa26db310b2cf3adcd77b0b"
+        },
+        "avif": {
+          "bytes": 44370,
+          "sha256": "bee4b168b733493c9bee0ab7d396766bf0b27dde630c89277522de7412309dab"
+        }
+      }
+    },
+    {
+      "locale": "en",
+      "platform": "web",
+      "surface": "event-discovery",
+      "uiState": "localized-upcoming-event-results",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-discovery-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-discover-en-mobile.png",
+      "capturedAt": "2026-07-22T14:36:21.888Z",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "formats": {
+        "png": {
+          "bytes": 108698,
+          "sha256": "ab8be36a852f0ce3d0e0068089d494e8ff18bc3ec0a92e1fe175f7786063016a"
+        },
+        "webp": {
+          "bytes": 28906,
+          "sha256": "4234b8e7d160930b6527106890a217275549eb896b8872fc1aed1e8259256f09"
+        },
+        "avif": {
+          "bytes": 23888,
+          "sha256": "6d5154e104420f981a3da5670b2776f4c300df8e63316877a8b9d0c9fb9f7958"
+        }
+      }
+    },
+    {
+      "locale": "ja",
+      "platform": "web",
+      "surface": "event-discovery",
+      "uiState": "localized-upcoming-event-results",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-discovery-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-discover-ja-desktop.png",
+      "capturedAt": "2026-07-22T14:36:15.299Z",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "formats": {
+        "png": {
+          "bytes": 254093,
+          "sha256": "9e68e68732810b716fedc2ceabbf6d0f9137f82775bd68e01b468270d49a584a"
+        },
+        "webp": {
+          "bytes": 49530,
+          "sha256": "679eea6b1f7654991534ecc08b5ad855f2382666637ddd05a16767865d4fb582"
+        },
+        "avif": {
+          "bytes": 44974,
+          "sha256": "7bdd41ddc3c1e8f12d71d63cf805833f70587707c91e05c7ae3dd94206135583"
+        }
+      }
+    },
+    {
+      "locale": "ja",
+      "platform": "web",
+      "surface": "event-discovery",
+      "uiState": "localized-upcoming-event-results",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-discovery-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-discover-ja-mobile.png",
+      "capturedAt": "2026-07-22T14:36:17.612Z",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "formats": {
+        "png": {
+          "bytes": 114168,
+          "sha256": "f062035bc3de6fb6b4569c89d5144712e97c95caf4d94de74ba7853cfc8e067b"
+        },
+        "webp": {
+          "bytes": 26892,
+          "sha256": "74a8e8542a2203a9926fd2f49f3a0903a4e1dafe7264905282eb2f1537447cf5"
+        },
+        "avif": {
+          "bytes": 22966,
+          "sha256": "029eb083760ca8d0e630a91f00b4de51c36a72d3c6d35498ebeafe441139c6b0"
+        }
+      }
+    },
+    {
+      "locale": "zh-Hans",
+      "platform": "web",
+      "surface": "event-discovery",
+      "uiState": "localized-upcoming-event-results",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-discovery-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-discover-zh-Hans-desktop.png",
+      "capturedAt": "2026-07-22T14:36:09.777Z",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "formats": {
+        "png": {
+          "bytes": 242532,
+          "sha256": "4dea82541655a936657f4beeb002d8c72f323ea0ef1765844c173ac883e1fbaa"
+        },
+        "webp": {
+          "bytes": 46224,
+          "sha256": "4bf0ab630d2a8e9d3890e205fed822f8e348d1a0be1e9f2f4213f18853ed375b"
+        },
+        "avif": {
+          "bytes": 41359,
+          "sha256": "34088719350f4b766a86b2948ea5e1f3a94990ee43815f773fdd572816d8ee42"
+        }
+      }
+    },
+    {
+      "locale": "zh-Hans",
+      "platform": "web",
+      "surface": "event-discovery",
+      "uiState": "localized-upcoming-event-results",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-discovery-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-discover-zh-Hans-mobile.png",
+      "capturedAt": "2026-07-22T14:36:12.042Z",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "formats": {
+        "png": {
+          "bytes": 106953,
+          "sha256": "14883a2bd7f71e01f444cddb5dc9a24560519589893a7a45db9e9e913330756c"
+        },
+        "webp": {
+          "bytes": 24730,
+          "sha256": "9cfc18e10569811fd81f9089a6981002a506d978c665577541f679c04a4b16df"
+        },
+        "avif": {
+          "bytes": 20855,
+          "sha256": "4713cd484246547f846c88eef699019b58f8e5e5ff5c27a7ebdf3d07c6c39e5c"
+        }
+      }
+    },
+    {
+      "locale": "en",
+      "platform": "web",
+      "surface": "public-event-detail",
+      "uiState": "localized-published-event",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-event-detail-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-event-detail-en-desktop.png",
+      "capturedAt": "2026-07-22T14:36:35.895Z",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "formats": {
+        "png": {
+          "bytes": 441033,
+          "sha256": "cbb410eae409b7c613a21ccfa39309326f099531b0e9320170be67dcac269bb8"
+        },
+        "webp": {
+          "bytes": 45486,
+          "sha256": "5e87aaadbbacd85ccc289d9a13523de1aa4e6bac5c62a908b9ca1973744bb00c"
+        },
+        "avif": {
+          "bytes": 38546,
+          "sha256": "c1c58ef11e57a74f31259bc8eee02a1a6365eb859d2bd62ca5897db201deaee3"
+        }
+      }
+    },
+    {
+      "locale": "en",
+      "platform": "web",
+      "surface": "public-event-detail",
+      "uiState": "localized-published-event",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-event-detail-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-event-detail-en-mobile.png",
+      "capturedAt": "2026-07-22T14:36:38.874Z",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "formats": {
+        "png": {
+          "bytes": 165459,
+          "sha256": "cbc022007a80a52ebdb5320f9a61b5cfd1238e78aa486420bf169087c0ee3b46"
+        },
+        "webp": {
+          "bytes": 23948,
+          "sha256": "dba05b5ca46750c2f1b141cf6be8b52495630febe76ba9e9da795ba92b4118e4"
+        },
+        "avif": {
+          "bytes": 20016,
+          "sha256": "51ecdebd5cc26d8d87206e72ea34a1da28a073e8b671ed2108af9033eac3c0e5"
+        }
+      }
+    },
+    {
+      "locale": "ja",
+      "platform": "web",
+      "surface": "public-event-detail",
+      "uiState": "localized-published-event",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-event-detail-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-event-detail-ja-desktop.png",
+      "capturedAt": "2026-07-22T14:36:29.786Z",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "formats": {
+        "png": {
+          "bytes": 446807,
+          "sha256": "ac17ef49d3eeab9e50a9cd9ac501fcb717f73299669b217ca1932883fba02ecc"
+        },
+        "webp": {
+          "bytes": 44726,
+          "sha256": "0fd06c392f8875215d1d211b7c3f3a2f3cb54dd86e4f86635a7b78f0db904fcc"
+        },
+        "avif": {
+          "bytes": 39922,
+          "sha256": "22dc02b163cb6d85a58661306637d3370113938b342bd3ebf03654aaf52fb818"
+        }
+      }
+    },
+    {
+      "locale": "ja",
+      "platform": "web",
+      "surface": "public-event-detail",
+      "uiState": "localized-published-event",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-event-detail-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-event-detail-ja-mobile.png",
+      "capturedAt": "2026-07-22T14:36:32.018Z",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "formats": {
+        "png": {
+          "bytes": 157425,
+          "sha256": "f8df9db69094deeb4c1377942278b9945517c599cc9912ff22e8440f1597e2fd"
+        },
+        "webp": {
+          "bytes": 22514,
+          "sha256": "5663dd066c87d6099b966de24226aaef08ae87a9673d3246f1bcecd37b917234"
+        },
+        "avif": {
+          "bytes": 19233,
+          "sha256": "36b9c6940a2ffb05f20fa37db0d6d43a532f1bf65f4098b4640d0a697d4155ba"
+        }
+      }
+    },
+    {
+      "locale": "zh-Hans",
+      "platform": "web",
+      "surface": "public-event-detail",
+      "uiState": "localized-published-event",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-event-detail-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-event-detail-zh-Hans-desktop.png",
+      "capturedAt": "2026-07-22T14:36:24.176Z",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "formats": {
+        "png": {
+          "bytes": 432605,
+          "sha256": "fb30b020d48ed3d318ac06005edec8ba8e670cad0684250568b4d60a96c848e7"
+        },
+        "webp": {
+          "bytes": 41850,
+          "sha256": "7ac52910c07f81de5a32d02f1bc727923db1e7fe66ab43a702eae3eae3e1af1c"
+        },
+        "avif": {
+          "bytes": 36255,
+          "sha256": "a258c86e56159f5645dfb204f7c57bb16ae36d26ee5c5f057d5484deeea95cc3"
+        }
+      }
+    },
+    {
+      "locale": "zh-Hans",
+      "platform": "web",
+      "surface": "public-event-detail",
+      "uiState": "localized-published-event",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-event-detail-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-event-detail-zh-Hans-mobile.png",
+      "capturedAt": "2026-07-22T14:36:27.386Z",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "formats": {
+        "png": {
+          "bytes": 153019,
+          "sha256": "b54d61230a18fa0b5ea66e43d01653e040bf4687413c3a188fdd6a2dc19eae4d"
+        },
+        "webp": {
+          "bytes": 22832,
+          "sha256": "2f8e840c7a662d7b337559b2e7b9162b2ea4782567a2d453118ef68b0f6db962"
+        },
+        "avif": {
+          "bytes": 19423,
+          "sha256": "0e7a48aad916e2d5171767c2e3ef80dc9a3a163eea6c62d7e74fd6afb3283d19"
+        }
+      }
+    },
+    {
+      "locale": "en",
+      "platform": "web",
+      "surface": "public-community-directory",
+      "uiState": "localized-community-results",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-groups-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-groups-en-desktop.png",
+      "capturedAt": "2026-07-22T14:36:52.470Z",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "formats": {
+        "png": {
+          "bytes": 355049,
+          "sha256": "378596f5fd6af165ddaffbd6a3e66e2d4607812c69daf3eb7ccfdb8600808ccb"
+        },
+        "webp": {
+          "bytes": 51692,
+          "sha256": "b07d28a0c648f19d3058d88577d5e6258f9718a64ca68c032aac6f5e82749ed1"
+        },
+        "avif": {
+          "bytes": 43799,
+          "sha256": "bac8c2b0bfcb84aaca8b91ed56be30b66056846c8966d41864cca06b45da3d15"
+        }
+      }
+    },
+    {
+      "locale": "en",
+      "platform": "web",
+      "surface": "public-community-directory",
+      "uiState": "localized-community-results",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-groups-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-groups-en-mobile.png",
+      "capturedAt": "2026-07-22T14:36:55.132Z",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "formats": {
+        "png": {
+          "bytes": 145528,
+          "sha256": "9e7b8e9a1cac83edac177922f401f4f40f567b8e1445d7d08e767f2f70aa7b32"
+        },
+        "webp": {
+          "bytes": 30218,
+          "sha256": "5da4a1179d2d06a1d5826fe785f3aee88474cd71cc7d82a68e6daafb63f8a8bd"
+        },
+        "avif": {
+          "bytes": 25877,
+          "sha256": "a9b3d7d6bed26303f8c8d9dbafaba402a47b1354d81224f763b31f87aef0daf7"
+        }
+      }
+    },
+    {
+      "locale": "ja",
+      "platform": "web",
+      "surface": "public-community-directory",
+      "uiState": "localized-community-results",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-groups-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-groups-ja-desktop.png",
+      "capturedAt": "2026-07-22T14:36:47.874Z",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "formats": {
+        "png": {
+          "bytes": 392979,
+          "sha256": "aa4f6c23b9df306e714df2ee290c3d96ad8043af274d70d654bba4926314c784"
+        },
+        "webp": {
+          "bytes": 56344,
+          "sha256": "9f6eb539560c22b5a657b568eff32d8da9c1254d6a5220ca9908989b790fc204"
+        },
+        "avif": {
+          "bytes": 49841,
+          "sha256": "7b62b826964156b46f12c6f4b1562895656d21202e2246ae524f6ee3640e5017"
+        }
+      }
+    },
+    {
+      "locale": "ja",
+      "platform": "web",
+      "surface": "public-community-directory",
+      "uiState": "localized-community-results",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-groups-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-groups-ja-mobile.png",
+      "capturedAt": "2026-07-22T14:36:50.027Z",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "formats": {
+        "png": {
+          "bytes": 157033,
+          "sha256": "082b2f78d4d28ec8640d2725540f06255c75ca44a3ed25cb90635929aa69affc"
+        },
+        "webp": {
+          "bytes": 28850,
+          "sha256": "d4100348bdff63de49af2fa7a6778c79404b771d7d4e17995dbc8d139bd67dbc"
+        },
+        "avif": {
+          "bytes": 26204,
+          "sha256": "1c0c8dcf956febdc4d874795b876009931f6cfbfac3ebc43b3ac25e6f2ad227a"
+        }
+      }
+    },
+    {
+      "locale": "zh-Hans",
+      "platform": "web",
+      "surface": "public-community-directory",
+      "uiState": "localized-community-results",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-groups-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-groups-zh-Hans-desktop.png",
+      "capturedAt": "2026-07-22T14:36:42.374Z",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "formats": {
+        "png": {
+          "bytes": 367391,
+          "sha256": "78df8a87f531c129e695055bee3195143050301b071b516a346b5295af4c480f"
+        },
+        "webp": {
+          "bytes": 47174,
+          "sha256": "cc7bafd5cde656cca1e84ed3db5880f9a4344ae59e15be7d1e68ddd28336543d"
+        },
+        "avif": {
+          "bytes": 40544,
+          "sha256": "f963b3d07b8defbc79f267b3df22aa74fd22ea8014659da4d31804f3ee2eb2ac"
+        }
+      }
+    },
+    {
+      "locale": "zh-Hans",
+      "platform": "web",
+      "surface": "public-community-directory",
+      "uiState": "localized-community-results",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-groups-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-marketing-products.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-groups-zh-Hans-mobile.png",
+      "capturedAt": "2026-07-22T14:36:45.437Z",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "formats": {
+        "png": {
+          "bytes": 142628,
+          "sha256": "64a67fe92ceaaa359e8aa8d708eadcc024b97d8ca1cf5c4bfc7e1045707421be"
+        },
+        "webp": {
+          "bytes": 27538,
+          "sha256": "0ca1470753ac64e051ac94a1c6fa2dcf16f968e7b46c5eda5eba4882dfe419c7"
+        },
+        "avif": {
+          "bytes": 24251,
+          "sha256": "1efb6dd24dc2cc0374bae08bf2589b4d501f1c131ced42f8367783a78860e4e5"
+        }
+      }
+    },
+    {
+      "locale": "en",
+      "platform": "web",
+      "surface": "host-event-studio",
+      "uiState": "localized-published-and-draft-events",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-host-studio-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-host-studio.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-host-en-desktop.png",
+      "capturedAt": "2026-07-22T13:52:11.504Z",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "formats": {
+        "png": {
+          "bytes": 81732,
+          "sha256": "309a5a986ab7dd9795d7e1ed4b63a929d059d1193b51f53998828e4ab8fea684"
+        },
+        "webp": {
+          "bytes": 31548,
+          "sha256": "80774e2c57b27e68f93281530b44db5f1a6c2d7a841d126463781de32f235025"
+        },
+        "avif": {
+          "bytes": 27018,
+          "sha256": "3c9981e1922a77da9657eefc78b81c27cb323464ef8fa0c9d269950edfb5deef"
+        }
+      }
+    },
+    {
+      "locale": "ja",
+      "platform": "web",
+      "surface": "host-event-studio",
+      "uiState": "localized-published-and-draft-events",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-host-studio-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-host-studio.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-host-ja-desktop.png",
+      "capturedAt": "2026-07-22T13:52:09.131Z",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "formats": {
+        "png": {
+          "bytes": 86416,
+          "sha256": "4e49b17bf2e408c6529e6d9d8e9a37149b81c1891578d6e9f0efef95671a092b"
+        },
+        "webp": {
+          "bytes": 28878,
+          "sha256": "7a46949c7012b5896408479e6fe3886b0a688f15fe073660a855cfdefc3043f0"
+        },
+        "avif": {
+          "bytes": 26184,
+          "sha256": "33b4843dbe2ddebfa83c28f60a03f2ac56bf20b24f420f257b28b553d3589f0f"
+        }
+      }
+    },
+    {
+      "locale": "zh-Hans",
+      "platform": "web",
+      "surface": "host-event-studio",
+      "uiState": "localized-published-and-draft-events",
+      "fixture": {
+        "kind": "original-synthetic",
+        "id": "marketing-host-studio-20260722"
+      },
+      "captureCommand": "node apps/web/scripts/capture-host-studio.mjs",
+      "crop": "none",
+      "redaction": "not-required-synthetic-data",
+      "rights": "spott-original-product-evidence",
+      "appearance": "light",
+      "textScale": "browser-default-100-percent",
+      "file": "web-host-zh-Hans-desktop.png",
+      "capturedAt": "2026-07-22T13:52:07.488Z",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "formats": {
+        "png": {
+          "bytes": 82028,
+          "sha256": "9c9edc296c3318dd23248f9d4531f00da8327128bce98803da0a46e8d817352a"
+        },
+        "webp": {
+          "bytes": 28184,
+          "sha256": "6ec235e3fc57a85f525506ee932545fb3b358827209595eaae0abb9a745b4095"
+        },
+        "avif": {
+          "bytes": 25677,
+          "sha256": "bd9e80a92237fed125655a207a6c53bc6bbe8eab9115c8b1261108c08356a639"
+        }
+      }
+    }
+  ]
+}

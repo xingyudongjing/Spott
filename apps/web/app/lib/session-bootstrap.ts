@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
-import { parseDeviceBindingEnvelope, parseRefreshEnvelope } from './session-cookie-codec';
+import {
+  parseDeviceBindingEnvelope,
+  parseRefreshEnvelope,
+  terminalSessionCookieClears,
+} from './session-cookie-codec';
 import { parseSessionCookieHeader } from './session-cookie-header';
 import { parseSessionServerConfig, type SessionServerConfig } from './session-server-config';
 import { createWebBFFAuthorityHeaders } from './web-bff-authority';
@@ -22,9 +26,14 @@ const upstreamAuthSessionSchema = z
       .strict(),
   })
   .strict();
+const upstreamProblemSchema = z.object({
+  error: z.object({ code: z.string().min(1).max(128) }).passthrough(),
+}).strict();
 
 const bootstrapPath = '/v1/auth/bootstrap';
 const maximumUpstreamResponseLength = 65_536;
+const maximumUpstreamProblemLength = 1_024;
+const problemContentTypePattern = /^application\/problem\+json(?:\s*;\s*charset=utf-8)?$/iu;
 
 export interface SessionBootstrapDependencies {
   readonly loadConfig: () => SessionServerConfig;
@@ -38,17 +47,83 @@ const responseHeaders = {
   Pragma: 'no-cache',
   Vary: 'Cookie',
 } as const;
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return Response.json(body, { status, headers: responseHeaders });
+function jsonResponse(body: unknown, status = 200, cookies: readonly string[] = []): Response {
+  const headers = new Headers(responseHeaders);
+  for (const cookie of cookies) headers.append('Set-Cookie', cookie);
+  return Response.json(body, { status, headers });
 }
 
 function reauthenticationRequired(): Response {
-  return jsonResponse({ error: { code: 'SESSION_REAUTH_REQUIRED', retryable: false } }, 401);
+  return jsonResponse(
+    { error: { code: 'SESSION_REAUTH_REQUIRED', retryable: false } },
+    401,
+    terminalSessionCookieClears(),
+  );
 }
 
 function bootstrapUnavailable(): Response {
   return jsonResponse({ error: { code: 'SESSION_BOOTSTRAP_UNAVAILABLE', retryable: true } }, 503);
+}
+
+async function readBoundedUTF8(
+  body: ReadableStream<Uint8Array> | null,
+  contentLengthHeader: string | null,
+  maximumLength: number,
+): Promise<string | null> {
+  let declaredLength: number | null = null;
+  if (contentLengthHeader !== null) {
+    if (!/^(0|[1-9][0-9]*)$/u.test(contentLengthHeader)) return null;
+    declaredLength = Number(contentLengthHeader);
+    if (!Number.isSafeInteger(declaredLength) || declaredLength > maximumLength) return null;
+  }
+  if (body === null) return null;
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      length += next.value.byteLength;
+      if (length > maximumLength) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(next.value);
+    }
+  } catch {
+    return null;
+  }
+  if (length === 0 || (declaredLength !== null && declaredLength !== length)) return null;
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+async function tokenExpiredProblem(upstream: Response): Promise<boolean> {
+  if (upstream.status !== 401) return false;
+  const contentType = upstream.headers.get('content-type');
+  if (contentType === null || !problemContentTypePattern.test(contentType)) return false;
+  const text = await readBoundedUTF8(
+    upstream.body,
+    upstream.headers.get('content-length'),
+    maximumUpstreamProblemLength,
+  );
+  if (text === null) return false;
+  try {
+    const parsed = upstreamProblemSchema.safeParse(JSON.parse(text) as unknown);
+    return parsed.success && parsed.data.error.code === 'TOKEN_EXPIRED';
+  } catch {
+    return false;
+  }
 }
 
 export async function handleSessionBootstrap(
@@ -139,9 +214,7 @@ export async function handleSessionBootstrap(
     return bootstrapUnavailable();
   }
 
-  if (upstream.status === 400 || upstream.status === 401 || upstream.status === 403) {
-    return reauthenticationRequired();
-  }
+  if (await tokenExpiredProblem(upstream)) return reauthenticationRequired();
   if (upstream.status !== 200 && upstream.status !== 201) return bootstrapUnavailable();
   const contentType = upstream.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
   if (contentType !== 'application/json') return bootstrapUnavailable();

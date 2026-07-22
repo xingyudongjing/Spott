@@ -112,16 +112,21 @@ final class GroupCommunityPresentationTests: XCTestCase {
     }
 
     func testAccessibilityCardPolicyAvoidsFixedTextCoverAndStacksMetadata() {
-        XCTAssertEqual(GroupCommunityLayout.cardCoverMinimumHeight(for: .large), 132)
-        XCTAssertEqual(GroupCommunityLayout.cardCoverMinimumHeight(for: .accessibility5), 96)
+        XCTAssertEqual(GroupCommunityLayout.cardCoverMinimumHeight(for: .large), 156)
+        XCTAssertEqual(GroupCommunityLayout.cardCoverMinimumHeight(for: .accessibility5), 112)
         XCTAssertFalse(GroupCommunityLayout.usesVerticalCardMetadata(for: .large))
         XCTAssertTrue(GroupCommunityLayout.usesVerticalCardMetadata(for: .accessibility5))
         XCTAssertFalse(GroupCommunityLayout.usesVerticalCardTags(for: .large))
         XCTAssertTrue(GroupCommunityLayout.usesVerticalCardTags(for: .accessibility5))
     }
 
-    func testTouchTargetsKeepAStableMarginAboveTheMinimum() {
-        XCTAssertGreaterThan(GroupCommunityLayout.minimumTouchTarget, 44)
+    func testLargestNonAccessibilityTextSizesStackDenseCardContent() {
+        XCTAssertTrue(GroupCommunityLayout.usesVerticalCardMetadata(for: .xxxLarge))
+        XCTAssertTrue(GroupCommunityLayout.usesVerticalCardTags(for: .xxxLarge))
+    }
+
+    func testCommunityControlsUseComfortableFortyEightPointTargets() {
+        XCTAssertEqual(GroupCommunityLayout.minimumTouchTarget, 48)
     }
 
     func testLiquidGlassIsReservedForFloatingInteractiveChrome() {
@@ -129,6 +134,131 @@ final class GroupCommunityPresentationTests: XCTestCase {
         XCTAssertTrue(GroupCommunitySurfacePolicy.usesLiquidGlass(for: .interactiveControl))
         XCTAssertFalse(GroupCommunitySurfacePolicy.usesLiquidGlass(for: .navigationCard))
     }
+
+    func testCommunityControlsUseOpaqueFallbackForDisplayAccommodations() {
+        XCTAssertEqual(
+            GroupCommunityControlSurfacePolicy.style(
+                reduceTransparency: false,
+                increasedContrast: false
+            ),
+            .glass
+        )
+        XCTAssertEqual(
+            GroupCommunityControlSurfacePolicy.style(
+                reduceTransparency: true,
+                increasedContrast: false
+            ),
+            .opaque
+        )
+        XCTAssertEqual(
+            GroupCommunityControlSurfacePolicy.style(
+                reduceTransparency: false,
+                increasedContrast: true
+            ),
+            .opaque
+        )
+        XCTAssertEqual(
+            GroupCommunityControlSurfacePolicy.style(
+                reduceTransparency: true,
+                increasedContrast: true
+            ),
+            .opaque
+        )
+    }
+
+    func testDisplayAccommodationFixtureArgumentsResolveThroughProductionSettings() {
+        XCTAssertEqual(
+            GroupCommunityDisplayAccommodations(
+                systemReduceTransparency: false,
+                systemIncreasedContrast: false,
+                launchArguments: []
+            ),
+            GroupCommunityDisplayAccommodations(
+                reduceTransparency: false,
+                increasedContrast: false
+            )
+        )
+        XCTAssertEqual(
+            GroupCommunityDisplayAccommodations(
+                systemReduceTransparency: false,
+                systemIncreasedContrast: false,
+                launchArguments: ["-spott-ui-test-community-reduce-transparency"]
+            ),
+            GroupCommunityDisplayAccommodations(
+                reduceTransparency: true,
+                increasedContrast: false
+            )
+        )
+        XCTAssertEqual(
+            GroupCommunityDisplayAccommodations(
+                systemReduceTransparency: false,
+                systemIncreasedContrast: false,
+                launchArguments: ["-spott-ui-test-community-increase-contrast"]
+            ),
+            GroupCommunityDisplayAccommodations(
+                reduceTransparency: false,
+                increasedContrast: true
+            )
+        )
+    }
+
+    func testSelectedScopeAndTagPalettesMeetAAInDarkModeAndIncreaseContrastVisibly() throws {
+        let standardScope = GroupCommunityControlPalette.scope(
+            isSelected: true,
+            increasedContrast: false
+        )
+        let increasedScope = GroupCommunityControlPalette.scope(
+            isSelected: true,
+            increasedContrast: true
+        )
+        let standardTag = GroupCommunityControlPalette.tag(increasedContrast: false)
+        let increasedTag = GroupCommunityControlPalette.tag(increasedContrast: true)
+
+        for (name, pair) in [
+            ("standard selected scope", standardScope),
+            ("increased-contrast selected scope", increasedScope),
+            ("standard tag", standardTag),
+            ("increased-contrast tag", increasedTag),
+        ] {
+            XCTAssertGreaterThanOrEqual(
+                try contrastRatio(
+                    foreground: pair.foreground,
+                    background: pair.background,
+                    interfaceStyle: .dark
+                ),
+                4.5,
+                "\(name) must meet WCAG AA for normal text."
+            )
+        }
+
+        XCTAssertNotEqual(
+            try rgba(increasedScope.background, interfaceStyle: .dark),
+            try rgba(standardScope.background, interfaceStyle: .dark),
+            "Increase Contrast must materially change the selected scope fill."
+        )
+        XCTAssertNotEqual(
+            try rgba(increasedTag.background, interfaceStyle: .dark),
+            try rgba(standardTag.background, interfaceStyle: .dark),
+            "Increase Contrast must materially change tag fills."
+        )
+    }
+
+#if DEBUG
+    func testLocalizedFixtureIsExplicitlyDemoOwnedAndDoesNotClaimProductionUGCTranslation() {
+        XCTAssertEqual(GroupCommunityUITestFixture.contentOwnership, .localizedDebugDemo)
+        XCTAssertFalse(GroupCommunityContentPolicy.translatesServerAuthoredUGC)
+
+        let english = GroupCommunityUITestFixture.localizedDemoGroups(
+            locale: Locale(identifier: "en")
+        )[0]
+        let japanese = GroupCommunityUITestFixture.localizedDemoGroups(
+            locale: Locale(identifier: "ja")
+        )[0]
+        XCTAssertNotEqual(english.name, japanese.name)
+        XCTAssertEqual(english.slug, japanese.slug)
+        XCTAssertEqual(english.owner.name, japanese.owner.name)
+    }
+#endif
 
     func testUnreadableCoverUsesStableCodeAndExplicitThreeLocaleCopy() {
         XCTAssertThrowsError(
@@ -178,5 +308,48 @@ final class GroupCommunityPresentationTests: XCTestCase {
             GroupCommunityCommentLocale.identifier(for: Locale(identifier: "fr_FR")),
             "en"
         )
+    }
+
+    private func contrastRatio(
+        foreground: Color,
+        background: Color,
+        interfaceStyle: UIUserInterfaceStyle
+    ) throws -> Double {
+        let foregroundLuminance = try relativeLuminance(
+            rgba(foreground, interfaceStyle: interfaceStyle)
+        )
+        let backgroundLuminance = try relativeLuminance(
+            rgba(background, interfaceStyle: interfaceStyle)
+        )
+        let lighter = max(foregroundLuminance, backgroundLuminance)
+        let darker = min(foregroundLuminance, backgroundLuminance)
+        return (lighter + 0.05) / (darker + 0.05)
+    }
+
+    private func rgba(
+        _ color: Color,
+        interfaceStyle: UIUserInterfaceStyle
+    ) throws -> [CGFloat] {
+        let traits = UITraitCollection(userInterfaceStyle: interfaceStyle)
+        let resolved = UIColor(color).resolvedColor(with: traits)
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        XCTAssertTrue(resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha))
+        return [red, green, blue, alpha]
+    }
+
+    private func relativeLuminance(_ rgba: [CGFloat]) -> Double {
+        func linearized(_ value: CGFloat) -> Double {
+            let channel = Double(value)
+            return channel <= 0.04045
+                ? channel / 12.92
+                : pow((channel + 0.055) / 1.055, 2.4)
+        }
+
+        return 0.2126 * linearized(rgba[0])
+            + 0.7152 * linearized(rgba[1])
+            + 0.0722 * linearized(rgba[2])
     }
 }

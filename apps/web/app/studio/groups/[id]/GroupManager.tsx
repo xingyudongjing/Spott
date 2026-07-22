@@ -1,11 +1,19 @@
 "use client";
 
 import { PreviewModeLink as Link } from "../../../components/PreviewModeLink";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppDialog } from "../../../components/AppDialog";
 import { useI18n } from "../../../components/I18nProvider";
 import type { Locale } from "../../../i18n/messages";
-import { APIError, apiRequest, errorMessage, type GroupView } from "../../../lib/client-api";
+import {
+  APIError,
+  apiRequest,
+  errorMessage,
+  readSession,
+  subscribeSessionChanges,
+  type GroupView,
+} from "../../../lib/client-api";
+import { groupTransferStorageKey } from "../../../lib/group-transfer-cache";
 import { uploadProcessedImage } from "../../../lib/media-upload";
 import { StudioNav } from "../../StudioNav";
 
@@ -58,21 +66,32 @@ export function GroupManager({ groupId }: { groupId: string }) {
   const [membersCursor, setMembersCursor] = useState<string | null>(null);
   const [memberBusyId, setMemberBusyId] = useState("");
   const [coverBusy, setCoverBusy] = useState(false);
+  const ownerAuthorityRef = useRef({
+    ownerUserId: readSession()?.user.id ?? null,
+    revision: 0,
+  });
 
   const loadActiveTransfer = useCallback(async () => {
+    const authority = ownerAuthorityRef.current;
     try {
       const active = await apiRequest<TransferView>(`/groups/${groupId}/transfers/active`, {
         authenticated: true,
       });
+      if (ownerAuthorityRef.current !== authority) return;
       setTransfer(active);
-      window.localStorage.setItem(`spott.group-transfer.${groupId}`, JSON.stringify(active));
+      window.localStorage.setItem(groupTransferStorageKey(groupId), JSON.stringify(active));
     } catch (error) {
+      if (ownerAuthorityRef.current !== authority) return;
       if (error instanceof APIError && error.status === 404) {
         setTransfer(null);
-        window.localStorage.removeItem(`spott.group-transfer.${groupId}`);
+        window.localStorage.removeItem(groupTransferStorageKey(groupId));
         return;
       }
-      if (error instanceof APIError && error.status === 403) return;
+      if (error instanceof APIError && error.status === 403) {
+        setTransfer(null);
+        window.localStorage.removeItem(groupTransferStorageKey(groupId));
+        return;
+      }
       throw error;
     }
   }, [groupId]);
@@ -124,14 +143,18 @@ export function GroupManager({ groupId }: { groupId: string }) {
 
   useEffect(() => {
     const transferId = new URLSearchParams(window.location.search).get("transfer");
-    const saved = window.localStorage.getItem(`spott.group-transfer.${groupId}`);
+    const cacheKey = groupTransferStorageKey(groupId);
+    const saved = window.localStorage.getItem(cacheKey);
+    const authority = ownerAuthorityRef.current;
     const timer = window.setTimeout(() => {
-      if (transferId) setTransfer({ id: transferId, groupId });
-      else if (saved) {
-        try {
-          setTransfer(JSON.parse(saved) as TransferView);
-        } catch {
-          window.localStorage.removeItem(`spott.group-transfer.${groupId}`);
+      if (ownerAuthorityRef.current === authority) {
+        if (transferId) setTransfer({ id: transferId, groupId });
+        else if (saved) {
+          try {
+            setTransfer(JSON.parse(saved) as TransferView);
+          } catch {
+            window.localStorage.removeItem(cacheKey);
+          }
         }
       }
       void load();
@@ -139,13 +162,30 @@ export function GroupManager({ groupId }: { groupId: string }) {
     return () => window.clearTimeout(timer);
   }, [groupId, load]);
 
+  useEffect(() => {
+    return subscribeSessionChanges(() => {
+      const nextOwnerUserId = readSession()?.user.id ?? null;
+      const authority = ownerAuthorityRef.current;
+      if (nextOwnerUserId === authority.ownerUserId) return;
+      ownerAuthorityRef.current = {
+        ownerUserId: nextOwnerUserId,
+        revision: authority.revision + 1,
+      };
+      setTransfer(null);
+      window.localStorage.removeItem(groupTransferStorageKey(groupId));
+    });
+  }, [groupId]);
+
   const copy = groupManagerCopy(locale);
   const canManage = group?.availableActions.includes("manage") ?? false;
 
   function rememberTransfer(value: TransferView | null) {
     setTransfer(value);
-    if (value) window.localStorage.setItem(`spott.group-transfer.${groupId}`, JSON.stringify(value));
-    else window.localStorage.removeItem(`spott.group-transfer.${groupId}`);
+    if (value) {
+      window.localStorage.setItem(groupTransferStorageKey(groupId), JSON.stringify(value));
+    } else {
+      window.localStorage.removeItem(groupTransferStorageKey(groupId));
+    }
   }
 
   async function createInvite() {

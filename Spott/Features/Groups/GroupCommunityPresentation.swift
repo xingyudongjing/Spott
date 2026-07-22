@@ -208,23 +208,23 @@ enum GroupCommunityRegion: String, CaseIterable, Identifiable, Sendable {
 }
 
 enum GroupCommunityLayout {
-    /// A small margin avoids Core Animation rounding a nominal 44 pt frame just below 44.
-    static let minimumTouchTarget: CGFloat = 45
+    /// A comfortable default target that remains safely above the 44 pt platform recommendation.
+    static let minimumTouchTarget: CGFloat = 48
 
     static func usesVerticalActions(for dynamicTypeSize: DynamicTypeSize) -> Bool {
         dynamicTypeSize.isAccessibilitySize
     }
 
     static func usesVerticalCardMetadata(for dynamicTypeSize: DynamicTypeSize) -> Bool {
-        dynamicTypeSize.isAccessibilitySize
+        dynamicTypeSize >= .xxxLarge
     }
 
     static func usesVerticalCardTags(for dynamicTypeSize: DynamicTypeSize) -> Bool {
-        dynamicTypeSize.isAccessibilitySize
+        dynamicTypeSize >= .xxxLarge
     }
 
     static func cardCoverMinimumHeight(for dynamicTypeSize: DynamicTypeSize) -> CGFloat {
-        dynamicTypeSize.isAccessibilitySize ? 96 : 132
+        dynamicTypeSize.isAccessibilitySize ? 112 : 156
     }
 }
 
@@ -243,6 +243,101 @@ enum GroupCommunitySurfacePolicy {
             true
         }
     }
+}
+
+enum GroupCommunityControlSurfaceStyle: Equatable, Sendable {
+    case glass
+    case opaque
+}
+
+enum GroupCommunityControlSurfacePolicy {
+    static func style(
+        reduceTransparency: Bool,
+        increasedContrast: Bool
+    ) -> GroupCommunityControlSurfaceStyle {
+        reduceTransparency || increasedContrast ? .opaque : .glass
+    }
+}
+
+struct GroupCommunityDisplayAccommodations: Equatable, Sendable {
+    static let reduceTransparencyTestArgument =
+        "-spott-ui-test-community-reduce-transparency"
+    static let increaseContrastTestArgument =
+        "-spott-ui-test-community-increase-contrast"
+
+    let reduceTransparency: Bool
+    let increasedContrast: Bool
+
+    init(reduceTransparency: Bool, increasedContrast: Bool) {
+        self.reduceTransparency = reduceTransparency
+        self.increasedContrast = increasedContrast
+    }
+
+    init(
+        systemReduceTransparency: Bool,
+        systemIncreasedContrast: Bool,
+        launchArguments: [String] = ProcessInfo.processInfo.arguments
+    ) {
+#if DEBUG
+        reduceTransparency = systemReduceTransparency
+            || launchArguments.contains(Self.reduceTransparencyTestArgument)
+        increasedContrast = systemIncreasedContrast
+            || launchArguments.contains(Self.increaseContrastTestArgument)
+#else
+        reduceTransparency = systemReduceTransparency
+        increasedContrast = systemIncreasedContrast
+#endif
+    }
+}
+
+struct GroupCommunityControlColorPair {
+    let foreground: Color
+    let background: Color
+}
+
+enum GroupCommunityControlPalette {
+    static func scope(
+        isSelected: Bool,
+        increasedContrast: Bool
+    ) -> GroupCommunityControlColorPair {
+        guard isSelected else {
+            return GroupCommunityControlColorPair(
+                foreground: increasedContrast ? SpottColor.ink : SpottColor.muted,
+                background: .clear
+            )
+        }
+        return increasedContrast
+            ? GroupCommunityControlColorPair(
+                foreground: SpottColor.canvas,
+                background: SpottColor.ink
+            )
+            : GroupCommunityControlColorPair(
+                foreground: SpottColor.ink,
+                background: SpottColor.twilightPale
+            )
+    }
+
+    static func tag(increasedContrast: Bool) -> GroupCommunityControlColorPair {
+        increasedContrast
+            ? GroupCommunityControlColorPair(
+                foreground: SpottColor.canvas,
+                background: SpottColor.ink
+            )
+            : GroupCommunityControlColorPair(
+                foreground: SpottColor.ink,
+                background: SpottColor.twilightPale
+            )
+    }
+}
+
+enum GroupCommunityContentOwnership: Equatable, Sendable {
+    case serverAuthoredUGC
+    case localizedDebugDemo
+}
+
+enum GroupCommunityContentPolicy {
+    /// Production names, descriptions, tags, and rules are displayed verbatim.
+    static let translatesServerAuthoredUGC = false
 }
 
 enum GroupCommunityImageFailure: Error, Equatable, Sendable {
@@ -286,13 +381,16 @@ enum GroupCommunityCommentLocale {
 #if DEBUG
 enum GroupCommunityUITestFixture {
     static let argument = "-spott-ui-test-community-fixture"
+    static let contentOwnership = GroupCommunityContentOwnership.localizedDebugDemo
 
     static var isEnabled: Bool {
         ProcessInfo.processInfo.arguments.contains(argument)
     }
 
-    static let groups = [
-        GroupSummary(
+    /// Deterministic, deliberately localized demo content for UI screenshots and layout tests.
+    /// Production group names, descriptions, tags, and rules remain server-authored UGC.
+    static func localizedDemoGroups(locale: Locale) -> [GroupSummary] {
+        [GroupSummary(
             id: UUID(uuidString: "019b0000-0000-7000-8200-000000000001")!,
             ownerId: UUID(uuidString: "019b0000-0000-7000-8200-000000000002")!,
             owner: GroupPerson(
@@ -300,14 +398,20 @@ enum GroupCommunityUITestFixture {
                 name: "Mika",
                 handle: "mika"
             ),
-            name: "Weekend City Walks",
+            name: GroupCommunityLocalization.text("Weekend City Walks", locale: locale),
             slug: "weekend-city-walks",
-            description: "A welcoming community for relaxed weekend walks.",
+            description: GroupCommunityLocalization.text(
+                "A welcoming community for relaxed weekend walks.",
+                locale: locale
+            ),
             joinMode: .approval,
             regionId: "tokyo",
             categoryId: "outdoor",
-            tags: ["walking", "weekend"],
-            rules: "Be kind and arrive on time.",
+            tags: [
+                GroupCommunityLocalization.text("walking", locale: locale),
+                GroupCommunityLocalization.text("weekend", locale: locale),
+            ],
+            rules: GroupCommunityLocalization.text("Be kind and arrive on time.", locale: locale),
             capacity: 50,
             memberCount: 18,
             status: "active",
@@ -320,7 +424,7 @@ enum GroupCommunityUITestFixture {
             availableActions: ["joinGroup"],
             version: 1,
             updatedAt: Date(timeIntervalSince1970: 1_721_376_000)
-        ),
-    ]
+        )]
+    }
 }
 #endif

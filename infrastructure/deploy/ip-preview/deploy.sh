@@ -59,10 +59,17 @@ compose() {
 wait_for_url() {
   local url=$1
   local attempts=${2:-60}
+  local preview_mode=${3:-}
   local index
+  local curl_arguments=(
+    --fail --silent --show-error --connect-timeout 3 --max-time 12
+    --output /dev/null
+  )
+  if [[ -n $preview_mode ]]; then
+    curl_arguments+=(--header "X-Spott-Preview-Mode: $preview_mode")
+  fi
   for ((index = 1; index <= attempts; index += 1)); do
-    if curl --fail --silent --show-error --connect-timeout 3 --max-time 12 \
-      --output /dev/null "$url"; then
+    if curl "${curl_arguments[@]}" "$url"; then
       return 0
     fi
     sleep 2
@@ -125,7 +132,7 @@ api_health=$(curl --fail --silent --show-error --connect-timeout 3 --max-time 15
 grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' <<< "$api_health"
 grep -Eq '"postgres"[[:space:]]*:[[:space:]]*"ok"' <<< "$api_health"
 grep -Eq '"version"[[:space:]]*:[[:space:]]*"ip-preview-'"$release_id"'"' <<< "$api_health"
-wait_for_url http://127.0.0.1:3000/discover 90
+wait_for_url http://127.0.0.1:3000/discover 90 read-only
 
 nginx_candidate=$(mktemp /etc/nginx/conf.d/.spott-ip-preview.conf.XXXXXX)
 nginx_validation=$(mktemp /tmp/spott-nginx-validation.XXXXXX)

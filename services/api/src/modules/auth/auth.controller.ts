@@ -23,6 +23,21 @@ const persistentDeviceBindingProofSchema = z
     proofClass: z.literal('persistent'),
   })
   .strict();
+const webBoundSessionMutationSchema = z
+  .object({
+    refreshToken: z.string(),
+    deviceId: z.string().uuid(),
+    deviceBindingProof: persistentDeviceBindingProofSchema,
+    refreshEnvelopeClaims: webRefreshEnvelopeDBClaimsSchema,
+  })
+  .strict();
+const webSessionCompletionDispositionSchema = z
+  .object({
+    challengeId: z.string().uuid(),
+    deviceId: z.string().uuid(),
+    binding: persistentDeviceBindingProofSchema.extend({ generation: z.literal(0) }),
+  })
+  .strict();
 
 @Controller()
 export class AuthController {
@@ -46,6 +61,80 @@ export class AuthController {
       input,
       transportClass === 'native' ? 'ios' : 'web',
       transportClass,
+    );
+  }
+
+  @Public()
+  @Post('auth/web/complete')
+  @HttpCode(200)
+  completeWebSession(@Req() request: SpottRequest, @Body() body: unknown) {
+    const input = z
+      .object({
+        credential: z
+          .object({
+            provider: z.literal('email'),
+            challengeId: z.string().uuid(),
+            code: z.string().regex(/^[0-9]{6}$/),
+          })
+          .strict(),
+        deviceId: z.string().uuid(),
+        attemptId: z.string().uuid(),
+        newBinding: persistentDeviceBindingProofSchema.extend({ generation: z.literal(0) }),
+      })
+      .strict()
+      .parse(body);
+    return this.auth.completeWebEmailSession(
+      input,
+      request.verifiedBFFAuthority,
+      this.requestChannel(request),
+    );
+  }
+
+  @Public()
+  @Post('auth/web/completion-attempts/:attemptId/accept')
+  @HttpCode(200)
+  acceptWebSessionCompletion(
+    @Req() request: SpottRequest,
+    @Param('attemptId') attemptId: string,
+    @Body() body: unknown,
+  ) {
+    return this.auth.acceptWebSessionCompletionAttempt(
+      attemptId,
+      webSessionCompletionDispositionSchema.parse(body),
+      request.verifiedBFFAuthority,
+      this.requestChannel(request),
+    );
+  }
+
+  @Public()
+  @Post('auth/web/completion-attempts/:attemptId/discard')
+  @HttpCode(200)
+  discardWebSessionCompletion(
+    @Req() request: SpottRequest,
+    @Param('attemptId') attemptId: string,
+    @Body() body: unknown,
+  ) {
+    return this.auth.discardWebSessionCompletionAttempt(
+      attemptId,
+      webSessionCompletionDispositionSchema.parse(body),
+      request.verifiedBFFAuthority,
+      this.requestChannel(request),
+    );
+  }
+
+  @Public()
+  @Post('auth/web/completion-attempts/:attemptId/revoke')
+  @HttpCode(200)
+  revokeWebSessionCompletion(
+    @Req() request: SpottRequest,
+    @Param('attemptId') attemptId: string,
+    @Body() body: unknown,
+  ) {
+    return this.auth.revokeWebSessionCompletionAttempt(
+      attemptId,
+      webSessionCompletionDispositionSchema.parse(body),
+      request.verifiedBFFAuthority,
+      this.requestChannel(request),
     );
   }
 
@@ -116,6 +205,30 @@ export class AuthController {
       request.verifiedBFFAuthority,
       this.requestChannel(request),
       input.refreshEnvelopeClaims,
+    );
+  }
+
+  @Public()
+  @Post('auth/logout')
+  @HttpCode(204)
+  async logout(@Req() request: SpottRequest, @Body() body: unknown): Promise<void> {
+    const input = webBoundSessionMutationSchema.parse(body);
+    await this.auth.logoutWebSession(
+      input,
+      request.verifiedBFFAuthority,
+      this.requestChannel(request),
+    );
+  }
+
+  @Public()
+  @Post('auth/logout-all')
+  @HttpCode(200)
+  logoutAll(@Req() request: SpottRequest, @Body() body: unknown) {
+    const input = webBoundSessionMutationSchema.parse(body);
+    return this.auth.logoutAllWebSessions(
+      input,
+      request.verifiedBFFAuthority,
+      this.requestChannel(request),
     );
   }
 

@@ -8,6 +8,7 @@ import { configuration } from '../../config.js';
 import { Database } from '../../platform/database.js';
 import { FieldCrypto } from '../../platform/crypto.js';
 import { IdempotencyService } from '../../platform/idempotency.js';
+import { webSessionCompletionAcceptedSQL } from '../../platform/web-session-completion-disposition.js';
 import {
   decideTransport,
   parseRefreshCredential,
@@ -21,14 +22,26 @@ import {
 } from './refresh-envelope-claims.js';
 import {
   isCanonicalPersistentDeviceBindingProof,
+  lockSessionMutationUser,
   persistentDeviceBindingHash,
   SessionTokenService,
   type DeviceBindingProof,
+  type WebLogoutInput,
+  type WebLogoutOutcome,
 } from './session-token.service.js';
+import {
+  completionAttemptHash,
+  completionDispositionAuthorityDigest,
+  completionRequestDigest,
+  deriveInitialWebRefreshSecret,
+} from './web-session-completion-kdf.js';
 
 const emailSchema = z.string().trim().toLowerCase().email().max(254);
 const phoneSchema = z.string().regex(/^\+81[1-9][0-9]{8,9}$/);
 const deviceSchema = z.string().uuid();
+const canonicalUUIDSchema = z.string().regex(
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+);
 const codeSchema = z.string().regex(/^[0-9]{6}$/);
 const persistentDeviceBindingProofSchema = z
   .object({
@@ -49,6 +62,73 @@ export const deviceBindingUpgradeInputSchema = z
 
 export type PersistentDeviceBindingProof = z.infer<typeof persistentDeviceBindingProofSchema>;
 export type DeviceBindingUpgradeInput = z.infer<typeof deviceBindingUpgradeInputSchema>;
+
+export const webEmailSessionCompletionInputSchema = z
+  .object({
+    credential: z
+      .object({
+        provider: z.literal('email'),
+        challengeId: canonicalUUIDSchema,
+        code: codeSchema,
+      })
+      .strict(),
+    deviceId: canonicalUUIDSchema,
+    attemptId: canonicalUUIDSchema,
+    newBinding: persistentDeviceBindingProofSchema.extend({
+      bindingId: canonicalUUIDSchema,
+      generation: z.literal(0),
+    }),
+  })
+  .strict();
+
+export type WebEmailSessionCompletionInput = z.infer<
+  typeof webEmailSessionCompletionInputSchema
+>;
+
+export const webSessionCompletionDispositionInputSchema = z
+  .object({
+    challengeId: canonicalUUIDSchema,
+    deviceId: canonicalUUIDSchema,
+    binding: persistentDeviceBindingProofSchema.extend({
+      bindingId: canonicalUUIDSchema,
+      generation: z.literal(0),
+    }),
+  })
+  .strict();
+
+export type WebSessionCompletionDispositionInput = z.infer<
+  typeof webSessionCompletionDispositionInputSchema
+>;
+
+export const webSessionCompletionReconciliationSeconds = 2_678_400;
+
+export interface WebSessionCompletionPendingResult {
+  readonly state: 'pending';
+  readonly sessionId: string;
+  readonly bindingId: string;
+  readonly deviceId: string;
+}
+
+export type WebSessionCompletionDispositionResult =
+  | {
+      readonly state: 'accepted';
+      readonly material: WebSessionCompletionMaterial;
+    }
+  | {
+      readonly state: 'discarded';
+      readonly sessionId?: string | undefined;
+      readonly bindingId: string;
+      readonly deviceId: string;
+    };
+
+export type WebSessionCompletionRevocationResult =
+  | Extract<WebSessionCompletionDispositionResult, { state: 'discarded' }>
+  | {
+      readonly state: 'revoked';
+      readonly sessionId: string;
+      readonly bindingId: string;
+      readonly deviceId: string;
+    };
 
 interface UserRow {
   id: string;
@@ -137,6 +217,82 @@ interface IssuedBindingRow {
   revoked_at?: Date | null;
 }
 
+interface WebCompletionChallengeRow {
+  id: string;
+  email_hash: Buffer;
+  email_cipher: Buffer;
+  code_hash: Buffer;
+  device_id: string;
+  attempts: number;
+  expires_at: Date;
+  verified_at: Date | null;
+  suspended_until: Date | null;
+  unexpired: boolean;
+  unsuspended: boolean;
+}
+
+interface WebCompletionOutcomeRow {
+  challenge_id: string;
+  attempt_hash: Buffer;
+  request_digest: Buffer;
+  user_id: string;
+  device_id: string;
+  session_id: string;
+  family_id: string;
+  binding_id: string;
+  refresh_generation: string;
+  binding_generation: string;
+  derivation_version: 'v1';
+  derivation_kid: string;
+  recovery_expires_at: Date;
+}
+
+interface WebCompletionDispositionRow {
+  attempt_hash: Buffer;
+  challenge_id: string;
+  device_id: string;
+  binding_id: string;
+  binding_generation: string;
+  authority_digest: Buffer;
+  authority_version: 'v1' | 'legacy-v0';
+  authority_kid: string;
+  state: 'pending' | 'accepted' | 'discarded';
+  session_id: string | null;
+  decision_expires_at: Date;
+  retained_until: Date;
+  decision_open: boolean;
+  retention_open: boolean;
+}
+
+interface WebCompletionRecoveryRow extends WebCompletionOutcomeRow {
+  recovery_active: boolean;
+  session_refresh_hash: Buffer;
+  session_derivation_kid: string | null;
+  session_binding_id: string | null;
+  session_binding_generation: string | null;
+  session_expires_at: Date;
+  session_active: boolean;
+  transport_class: SessionTransportClass;
+  history_family_id: string;
+  history_token_hash: Buffer;
+  history_derivation_kid: string | null;
+  history_binding_id: string | null;
+  history_binding_generation: string | null;
+  history_state: 'current' | 'consumed' | 'revoked';
+  binding_current_hash: Buffer;
+  binding_current_kid: string;
+  binding_issued_at: Date;
+  binding_absolute_expires_at: Date;
+  binding_active: boolean;
+  binding_proof_class: string;
+  public_handle: string;
+  user_status: string;
+  user_active: boolean;
+  phone_verified_at: Date | null;
+  restriction_flags: string[];
+  device_risk_state: string;
+}
+
 export interface DeviceBindingUpgradeMaterial {
   sessionId: string;
   refreshFamilyId: string;
@@ -167,6 +323,16 @@ export interface SessionResponse {
     phoneVerified: boolean;
     restrictions: string[];
   };
+}
+
+export interface WebSessionCompletionMaterial extends SessionResponse {
+  refreshFamilyId: string;
+  refreshTokenExpiresAt: string;
+  transportClass: 'web_bff';
+  bindingId: string;
+  bindingGeneration: 0;
+  bindingIssuedAt: string;
+  bindingAbsoluteExpiresAt: string;
 }
 
 export type ApplePlatform = 'ios' | 'web';
@@ -346,6 +512,971 @@ export class AuthService {
     });
     if (outcome.kind === 'invalid') this.throwInvalidOtp(outcome.attempts, outcome.retryAt);
     return outcome.session;
+  }
+
+  async completeWebEmailSession(
+    inputValue: WebEmailSessionCompletionInput,
+    authority: VerifiedBFFAuthority | undefined,
+    requestChannel: SessionRequestChannel,
+  ): Promise<WebSessionCompletionPendingResult> {
+    if (!authority) {
+      throw new DomainError(
+        'WEB_BFF_AUTHORITY_REQUIRED',
+        '此操作必须通过安全 Web 通道完成。',
+        403,
+        { retryable: false },
+      );
+    }
+    if (requestChannel !== 'verified_bff') {
+      throw new DomainError('SESSION_TRANSPORT_MISMATCH', '会话通道不匹配，请重新登录。', 403, {
+        retryable: false,
+      });
+    }
+    const parsed = webEmailSessionCompletionInputSchema.safeParse(inputValue);
+    if (!parsed.success) this.throwWebCompletionUnavailable();
+    const input = parsed.data;
+    const attemptHash = completionAttemptHash(input.attemptId);
+
+    try {
+      const outcome = await this.database.transaction(async (client) => {
+        await client.query(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1, 731647302894611011))',
+          [input.attemptId],
+        );
+        const disposition = await this.lockWebCompletionDisposition(client, attemptHash);
+        if (disposition) {
+          this.assertWebCompletionDispositionAuthority(
+            disposition,
+            input.attemptId,
+            {
+              challengeId: input.credential.challengeId,
+              deviceId: input.deviceId,
+              binding: input.newBinding,
+            },
+          );
+          if (disposition.state === 'discarded') {
+            this.throwWebCompletionDiscarded();
+          }
+        }
+        const challengeResult = await client.query<WebCompletionChallengeRow>(
+          `SELECT id, email_hash, email_cipher, code_hash, device_id, attempts,
+                  expires_at, verified_at, suspended_until,
+                  expires_at > clock_timestamp() AS unexpired,
+                  suspended_until IS NULL OR suspended_until <= clock_timestamp()
+                    AS unsuspended
+           FROM identity.email_challenges
+           WHERE id = $1
+           FOR UPDATE`,
+          [input.credential.challengeId],
+        );
+        const challenge = challengeResult.rows[0];
+        if (!challenge || challenge.device_id !== input.deviceId) {
+          this.throwWebCompletionUnavailable();
+        }
+
+        const storedOutcomes = await client.query<WebCompletionOutcomeRow>(
+          `SELECT challenge_id, attempt_hash, request_digest, user_id, device_id,
+                  session_id, family_id, binding_id, refresh_generation,
+                  binding_generation, derivation_version, derivation_kid,
+                  recovery_expires_at
+           FROM identity.web_session_completion_outcomes
+           WHERE attempt_hash = $1 OR challenge_id = $2
+           ORDER BY challenge_id
+           FOR UPDATE`,
+          [attemptHash, challenge.id],
+        );
+        if (storedOutcomes.rowCount !== 0) {
+          if (!disposition) this.throwWebCompletionUnavailable();
+          if (storedOutcomes.rowCount !== 1) this.throwWebCompletionUnavailable();
+          const stored = storedOutcomes.rows[0];
+          if (
+            !stored ||
+            stored.challenge_id !== challenge.id ||
+            !this.sameHash(stored.attempt_hash, attemptHash) ||
+            challenge.verified_at === null ||
+            !this.matchesCode(challenge.code_hash, input.credential.code)
+          ) {
+            this.throwWebCompletionUnavailable();
+          }
+          await this.recoverWebEmailSession(client, input, attemptHash, stored);
+          return {
+            kind: 'completed' as const,
+            material: {
+              state: 'pending' as const,
+              sessionId: stored.session_id,
+              bindingId: stored.binding_id,
+              deviceId: stored.device_id,
+            },
+          };
+        }
+
+        if (disposition) this.throwWebCompletionUnavailable();
+
+        if (
+          challenge.verified_at !== null ||
+          !challenge.unexpired ||
+          !challenge.unsuspended
+        ) {
+          this.throwWebCompletionUnavailable();
+        }
+        if (!this.matchesCode(challenge.code_hash, input.credential.code)) {
+          // Deliberate OTP-safety exception: a rejected code may commit only the bounded
+          // attempts/suspension counters. User, device, session, binding, and recovery outcome
+          // creation stays outside this branch and therefore remains unchanged.
+          const nextAttempts = challenge.attempts + 1;
+          const invalid = await client.query<{ suspended_until: Date | null }>(
+            `UPDATE identity.email_challenges
+             SET attempts = $2::integer,
+                 suspended_until = CASE
+                   WHEN $2::integer >= 5
+                     THEN clock_timestamp() + interval '30 minutes'
+                   ELSE NULL
+                 END
+             WHERE id = $1
+             RETURNING suspended_until`,
+            [challenge.id, Math.min(nextAttempts, 5)],
+          );
+          return {
+            kind: 'invalid' as const,
+            attempts: nextAttempts,
+            retryAt: invalid.rows[0]?.suspended_until ?? null,
+          };
+        }
+
+        const providerSubject = challenge.email_hash.toString('hex');
+        let user = await this.findUserByIdentity(client, 'email', providerSubject);
+        if (!user) {
+          user = await this.createUser(
+            client,
+            'email',
+            providerSubject,
+            challenge.email_cipher,
+            challenge.email_hash,
+          );
+        }
+        await this.prepareWebCompletionUser(client, user);
+        await this.prepareOwnedDeviceForSession(client, user, input.deviceId, 'web');
+        await this.assertWebCompletionDeviceAllowed(client, user.id, input.deviceId);
+
+        const identifiers = await client.query<{ session_id: string; family_id: string }>(
+          'SELECT uuidv7() AS session_id, uuidv7() AS family_id',
+        );
+        const ids = identifiers.rows[0];
+        if (!ids) throw new Error('Web session completion identifiers were not generated');
+
+        const keyring = configuration().REFRESH_TOKEN_DERIVATION_KEYS;
+        const derivationKid = keyring.currentKid;
+        const derivationKey = keyring.getKey(derivationKid);
+        if (!derivationKey) throw new Error('Current Web completion derivation KID is unavailable');
+        const requestDigest = completionRequestDigest({
+          key: derivationKey,
+          kid: derivationKid,
+          attemptId: input.attemptId,
+          challengeId: challenge.id,
+          code: input.credential.code,
+          deviceId: input.deviceId,
+          bindingId: input.newBinding.bindingId,
+          bindingGeneration: input.newBinding.generation,
+          proof: input.newBinding.proof,
+        });
+        const refreshSecret = deriveInitialWebRefreshSecret({
+          key: derivationKey,
+          kid: derivationKid,
+          attemptHash,
+          challengeId: challenge.id,
+          userId: user.id,
+          deviceId: input.deviceId,
+          sessionId: ids.session_id,
+          familyId: ids.family_id,
+          bindingId: input.newBinding.bindingId,
+          generation: 0,
+          transportClass: 'web_bff',
+        });
+        const refreshHash = this.refreshHash(refreshSecret);
+        const proofFingerprint = createHash('sha256').update(input.newBinding.proof).digest();
+        const proofClass = await client.query<{ accepted: boolean }>(
+          `SELECT identity.claim_proof_hash_class($1, 'persistent') AS accepted`,
+          [proofFingerprint],
+        );
+        if (proofClass.rows[0]?.accepted !== true) {
+          throw new DomainError(
+            'DEVICE_BINDING_PROOF_CLASS_INVALID',
+            '临时迁移凭据不能成为长期设备绑定。',
+            401,
+            { retryable: false },
+          );
+        }
+        const bindingHash = persistentDeviceBindingHash({
+          proof: input.newBinding.proof,
+          kid: derivationKid,
+          userId: user.id,
+          deviceId: input.deviceId,
+          sessionId: ids.session_id,
+          bindingId: input.newBinding.bindingId,
+          generation: 0,
+        });
+        if (!bindingHash) this.throwWebCompletionUnavailable();
+
+        const sessionResult = await client.query<{ expires_at: Date }>(
+          `INSERT INTO identity.sessions(
+             id, user_id, device_id, refresh_hash, refresh_family_id,
+             refresh_generation, current_derivation_kid, expires_at, transport_class
+           ) VALUES (
+             $1, $2, $3, $4, $5, 0, $6,
+             clock_timestamp() + interval '30 days', 'web_bff'
+           )
+           RETURNING expires_at`,
+          [ids.session_id, user.id, input.deviceId, refreshHash, ids.family_id, derivationKid],
+        );
+        const session = sessionResult.rows[0];
+        if (!session) throw new Error('Atomic Web session insert returned no row');
+
+        const bindingResult = await client.query<IssuedBindingRow>(
+          `INSERT INTO identity.device_bindings(
+             id, user_id, device_id, session_id, generation, current_hash, current_kid,
+             absolute_expires_at, proof_class
+           ) VALUES ($1, $2, $3, $4, 0, $5, $6, $7, 'persistent')
+           RETURNING issued_at, absolute_expires_at`,
+          [input.newBinding.bindingId, user.id, input.deviceId, ids.session_id,
+            bindingHash, derivationKid, session.expires_at],
+        );
+        const binding = bindingResult.rows[0];
+        if (!binding) throw new Error('Atomic Web binding insert returned no row');
+
+        const updatedSession = await client.query<{ id: string }>(
+          `UPDATE identity.sessions
+           SET current_binding_id = $2, current_binding_generation = 0
+           WHERE id = $1 AND refresh_generation = 0 AND refresh_hash = $3
+             AND current_binding_id IS NULL AND current_binding_generation IS NULL
+           RETURNING id`,
+          [ids.session_id, input.newBinding.bindingId, refreshHash],
+        );
+        const updatedHistory = await client.query<{ session_id: string }>(
+          `UPDATE identity.session_refresh_history
+           SET binding_id = $2, binding_generation = 0
+           WHERE session_id = $1 AND generation = 0 AND state = 'current'
+             AND token_hash = $3 AND derivation_kid = $4
+             AND binding_id IS NULL AND binding_generation IS NULL
+           RETURNING session_id`,
+          [ids.session_id, input.newBinding.bindingId, refreshHash, derivationKid],
+        );
+        if (updatedSession.rowCount !== 1 || updatedHistory.rowCount !== 1) {
+          throw new Error('Atomic Web session binding alignment lost current generation');
+        }
+
+        const verified = await client.query<{ id: string }>(
+          `UPDATE identity.email_challenges
+           SET verified_at = clock_timestamp()
+           WHERE id = $1 AND verified_at IS NULL
+           RETURNING id`,
+          [challenge.id],
+        );
+        if (verified.rowCount !== 1) {
+          throw new Error('Atomic Web session challenge was not consumed');
+        }
+        const insertedOutcome = await client.query<{
+          challenge_id: string;
+          recovery_expires_at: Date;
+        }>(
+          `WITH completion_clock AS (
+             SELECT clock_timestamp() AS completed_at
+           )
+           INSERT INTO identity.web_session_completion_outcomes(
+             challenge_id, attempt_hash, request_digest, user_id, device_id,
+             session_id, family_id, binding_id, refresh_generation,
+             binding_generation, derivation_version, derivation_kid,
+             created_at, recovery_expires_at
+           ) SELECT
+             $1, $2, $3, $4, $5, $6, $7, $8, 0, 0, 'v1', $9,
+             completed_at,
+             completed_at + make_interval(secs => $10::integer)
+           FROM completion_clock
+           RETURNING challenge_id, recovery_expires_at`,
+          [challenge.id, attemptHash, requestDigest, user.id, input.deviceId,
+            ids.session_id, ids.family_id, input.newBinding.bindingId,
+            derivationKid, configuration().WEB_SESSION_COMPLETION_RECOVERY_SECONDS],
+        );
+        if (insertedOutcome.rowCount !== 1) {
+          throw new Error('Atomic Web session outcome was not recorded');
+        }
+        const recordedOutcome = insertedOutcome.rows[0];
+        if (!recordedOutcome) throw new Error('Atomic Web session outcome metadata was not returned');
+        await this.insertWebCompletionDisposition(
+          client,
+          input.attemptId,
+          {
+            challengeId: input.credential.challengeId,
+            deviceId: input.deviceId,
+            binding: input.newBinding,
+          },
+          ids.session_id,
+          'pending',
+          recordedOutcome.recovery_expires_at,
+        );
+
+        return {
+          kind: 'completed' as const,
+          material: {
+            state: 'pending' as const,
+            sessionId: ids.session_id,
+            bindingId: input.newBinding.bindingId,
+            deviceId: input.deviceId,
+          },
+        };
+      });
+      if (outcome.kind === 'invalid') this.throwInvalidOtp(outcome.attempts, outcome.retryAt);
+      return outcome.material;
+    } catch (error) {
+      if (this.pgCode(error) === '23505' || this.pgCode(error) === '23514') {
+        this.throwWebCompletionUnavailable();
+      }
+      throw error;
+    }
+  }
+
+  async acceptWebSessionCompletionAttempt(
+    attemptValue: string,
+    inputValue: WebSessionCompletionDispositionInput,
+    authority: VerifiedBFFAuthority | undefined,
+    requestChannel: SessionRequestChannel,
+  ): Promise<WebSessionCompletionDispositionResult> {
+    return this.transitionWebSessionCompletionAttempt(
+      'accept',
+      attemptValue,
+      inputValue,
+      authority,
+      requestChannel,
+    );
+  }
+
+  async discardWebSessionCompletionAttempt(
+    attemptValue: string,
+    inputValue: WebSessionCompletionDispositionInput,
+    authority: VerifiedBFFAuthority | undefined,
+    requestChannel: SessionRequestChannel,
+  ): Promise<WebSessionCompletionDispositionResult> {
+    return this.transitionWebSessionCompletionAttempt(
+      'discard',
+      attemptValue,
+      inputValue,
+      authority,
+      requestChannel,
+    );
+  }
+
+  async revokeWebSessionCompletionAttempt(
+    attemptValue: string,
+    inputValue: WebSessionCompletionDispositionInput,
+    authority: VerifiedBFFAuthority | undefined,
+    requestChannel: SessionRequestChannel,
+  ): Promise<WebSessionCompletionRevocationResult> {
+    if (!authority) {
+      throw new DomainError(
+        'WEB_BFF_AUTHORITY_REQUIRED',
+        '此操作必须通过安全 Web 通道完成。',
+        403,
+        { retryable: false },
+      );
+    }
+    if (requestChannel !== 'verified_bff') {
+      throw new DomainError('SESSION_TRANSPORT_MISMATCH', '会话通道不匹配，请重新登录。', 403, {
+        retryable: false,
+      });
+    }
+    const attempt = canonicalUUIDSchema.safeParse(attemptValue);
+    const input = webSessionCompletionDispositionInputSchema.safeParse(inputValue);
+    if (!attempt.success || !input.success) {
+      this.throwWebCompletionDispositionAuthorityInvalid();
+    }
+
+    return this.database.transaction(async (client) => {
+      const attemptId = attempt.data;
+      const dispositionInput = input.data;
+      const attemptHash = completionAttemptHash(attemptId);
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 731647302894611011))',
+        [attemptId],
+      );
+      const disposition = await this.lockWebCompletionDisposition(client, attemptHash);
+      if (!disposition) this.throwWebCompletionDispositionAuthorityInvalid();
+      this.assertRetainedWebCompletionDispositionAuthority(
+        disposition,
+        attemptId,
+        dispositionInput,
+      );
+      if (disposition.state === 'discarded') {
+        return this.discardedWebCompletionResult(disposition);
+      }
+
+      const stored = await this.lockWebCompletionOutcome(client, attemptHash);
+      if (!this.matchesExactWebCompletionOutcome(disposition, stored)) {
+        this.throwWebCompletionDispositionAuthorityInvalid();
+      }
+      if (disposition.state === 'pending') {
+        await this.discardPendingWebCompletion(client, disposition);
+        return this.discardedWebCompletionResult({ ...disposition, state: 'discarded' });
+      }
+
+      return this.revokeAcceptedWebCompletion(client, disposition, stored);
+    });
+  }
+
+  private async transitionWebSessionCompletionAttempt(
+    operation: 'accept' | 'discard',
+    attemptValue: string,
+    inputValue: WebSessionCompletionDispositionInput,
+    authority: VerifiedBFFAuthority | undefined,
+    requestChannel: SessionRequestChannel,
+  ): Promise<WebSessionCompletionDispositionResult> {
+    if (!authority) {
+      throw new DomainError(
+        'WEB_BFF_AUTHORITY_REQUIRED',
+        '此操作必须通过安全 Web 通道完成。',
+        403,
+        { retryable: false },
+      );
+    }
+    if (requestChannel !== 'verified_bff') {
+      throw new DomainError('SESSION_TRANSPORT_MISMATCH', '会话通道不匹配，请重新登录。', 403, {
+        retryable: false,
+      });
+    }
+    const attempt = canonicalUUIDSchema.safeParse(attemptValue);
+    const input = webSessionCompletionDispositionInputSchema.safeParse(inputValue);
+    if (!attempt.success || !input.success) {
+      this.throwWebCompletionDispositionAuthorityInvalid();
+    }
+
+    return this.database.transaction(async (client) => {
+      const attemptId = attempt.data;
+      const dispositionInput = input.data;
+      const attemptHash = completionAttemptHash(attemptId);
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 731647302894611011))',
+        [attemptId],
+      );
+      let disposition = await this.lockWebCompletionDisposition(client, attemptHash);
+      if (!disposition) {
+        if (operation === 'accept') this.throwWebCompletionNotReady();
+        await this.insertWebCompletionDisposition(
+          client,
+          attemptId,
+          dispositionInput,
+          null,
+          'discarded',
+        );
+        return {
+          state: 'discarded',
+          bindingId: dispositionInput.binding.bindingId,
+          deviceId: dispositionInput.deviceId,
+        };
+      }
+
+      this.assertWebCompletionDispositionAuthority(disposition, attemptId, dispositionInput);
+      if (disposition.state === 'discarded') {
+        if (operation === 'accept') this.throwWebCompletionDiscarded();
+        return this.discardedWebCompletionResult(disposition);
+      }
+
+      const stored = await this.lockWebCompletionOutcome(client, attemptHash);
+      if (
+        !stored
+        || !disposition.session_id
+        || stored.session_id !== disposition.session_id
+        || stored.challenge_id !== disposition.challenge_id
+        || stored.device_id !== disposition.device_id
+        || stored.binding_id !== disposition.binding_id
+        || !this.sameHash(stored.attempt_hash, disposition.attempt_hash)
+        || this.generation(stored.refresh_generation) !== 0
+        || this.generation(stored.binding_generation) !== 0
+      ) {
+        this.throwWebCompletionDispositionAuthorityInvalid();
+      }
+
+      if (disposition.state === 'accepted') {
+        const recovered = await this.recoverWebSessionCompletion(
+          client,
+          attemptId,
+          dispositionInput,
+          attemptHash,
+          stored,
+          undefined,
+          false,
+        );
+        return { state: 'accepted', material: recovered.material };
+      }
+
+      if (!disposition.decision_open || operation === 'discard') {
+        await this.discardPendingWebCompletion(client, disposition);
+        disposition = { ...disposition, state: 'discarded' };
+        return this.discardedWebCompletionResult(disposition);
+      }
+
+      const accepted = await client.query<{ attempt_hash: Buffer }>(
+        `UPDATE identity.web_session_completion_dispositions
+         SET state = 'accepted', accepted_at = clock_timestamp()
+         WHERE attempt_hash = $1 AND state = 'pending'
+           AND decision_expires_at > clock_timestamp()
+         RETURNING attempt_hash`,
+        [attemptHash],
+      );
+      if (accepted.rowCount !== 1) this.throwWebCompletionNotReady();
+      const recovered = await this.recoverWebSessionCompletion(
+        client,
+        attemptId,
+        dispositionInput,
+        attemptHash,
+        stored,
+        undefined,
+        false,
+      );
+      return { state: 'accepted', material: recovered.material };
+    });
+  }
+
+  private async lockWebCompletionDisposition(
+    client: PoolClient,
+    attemptHash: Buffer,
+  ): Promise<WebCompletionDispositionRow | null> {
+    const result = await client.query<WebCompletionDispositionRow>(
+      `SELECT attempt_hash, challenge_id, device_id, binding_id, binding_generation,
+              authority_digest, authority_version, authority_kid, state, session_id,
+              decision_expires_at, retained_until,
+              decision_expires_at > clock_timestamp() AS decision_open,
+              retained_until > clock_timestamp() AS retention_open
+       FROM identity.web_session_completion_dispositions
+       WHERE attempt_hash = $1
+       FOR UPDATE`,
+      [attemptHash],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private async lockWebCompletionOutcome(
+    client: PoolClient,
+    attemptHash: Buffer,
+  ): Promise<WebCompletionOutcomeRow | null> {
+    const result = await client.query<WebCompletionOutcomeRow>(
+      `SELECT challenge_id, attempt_hash, request_digest, user_id, device_id,
+              session_id, family_id, binding_id, refresh_generation,
+              binding_generation, derivation_version, derivation_kid,
+              recovery_expires_at
+       FROM identity.web_session_completion_outcomes
+       WHERE attempt_hash = $1
+       FOR UPDATE`,
+      [attemptHash],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private assertWebCompletionDispositionAuthority(
+    disposition: WebCompletionDispositionRow,
+    attemptId: string,
+    input: WebSessionCompletionDispositionInput,
+  ): void {
+    if (
+      disposition.challenge_id !== input.challengeId
+      || disposition.device_id !== input.deviceId
+      || disposition.binding_id !== input.binding.bindingId
+      || this.generation(disposition.binding_generation) !== input.binding.generation
+      || !this.sameHash(disposition.attempt_hash, completionAttemptHash(attemptId))
+    ) {
+      this.throwWebCompletionDispositionAuthorityInvalid();
+    }
+    if (disposition.authority_version === 'legacy-v0') return;
+
+    const key = configuration().REFRESH_TOKEN_DERIVATION_KEYS.getKey(
+      disposition.authority_kid,
+    );
+    if (!key) this.throwWebCompletionDispositionAuthorityInvalid();
+    let digest: Buffer;
+    try {
+      digest = completionDispositionAuthorityDigest({
+        key,
+        kid: disposition.authority_kid,
+        attemptId,
+        challengeId: input.challengeId,
+        deviceId: input.deviceId,
+        bindingId: input.binding.bindingId,
+        bindingGeneration: input.binding.generation,
+        proof: input.binding.proof,
+      });
+    } catch {
+      this.throwWebCompletionDispositionAuthorityInvalid();
+    }
+    if (
+      disposition.authority_version !== 'v1'
+      || !this.sameHash(disposition.authority_digest, digest)
+    ) {
+      this.throwWebCompletionDispositionAuthorityInvalid();
+    }
+  }
+
+  private assertRetainedWebCompletionDispositionAuthority(
+    disposition: WebCompletionDispositionRow,
+    attemptId: string,
+    input: WebSessionCompletionDispositionInput,
+  ): void {
+    if (disposition.authority_version !== 'v1' || !disposition.retention_open) {
+      this.throwWebCompletionDispositionAuthorityInvalid();
+    }
+    this.assertWebCompletionDispositionAuthority(disposition, attemptId, input);
+  }
+
+  private matchesExactWebCompletionOutcome(
+    disposition: WebCompletionDispositionRow,
+    stored: WebCompletionOutcomeRow | null,
+  ): stored is WebCompletionOutcomeRow {
+    return stored !== null
+      && disposition.session_id !== null
+      && stored.session_id === disposition.session_id
+      && stored.challenge_id === disposition.challenge_id
+      && stored.device_id === disposition.device_id
+      && stored.binding_id === disposition.binding_id
+      && this.sameHash(stored.attempt_hash, disposition.attempt_hash)
+      && this.generation(stored.refresh_generation) === 0
+      && this.generation(stored.binding_generation) === 0
+      && stored.derivation_version === 'v1';
+  }
+
+  private async revokeAcceptedWebCompletion(
+    client: PoolClient,
+    disposition: WebCompletionDispositionRow,
+    stored: WebCompletionOutcomeRow,
+  ): Promise<WebSessionCompletionRevocationResult> {
+    const candidate = await client.query<{ user_id: string }>(
+      `SELECT user_id
+       FROM identity.sessions
+       WHERE id = $1`,
+      [stored.session_id],
+    );
+    const userId = candidate.rows[0]?.user_id;
+    if (!userId || userId !== stored.user_id) {
+      this.throwWebCompletionDispositionAuthorityInvalid();
+    }
+
+    await lockSessionMutationUser(client, userId);
+    const session = await client.query<{
+      id: string;
+      user_id: string;
+      device_id: string;
+      refresh_family_id: string;
+      refresh_generation: string;
+      current_binding_id: string | null;
+      current_binding_generation: string | null;
+    }>(
+      `SELECT id, user_id, device_id, refresh_family_id, refresh_generation,
+              current_binding_id, current_binding_generation
+       FROM identity.sessions
+       WHERE id = $1 AND user_id = $2
+       FOR UPDATE`,
+      [stored.session_id, userId],
+    );
+    const exactSession = session.rows[0];
+    if (
+      !exactSession
+      || exactSession.id !== stored.session_id
+      || exactSession.user_id !== userId
+      || exactSession.device_id !== disposition.device_id
+      || exactSession.device_id !== stored.device_id
+      || exactSession.refresh_family_id !== stored.family_id
+    ) {
+      this.throwWebCompletionDispositionAuthorityInvalid();
+    }
+
+    const history = await client.query<{
+      family_id: string;
+      generation: string;
+      binding_id: string | null;
+      binding_generation: string | null;
+      state: 'current' | 'consumed' | 'revoked';
+      consumed_reason: string | null;
+    }>(
+      `SELECT family_id, generation, binding_id, binding_generation,
+              state, consumed_reason
+       FROM identity.session_refresh_history
+       WHERE session_id = $1
+       ORDER BY generation
+       FOR UPDATE`,
+      [stored.session_id],
+    );
+    const bindings = await client.query<{
+      id: string;
+      user_id: string;
+      device_id: string;
+      session_id: string;
+      generation: string;
+      proof_class: string;
+    }>(
+      `SELECT id, user_id, device_id, session_id, generation, proof_class
+       FROM identity.device_bindings
+       WHERE session_id = $1
+       ORDER BY id
+       FOR UPDATE`,
+      [stored.session_id],
+    );
+    const sessionGeneration = this.canonicalGeneration(exactSession.refresh_generation);
+    const currentBindingGeneration = this.canonicalGeneration(
+      exactSession.current_binding_generation,
+    );
+    if (
+      sessionGeneration === null
+      || exactSession.current_binding_id === null
+      || currentBindingGeneration === null
+      || history.rows.length === 0
+    ) {
+      this.throwWebCompletionDispositionAuthorityInvalid();
+    }
+
+    const lockedBindingGenerations = new Map<string, number>();
+    for (const binding of bindings.rows) {
+      const generation = this.canonicalGeneration(binding.generation);
+      if (
+        generation === null
+        || binding.user_id !== userId
+        || binding.device_id !== disposition.device_id
+        || binding.session_id !== stored.session_id
+        || binding.proof_class !== 'persistent'
+        || lockedBindingGenerations.has(binding.id)
+      ) {
+        this.throwWebCompletionDispositionAuthorityInvalid();
+      }
+      lockedBindingGenerations.set(binding.id, generation);
+    }
+
+    let previousGeneration = -1;
+    let currentHistory: typeof history.rows[number] | undefined;
+    for (const row of history.rows) {
+      const generation = this.canonicalGeneration(row.generation);
+      const bindingGeneration = this.canonicalGeneration(row.binding_generation);
+      const lockedBindingGeneration = row.binding_id === null
+        ? undefined
+        : lockedBindingGenerations.get(row.binding_id);
+      if (
+        generation === null
+        || generation !== previousGeneration + 1
+        || row.family_id !== stored.family_id
+        || row.binding_id === null
+        || bindingGeneration === null
+        || lockedBindingGeneration !== bindingGeneration
+        || (generation === 0 && (
+          row.binding_id !== stored.binding_id
+          || row.binding_id !== disposition.binding_id
+          || bindingGeneration !== 0
+        ))
+      ) {
+        this.throwWebCompletionDispositionAuthorityInvalid();
+      }
+      previousGeneration = generation;
+      if (generation === sessionGeneration) currentHistory = row;
+    }
+    if (
+      this.canonicalGeneration(history.rows[0]?.generation ?? null) !== 0
+      || sessionGeneration !== previousGeneration
+      || !currentHistory
+      || currentHistory.binding_id !== exactSession.current_binding_id
+      || this.canonicalGeneration(currentHistory.binding_generation)
+        !== currentBindingGeneration
+    ) {
+      this.throwWebCompletionDispositionAuthorityInvalid();
+    }
+
+    if (
+      lockedBindingGenerations.get(disposition.binding_id) !== 0
+      || lockedBindingGenerations.get(exactSession.current_binding_id)
+        !== currentBindingGeneration
+    ) {
+      this.throwWebCompletionDispositionAuthorityInvalid();
+    }
+
+    const revokedHistory = await client.query(
+      `UPDATE identity.session_refresh_history
+       SET state = 'revoked',
+           consumed_reason = CASE
+             WHEN state = 'current' THEN 'completion_revoked'
+             ELSE consumed_reason
+           END,
+           consumed_at = COALESCE(consumed_at, clock_timestamp()),
+           rotation_key_hash = NULL,
+           successor_generation = NULL,
+           successor_hash = NULL,
+           successor_derivation_kid = NULL,
+           recovery_expires_at = NULL
+       WHERE session_id = $1`,
+      [stored.session_id],
+    );
+    const persistentBindingCount = bindings.rows.filter(
+      ({ proof_class }) => proof_class === 'persistent',
+    ).length;
+    const revokedBindings = await client.query(
+      `UPDATE identity.device_bindings
+       SET revoked_at = COALESCE(revoked_at, clock_timestamp())
+       WHERE session_id = $1 AND proof_class = 'persistent'`,
+      [stored.session_id],
+    );
+    const revokedSession = await client.query(
+      `UPDATE identity.sessions
+       SET revoked_at = COALESCE(revoked_at, clock_timestamp())
+       WHERE id = $1 AND user_id = $2`,
+      [stored.session_id, userId],
+    );
+    if (
+      revokedHistory.rowCount !== history.rowCount
+      || revokedBindings.rowCount !== persistentBindingCount
+      || revokedSession.rowCount !== 1
+    ) {
+      throw new Error('Accepted Web completion revoke lost exact authority rows');
+    }
+
+    return {
+      state: 'revoked',
+      sessionId: stored.session_id,
+      bindingId: disposition.binding_id,
+      deviceId: disposition.device_id,
+    };
+  }
+
+  private async insertWebCompletionDisposition(
+    client: PoolClient,
+    attemptId: string,
+    input: WebSessionCompletionDispositionInput,
+    sessionId: string | null,
+    state: 'pending' | 'accepted' | 'discarded',
+    decisionExpiresAt?: Date,
+  ): Promise<void> {
+    const keyring = configuration().REFRESH_TOKEN_DERIVATION_KEYS;
+    const kid = keyring.currentKid;
+    const key = keyring.getKey(kid);
+    if (!key) throw new Error('Current Web completion disposition KID is unavailable');
+    const attemptHash = completionAttemptHash(attemptId);
+    const authorityDigest = completionDispositionAuthorityDigest({
+      key,
+      kid,
+      attemptId,
+      challengeId: input.challengeId,
+      deviceId: input.deviceId,
+      bindingId: input.binding.bindingId,
+      bindingGeneration: input.binding.generation,
+      proof: input.binding.proof,
+    });
+    const result = await client.query<{ attempt_hash: Buffer }>(
+      `WITH disposition_clock AS (
+         SELECT clock_timestamp() AS recorded_at
+       )
+       INSERT INTO identity.web_session_completion_dispositions(
+         attempt_hash, challenge_id, device_id, binding_id, binding_generation,
+         authority_digest, authority_version, authority_kid, state, session_id,
+         created_at, completed_at, decision_expires_at, retained_until,
+         accepted_at, discarded_at
+       ) SELECT
+         $1, $2, $3, $4, 0, $5, 'v1', $6, $7, $8,
+         recorded_at,
+         CASE WHEN $8::uuid IS NULL THEN NULL ELSE recorded_at END,
+         GREATEST(COALESCE($9::timestamptz, recorded_at), recorded_at),
+         GREATEST(COALESCE($9::timestamptz, recorded_at), recorded_at)
+           + make_interval(secs => $10::integer),
+         CASE WHEN $7::text = 'accepted' THEN recorded_at ELSE NULL END,
+         CASE WHEN $7::text = 'discarded' THEN recorded_at ELSE NULL END
+       FROM disposition_clock
+       RETURNING attempt_hash`,
+      [
+        attemptHash,
+        input.challengeId,
+        input.deviceId,
+        input.binding.bindingId,
+        authorityDigest,
+        kid,
+        state,
+        sessionId,
+        decisionExpiresAt ?? null,
+        webSessionCompletionReconciliationSeconds,
+      ],
+    );
+    if (result.rowCount !== 1) throw new Error('Web completion disposition was not recorded');
+  }
+
+  private async discardPendingWebCompletion(
+    client: PoolClient,
+    disposition: WebCompletionDispositionRow,
+  ): Promise<void> {
+    if (!disposition.session_id) throw new Error('Pending Web completion has no session');
+    const exact = await client.query<{ session_id: string }>(
+      `SELECT session.id AS session_id
+       FROM identity.sessions AS session
+       JOIN identity.session_refresh_history AS history
+         ON history.session_id = session.id
+        AND history.generation = 0
+        AND history.binding_id = $2
+        AND history.binding_generation = 0
+       JOIN identity.device_bindings AS binding
+         ON binding.id = $2
+        AND binding.session_id = session.id
+        AND binding.device_id = $3
+        AND binding.generation = 0
+       WHERE session.id = $1
+         AND session.device_id = $3
+         AND session.current_binding_id = $2
+         AND session.current_binding_generation = 0
+       FOR UPDATE OF session, history, binding`,
+      [disposition.session_id, disposition.binding_id, disposition.device_id],
+    );
+    if (exact.rowCount !== 1) throw new Error('Pending Web completion authority rows diverged');
+
+    const history = await client.query(
+      `UPDATE identity.session_refresh_history
+       SET state = 'revoked',
+           consumed_reason = CASE
+             WHEN state = 'current' THEN 'completion_discarded'
+             ELSE consumed_reason
+           END,
+           consumed_at = COALESCE(consumed_at, clock_timestamp()),
+           rotation_key_hash = NULL,
+           successor_generation = NULL,
+           successor_hash = NULL,
+           successor_derivation_kid = NULL,
+           recovery_expires_at = NULL
+       WHERE session_id = $1 AND generation = 0
+         AND binding_id = $2 AND binding_generation = 0`,
+      [disposition.session_id, disposition.binding_id],
+    );
+    const binding = await client.query(
+      `UPDATE identity.device_bindings
+       SET revoked_at = COALESCE(revoked_at, clock_timestamp())
+       WHERE id = $1 AND session_id = $2 AND device_id = $3 AND generation = 0`,
+      [disposition.binding_id, disposition.session_id, disposition.device_id],
+    );
+    const session = await client.query(
+      `UPDATE identity.sessions
+       SET revoked_at = COALESCE(revoked_at, clock_timestamp())
+       WHERE id = $1 AND device_id = $2
+         AND current_binding_id = $3 AND current_binding_generation = 0`,
+      [disposition.session_id, disposition.device_id, disposition.binding_id],
+    );
+    const terminal = await client.query(
+      `UPDATE identity.web_session_completion_dispositions
+       SET state = 'discarded', discarded_at = clock_timestamp()
+       WHERE attempt_hash = $1 AND state = 'pending'`,
+      [disposition.attempt_hash],
+    );
+    if (
+      history.rowCount !== 1
+      || binding.rowCount !== 1
+      || session.rowCount !== 1
+      || terminal.rowCount !== 1
+    ) {
+      throw new Error('Pending Web completion discard lost exact authority rows');
+    }
+  }
+
+  private discardedWebCompletionResult(
+    disposition: WebCompletionDispositionRow,
+  ): Extract<WebSessionCompletionDispositionResult, { state: 'discarded' }> {
+    return {
+      state: 'discarded',
+      ...(disposition.session_id ? { sessionId: disposition.session_id } : {}),
+      bindingId: disposition.binding_id,
+      deviceId: disposition.device_id,
+    };
   }
 
   async authenticateApple(
@@ -535,6 +1666,7 @@ export class AuthService {
         AND binding.absolute_expires_at > clock_timestamp()
        WHERE session.id = $1
          AND session.device_id = $2
+         AND ${webSessionCompletionAcceptedSQL}
          AND session.revoked_at IS NULL
          AND session.reuse_detected_at IS NULL
          AND session.expires_at > clock_timestamp()
@@ -631,6 +1763,58 @@ export class AuthService {
         restrictions: row.restriction_flags,
       },
     };
+  }
+
+  async logoutWebSession(
+    input: WebLogoutInput,
+    authority: VerifiedBFFAuthority | undefined,
+    requestChannel: SessionRequestChannel,
+  ): Promise<{ revokedCount: number }> {
+    return this.logoutWebSessions(input, 'current', authority, requestChannel);
+  }
+
+  async logoutAllWebSessions(
+    input: WebLogoutInput,
+    authority: VerifiedBFFAuthority | undefined,
+    requestChannel: SessionRequestChannel,
+  ): Promise<{ revokedCount: number }> {
+    return this.logoutWebSessions(input, 'all', authority, requestChannel);
+  }
+
+  private async logoutWebSessions(
+    input: WebLogoutInput,
+    scope: 'current' | 'all',
+    authority: VerifiedBFFAuthority | undefined,
+    requestChannel: SessionRequestChannel,
+  ): Promise<{ revokedCount: number }> {
+    if (!authority) {
+      throw new DomainError(
+        'WEB_BFF_AUTHORITY_REQUIRED',
+        '此操作必须通过安全 Web 通道完成。',
+        403,
+        { retryable: false },
+      );
+    }
+    if (requestChannel !== 'verified_bff') {
+      throw new DomainError('SESSION_TRANSPORT_MISMATCH', '会话通道不匹配，请重新登录。', 403, {
+        retryable: false,
+      });
+    }
+
+    const outcome: WebLogoutOutcome = await this.database.transaction((client) =>
+      this.sessionTokens.revokeWebSessions(client, input, scope),
+    );
+    if (outcome.kind === 'transport_mismatch') {
+      throw new DomainError('SESSION_TRANSPORT_MISMATCH', '会话通道不匹配，请重新登录。', 403, {
+        retryable: false,
+      });
+    }
+    if (outcome.kind !== 'revoked') {
+      throw new DomainError('TOKEN_EXPIRED', '登录已过期，请重新登录。', 401, {
+        retryable: false,
+      });
+    }
+    return { revokedCount: outcome.revokedCount };
   }
 
   async upgradeDeviceBinding(
@@ -849,12 +2033,24 @@ export class AuthService {
   }
 
   async revokeAllSessions(userId: string): Promise<{ revokedCount: number }> {
-    const result = await this.database.query(
-      `UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, clock_timestamp())
-       WHERE user_id = $1 AND revoked_at IS NULL`,
-      [userId],
-    );
-    return { revokedCount: result.rowCount ?? 0 };
+    return this.database.transaction(async (client) => {
+      await lockSessionMutationUser(client, userId);
+      const sessions = await client.query<{ id: string }>(
+        `SELECT id FROM identity.sessions
+         WHERE user_id = $1 AND revoked_at IS NULL
+         ORDER BY id
+         FOR UPDATE`,
+        [userId],
+      );
+      const sessionIds = sessions.rows.map(({ id }) => id);
+      if (sessionIds.length === 0) return { revokedCount: 0 };
+      const result = await client.query(
+        `UPDATE identity.sessions SET revoked_at = COALESCE(revoked_at, clock_timestamp())
+         WHERE id = ANY($1::uuid[]) AND user_id = $2 AND revoked_at IS NULL`,
+        [sessionIds, userId],
+      );
+      return { revokedCount: result.rowCount ?? 0 };
+    });
   }
 
   async cancelDeletion(userId: string): Promise<{ cancelled: boolean }> {
@@ -1168,10 +2364,11 @@ export class AuthService {
     return this.database.transaction(async (client) => {
       await client.query('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE');
       const currentSession = await client.query<{ transport_class: SessionTransportClass }>(
-        `SELECT transport_class
-         FROM identity.sessions
-         WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
-           AND expires_at > clock_timestamp()
+        `SELECT session.transport_class
+         FROM identity.sessions AS session
+         WHERE session.id = $1 AND session.user_id = $2 AND session.revoked_at IS NULL
+           AND session.expires_at > clock_timestamp()
+           AND ${webSessionCompletionAcceptedSQL}
          FOR UPDATE`,
         [currentSessionId, userId],
       );
@@ -1880,50 +3077,8 @@ export class AuthService {
     platform: 'ios' | 'web' | 'ops',
     transportClass: SessionTransportClass,
   ): Promise<SessionResponse> {
-    await client.query(
-      'SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text, 0))',
-      [deviceId],
-    );
-    const existingDevice = await client.query<{ user_id: string | null }>(
-      `SELECT user_id
-       FROM identity.devices
-       WHERE id = $1
-       FOR UPDATE`,
-      [deviceId],
-    );
-    const device = existingDevice.rows[0];
-    if (!device) {
-      await client.query(
-        `INSERT INTO identity.devices(id, user_id, platform)
-         VALUES ($1, $2, $3)`,
-        [deviceId, user.id, platform],
-      );
-    } else if (device.user_id !== user.id) {
-      throw new DomainError(
-        'DEVICE_OWNERSHIP_CONFLICT',
-        '该设备已绑定其他账号，不能直接接管。',
-        409,
-        { retryable: false },
-      );
-    } else {
-      await client.query(
-        `UPDATE identity.devices
-         SET platform = $2, last_seen_at = clock_timestamp()
-         WHERE id = $1`,
-        [deviceId, platform],
-      );
-    }
-    if (user.status === 'deletion_pending') {
-      await client.query(
-        `UPDATE identity.users SET status = 'active', deletion_requested_at = NULL,
-           deletion_execute_after = NULL WHERE id = $1`,
-        [user.id],
-      );
-      user.status = 'active';
-      await this.recordUserChange(client, user.id, 'deletion_cancelled', {
-        deletionPending: false,
-      });
-    }
+    await this.prepareOwnedDeviceForSession(client, user, deviceId, platform);
+    await this.restoreDeletionPendingUser(client, user);
     const refreshSecret = randomBytes(32).toString('base64url');
     const session = await client.query<{ id: string }>(
       `INSERT INTO identity.sessions(
@@ -1967,6 +3122,363 @@ export class AuthService {
         restrictions: user.restriction_flags,
       },
     };
+  }
+
+  private async prepareOwnedDeviceForSession(
+    client: PoolClient,
+    user: UserRow,
+    deviceId: string,
+    platform: 'ios' | 'web' | 'ops',
+  ): Promise<void> {
+    await client.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text, 0))',
+      [deviceId],
+    );
+    const existingDevice = await client.query<{ user_id: string | null }>(
+      `SELECT user_id
+       FROM identity.devices
+       WHERE id = $1
+       FOR UPDATE`,
+      [deviceId],
+    );
+    const device = existingDevice.rows[0];
+    if (!device) {
+      await client.query(
+        `INSERT INTO identity.devices(id, user_id, platform)
+         VALUES ($1, $2, $3)`,
+        [deviceId, user.id, platform],
+      );
+    } else if (device.user_id !== user.id) {
+      throw new DomainError(
+        'DEVICE_OWNERSHIP_CONFLICT',
+        '该设备已绑定其他账号，不能直接接管。',
+        409,
+        { retryable: false },
+      );
+    } else {
+      await client.query(
+        `UPDATE identity.devices
+         SET platform = $2, last_seen_at = clock_timestamp()
+         WHERE id = $1`,
+        [deviceId, platform],
+      );
+    }
+  }
+
+  private async restoreDeletionPendingUser(client: PoolClient, user: UserRow): Promise<void> {
+    if (user.status === 'deletion_pending') {
+      await client.query(
+        `UPDATE identity.users SET status = 'active', deletion_requested_at = NULL,
+           deletion_execute_after = NULL WHERE id = $1`,
+        [user.id],
+      );
+      user.status = 'active';
+      await this.recordUserChange(client, user.id, 'deletion_cancelled', {
+        deletionPending: false,
+      });
+    }
+  }
+
+  private async prepareWebCompletionUser(client: PoolClient, user: UserRow): Promise<void> {
+    const result = await client.query<UserRow>(
+      `SELECT id, public_handle, status, phone_verified_at, restriction_flags
+       FROM identity.users
+       WHERE id = $1 AND deleted_at IS NULL
+       FOR UPDATE`,
+      [user.id],
+    );
+    const locked = result.rows[0];
+    if (!locked) this.throwWebCompletionUnavailable();
+    user.public_handle = locked.public_handle;
+    user.status = locked.status;
+    user.phone_verified_at = locked.phone_verified_at;
+    user.restriction_flags = locked.restriction_flags;
+
+    await this.restoreDeletionPendingUser(client, user);
+    if (user.status !== 'active' || user.restriction_flags.includes('loginBlocked')) {
+      this.throwWebCompletionUnavailable();
+    }
+  }
+
+  private async assertWebCompletionDeviceAllowed(
+    client: PoolClient,
+    userId: string,
+    deviceId: string,
+  ): Promise<void> {
+    const result = await client.query<{ risk_state: string }>(
+      `SELECT risk_state
+       FROM identity.devices
+       WHERE id = $1 AND user_id = $2
+       FOR UPDATE`,
+      [deviceId, userId],
+    );
+    if (!result.rows[0] || result.rows[0].risk_state === 'blocked') {
+      this.throwWebCompletionUnavailable();
+    }
+  }
+
+  private async recoverWebEmailSession(
+    client: PoolClient,
+    input: WebEmailSessionCompletionInput,
+    attemptHash: Buffer,
+    stored: WebCompletionOutcomeRow,
+  ): Promise<{ kind: 'completed'; material: WebSessionCompletionMaterial }> {
+    return this.recoverWebSessionCompletion(
+      client,
+      input.attemptId,
+      {
+        challengeId: input.credential.challengeId,
+        deviceId: input.deviceId,
+        binding: input.newBinding,
+      },
+      attemptHash,
+      stored,
+      input.credential.code,
+    );
+  }
+
+  private async recoverWebSessionCompletion(
+    client: PoolClient,
+    attemptId: string,
+    input: WebSessionCompletionDispositionInput,
+    attemptHash: Buffer,
+    stored: WebCompletionOutcomeRow,
+    code?: string,
+    requireRecoveryActive = true,
+  ): Promise<{ kind: 'completed'; material: WebSessionCompletionMaterial }> {
+    const result = await client.query<WebCompletionRecoveryRow>(
+      `SELECT outcome.challenge_id, outcome.attempt_hash, outcome.request_digest,
+              outcome.user_id, outcome.device_id, outcome.session_id,
+              outcome.family_id, outcome.binding_id, outcome.refresh_generation,
+              outcome.binding_generation, outcome.derivation_version,
+              outcome.derivation_kid, outcome.recovery_expires_at,
+              outcome.recovery_expires_at > clock_timestamp() AS recovery_active,
+              session.refresh_hash AS session_refresh_hash,
+              session.current_derivation_kid AS session_derivation_kid,
+              session.current_binding_id AS session_binding_id,
+              session.current_binding_generation AS session_binding_generation,
+              session.expires_at AS session_expires_at,
+              session.transport_class,
+              session.revoked_at IS NULL AND session.reuse_detected_at IS NULL
+                AND session.expires_at > clock_timestamp() AS session_active,
+              history.family_id AS history_family_id,
+              history.token_hash AS history_token_hash,
+              history.derivation_kid AS history_derivation_kid,
+              history.binding_id AS history_binding_id,
+              history.binding_generation AS history_binding_generation,
+              history.state AS history_state,
+              binding.current_hash AS binding_current_hash,
+              binding.current_kid AS binding_current_kid,
+              binding.issued_at AS binding_issued_at,
+              binding.absolute_expires_at AS binding_absolute_expires_at,
+              binding.proof_class AS binding_proof_class,
+              binding.revoked_at IS NULL
+                AND binding.absolute_expires_at > clock_timestamp() AS binding_active,
+              user_record.public_handle, user_record.status AS user_status,
+              user_record.deleted_at IS NULL AS user_active,
+              user_record.phone_verified_at, user_record.restriction_flags,
+              device.risk_state AS device_risk_state
+       FROM identity.web_session_completion_outcomes AS outcome
+       JOIN identity.sessions AS session ON session.id = outcome.session_id
+       JOIN identity.session_refresh_history AS history
+         ON history.session_id = session.id
+        AND history.generation = outcome.refresh_generation
+       JOIN identity.device_bindings AS binding ON binding.id = outcome.binding_id
+       JOIN identity.users AS user_record ON user_record.id = outcome.user_id
+       JOIN identity.devices AS device
+         ON device.id = outcome.device_id AND device.user_id = outcome.user_id
+       WHERE outcome.challenge_id = $1
+       FOR UPDATE OF session, history, binding, user_record, device`,
+      [stored.challenge_id],
+    );
+    const row = result.rows[0];
+    const key = configuration().REFRESH_TOKEN_DERIVATION_KEYS.getKey(stored.derivation_kid);
+    if (!row || !key) this.throwWebCompletionUnavailable();
+    const requestDigest = code === undefined
+      ? null
+      : completionRequestDigest({
+          key,
+          kid: stored.derivation_kid,
+          attemptId,
+          challengeId: input.challengeId,
+          code,
+          deviceId: input.deviceId,
+          bindingId: input.binding.bindingId,
+          bindingGeneration: input.binding.generation,
+          proof: input.binding.proof,
+        });
+    const bindingHash = persistentDeviceBindingHash({
+      proof: input.binding.proof,
+      kid: row.binding_current_kid,
+      userId: row.user_id,
+      deviceId: row.device_id,
+      sessionId: row.session_id,
+      bindingId: row.binding_id,
+      generation: 0,
+    });
+    if (!bindingHash) this.throwWebCompletionUnavailable();
+    const refreshSecret = deriveInitialWebRefreshSecret({
+      key,
+      kid: stored.derivation_kid,
+      attemptHash,
+      challengeId: row.challenge_id,
+      userId: row.user_id,
+      deviceId: row.device_id,
+      sessionId: row.session_id,
+      familyId: row.family_id,
+      bindingId: row.binding_id,
+      generation: 0,
+      transportClass: 'web_bff',
+    });
+    const refreshHash = this.refreshHash(refreshSecret);
+    const refreshGeneration = this.generation(row.refresh_generation);
+    const bindingGeneration = this.generation(row.binding_generation);
+    if (
+      row.challenge_id !== input.challengeId ||
+      row.device_id !== input.deviceId ||
+      row.binding_id !== input.binding.bindingId ||
+      row.user_status !== 'active' ||
+      !row.user_active ||
+      row.restriction_flags.includes('loginBlocked') ||
+      row.device_risk_state === 'blocked' ||
+      row.derivation_version !== 'v1' ||
+      (requireRecoveryActive && !row.recovery_active) ||
+      !this.sameHash(row.attempt_hash, attemptHash) ||
+      (requestDigest !== null && !this.sameHash(row.request_digest, requestDigest)) ||
+      refreshGeneration !== 0 ||
+      bindingGeneration !== 0 ||
+      row.transport_class !== 'web_bff' ||
+      !row.session_active ||
+      row.session_derivation_kid !== row.derivation_kid ||
+      row.session_binding_id !== row.binding_id ||
+      this.generation(row.session_binding_generation) !== 0 ||
+      row.history_family_id !== row.family_id ||
+      row.history_derivation_kid !== row.derivation_kid ||
+      row.history_binding_id !== row.binding_id ||
+      this.generation(row.history_binding_generation) !== 0 ||
+      row.history_state !== 'current' ||
+      row.binding_current_kid !== row.derivation_kid ||
+      row.binding_proof_class !== 'persistent' ||
+      !row.binding_active ||
+      !this.sameHash(row.binding_current_hash, bindingHash) ||
+      !this.sameHash(row.session_refresh_hash, refreshHash) ||
+      !this.sameHash(row.history_token_hash, refreshHash) ||
+      !this.sameHash(row.session_refresh_hash, row.history_token_hash)
+    ) {
+      this.throwWebCompletionUnavailable();
+    }
+
+    return {
+      kind: 'completed',
+      material: await this.webCompletionMaterial(client, {
+        user: {
+          id: row.user_id,
+          public_handle: row.public_handle,
+          status: row.user_status,
+          phone_verified_at: row.phone_verified_at,
+          restriction_flags: row.restriction_flags,
+        },
+        sessionId: row.session_id,
+        familyId: row.family_id,
+        refreshSecret,
+        sessionExpiresAt: row.session_expires_at,
+        bindingId: row.binding_id,
+        bindingIssuedAt: row.binding_issued_at,
+        bindingExpiresAt: row.binding_absolute_expires_at,
+      }),
+    };
+  }
+
+  private async webCompletionMaterial(
+    client: PoolClient,
+    input: {
+      user: UserRow;
+      sessionId: string;
+      familyId: string;
+      refreshSecret: string;
+      sessionExpiresAt: Date;
+      bindingId: string;
+      bindingIssuedAt: Date;
+      bindingExpiresAt: Date;
+    },
+  ): Promise<WebSessionCompletionMaterial> {
+    const expiresAt = new Date(Date.now() + 15 * 60_000);
+    const admin = await client.query<{ roles: string[] }>(
+      `SELECT roles FROM admin.admin_users
+       WHERE identity_user_id = $1 AND disabled_at IS NULL AND mfa_enrolled_at IS NOT NULL`,
+      [input.user.id],
+    );
+    const roles = admin.rows[0] ? ['operator', ...admin.rows[0].roles] : ['user'];
+    const accessToken = await new SignJWT({
+      sid: input.sessionId,
+      phoneVerified: input.user.phone_verified_at !== null,
+      restrictions: input.user.restriction_flags,
+      roles,
+    })
+      .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+      .setIssuer('spott-api')
+      .setAudience('spott-clients')
+      .setSubject(input.user.id)
+      .setJti(randomBytes(16).toString('base64url'))
+      .setIssuedAt()
+      .setExpirationTime(Math.floor(expiresAt.getTime() / 1_000))
+      .sign(new TextEncoder().encode(configuration().ACCESS_TOKEN_SECRET));
+    return {
+      accessToken,
+      accessTokenExpiresAt: expiresAt.toISOString(),
+      refreshToken: `s2.${input.sessionId}.0.${input.refreshSecret}`,
+      refreshGeneration: 0,
+      sessionId: input.sessionId,
+      refreshFamilyId: input.familyId,
+      refreshTokenExpiresAt: input.sessionExpiresAt.toISOString(),
+      transportClass: 'web_bff',
+      bindingId: input.bindingId,
+      bindingGeneration: 0,
+      bindingIssuedAt: input.bindingIssuedAt.toISOString(),
+      bindingAbsoluteExpiresAt: input.bindingExpiresAt.toISOString(),
+      user: {
+        id: input.user.id,
+        publicHandle: input.user.public_handle,
+        phoneVerified: input.user.phone_verified_at !== null,
+        restrictions: input.user.restriction_flags,
+      },
+    };
+  }
+
+  private throwWebCompletionUnavailable(): never {
+    throw new DomainError(
+      'AUTH_CHALLENGE_UNAVAILABLE',
+      '本次登录无法继续，请重新获取验证码。',
+      401,
+      { retryable: false },
+    );
+  }
+
+  private throwWebCompletionDispositionAuthorityInvalid(): never {
+    throw new DomainError(
+      'WEB_SESSION_COMPLETION_AUTHORITY_INVALID',
+      '登录完成确认无效，请重新开始登录。',
+      401,
+      { retryable: false },
+    );
+  }
+
+  private throwWebCompletionNotReady(): never {
+    throw new DomainError(
+      'WEB_SESSION_COMPLETION_NOT_READY',
+      '登录完成结果尚未就绪，请重新完成登录。',
+      409,
+      { retryable: false },
+    );
+  }
+
+  private throwWebCompletionDiscarded(): never {
+    throw new DomainError(
+      'WEB_SESSION_COMPLETION_DISCARDED',
+      '本次登录完成结果已被安全丢弃，请重新开始登录。',
+      409,
+      { retryable: false },
+    );
   }
 
   private platformForTransport(transportClass: SessionTransportClass): 'ios' | 'web' | 'ops' {
@@ -2135,6 +3647,7 @@ export class AuthService {
        JOIN identity.users AS user_record
          ON user_record.id = session.user_id AND user_record.deleted_at IS NULL
        WHERE session.id = $1
+         AND ${webSessionCompletionAcceptedSQL}
        FOR UPDATE OF session, device`,
       [sessionId],
     );
@@ -2361,6 +3874,12 @@ export class AuthService {
     if (value === null) return null;
     const parsed = typeof value === 'number' ? value : Number(value);
     return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+  }
+
+  private canonicalGeneration(value: string | number | null): number | null {
+    const generation = this.generation(value);
+    if (generation === null) return null;
+    return typeof value === 'string' && value !== String(generation) ? null : generation;
   }
 
   private matchesCode(expected: Buffer, suppliedCode: string): boolean {

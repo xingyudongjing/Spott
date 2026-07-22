@@ -10,6 +10,7 @@ const maximumEnvelopeLength = 4_096;
 
 const refreshContext = "spott:web-refresh-cookie";
 const deviceBindingContext = "spott:web-device-binding-cookie";
+const loginIntentContext = "spott:web-login-intent-cookie";
 const migrationIntentContext = "spott:web-migration-intent-cookie";
 
 export interface RefreshEnvelopeClaims {
@@ -50,11 +51,41 @@ export interface MigrationIntentEnvelopeClaims {
   readonly expiresAt: number;
 }
 
-export interface LogoutIntent {
-  readonly version: "v1";
+export interface LoginIntentEnvelopeClaims {
+  readonly purpose: "login_intent";
+  readonly audience: string;
+  readonly phase: "prepare" | "reconcile";
+  readonly challengeId: string;
+  readonly deviceId: string;
+  readonly attemptId: string;
+  readonly sessionId: string | null;
+  readonly bindingId: string;
+  readonly bindingGeneration: 0;
+  readonly bindingSecret: string;
+  readonly issuedAt: number;
+  readonly expiresAt: number;
+}
+
+export type LogoutIntent =
+  | {
+      readonly version: "v1";
+      readonly epoch: number;
+      readonly scope: "current" | "all";
+      readonly sessionHint?: string;
+    }
+  | {
+      readonly version: "v2";
+      readonly epoch: number;
+      readonly scope: "current";
+      readonly sessionHint: string;
+      readonly preservedSwitchChallengeId: string;
+    };
+
+export interface LogoutIntentInput {
   readonly epoch: number;
   readonly scope: "current" | "all";
   readonly sessionHint?: string;
+  readonly preservedSwitchChallengeId?: string;
 }
 
 const refreshKeys = [
@@ -68,6 +99,10 @@ const deviceBindingKeys = [
 ] as const;
 const migrationIntentKeys = [
   "purpose", "audience", "intentId", "attemptId", "temporarySecret", "issuedAt", "expiresAt",
+] as const;
+const loginIntentKeys = [
+  "purpose", "audience", "phase", "challengeId", "deviceId", "attemptId", "sessionId", "bindingId",
+  "bindingGeneration", "bindingSecret", "issuedAt", "expiresAt",
 ] as const;
 
 function assertCookieValue(value: string): void {
@@ -87,6 +122,12 @@ function clearCookie(name: string, httpOnly: boolean): string {
 
 export const issueRefreshCookie = (value: string): string => issueCookie("__Host-spott_refresh", value, 2_592_000, true);
 export const issueDeviceBindingCookie = (value: string): string => issueCookie("__Host-spott_device_binding", value, 2_678_400, true);
+export function issueLoginIntentCookie(value: string, maxAge = 600): string {
+  if (!Number.isSafeInteger(maxAge) || maxAge <= 0 || maxAge > 2_678_400) {
+    throw new Error("Login-intent Cookie Max-Age is invalid");
+  }
+  return issueCookie("__Host-spott_login_intent", value, maxAge, true);
+}
 export const issueMigrationIntentCookie = (value: string): string => issueCookie("__Host-spott_migration_intent", value, 600, true);
 export function issueLogoutIntentCookie(value: string): string {
   if (parseLogoutIntent(value) === null) throw new Error("Logout intent Cookie value is invalid");
@@ -94,8 +135,19 @@ export function issueLogoutIntentCookie(value: string): string {
 }
 export const clearRefreshCookie = (): string => clearCookie("__Host-spott_refresh", true);
 export const clearDeviceBindingCookie = (): string => clearCookie("__Host-spott_device_binding", true);
+export const clearLoginIntentCookie = (): string => clearCookie("__Host-spott_login_intent", true);
 export const clearMigrationIntentCookie = (): string => clearCookie("__Host-spott_migration_intent", true);
 export const clearLogoutIntentCookie = (): string => clearCookie("__Host-spott_logout_intent", false);
+
+export function terminalSessionCookieClears(): readonly string[] {
+  return [
+    clearRefreshCookie(),
+    clearDeviceBindingCookie(),
+    clearLoginIntentCookie(),
+    clearMigrationIntentCookie(),
+    clearLogoutIntentCookie(),
+  ];
+}
 
 function validSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -173,8 +225,11 @@ function decodeEnvelope(
 ): Record<string, unknown> | null {
   if (typeof value !== "string" || value.length === 0 || value.length > maximumEnvelopeLength) return null;
   const parts = value.split(".");
-  if (parts.length !== 4) return null;
-  const [version, kid, encodedPayload, encodedMac] = parts;
+  if (parts.length < 4) return null;
+  const version = parts[0];
+  const encodedPayload = parts.at(-2);
+  const encodedMac = parts.at(-1);
+  const kid = parts.slice(1, -2).join(".");
   if (
     version !== "v1"
     || !kid
@@ -265,6 +320,29 @@ function validateMigrationIntent(
     && validTimes(value.issuedAt, value.expiresAt, now);
 }
 
+function validateLoginIntent(
+  value: Record<string, unknown>,
+  config: SessionServerConfig,
+  now?: number,
+  requireCanonicalOrder = true,
+): boolean {
+  return hasExactKeys(value, loginIntentKeys, requireCanonicalOrder)
+    && value.purpose === "login_intent"
+    && value.audience === config.canonicalOrigin
+    && (value.phase === "prepare" || value.phase === "reconcile")
+    && validUUID(value.challengeId)
+    && validUUID(value.deviceId)
+    && validUUID(value.attemptId)
+    && (
+      (value.phase === "prepare" && value.sessionId === null)
+      || (value.phase === "reconcile" && validUUID(value.sessionId))
+    )
+    && validUUID(value.bindingId)
+    && value.bindingGeneration === 0
+    && validSecret(value.bindingSecret)
+    && validTimes(value.issuedAt, value.expiresAt, now);
+}
+
 export function encodeRefreshEnvelope(claims: RefreshEnvelopeClaims, config: SessionServerConfig): string {
   const value = claims as unknown as Record<string, unknown>;
   if (!validateRefresh(value, config, undefined, false)) throw new Error("Refresh Cookie claims are invalid");
@@ -315,6 +393,25 @@ export function encodeMigrationIntentEnvelope(claims: MigrationIntentEnvelopeCla
   }, config);
 }
 
+export function encodeLoginIntentEnvelope(claims: LoginIntentEnvelopeClaims, config: SessionServerConfig): string {
+  const value = claims as unknown as Record<string, unknown>;
+  if (!validateLoginIntent(value, config, undefined, false)) throw new Error("Login-intent Cookie claims are invalid");
+  return encodeEnvelope(loginIntentContext, {
+    purpose: claims.purpose,
+    audience: claims.audience,
+    phase: claims.phase,
+    challengeId: claims.challengeId,
+    deviceId: claims.deviceId,
+    attemptId: claims.attemptId,
+    sessionId: claims.sessionId,
+    bindingId: claims.bindingId,
+    bindingGeneration: claims.bindingGeneration,
+    bindingSecret: claims.bindingSecret,
+    issuedAt: claims.issuedAt,
+    expiresAt: claims.expiresAt,
+  }, config);
+}
+
 export function parseRefreshEnvelope(value: unknown, config: SessionServerConfig, now = Date.now()): RefreshEnvelopeClaims | null {
   const decoded = decodeEnvelope(value, refreshContext, config);
   return decoded !== null && validateRefresh(decoded, config, now)
@@ -336,12 +433,27 @@ export function parseMigrationIntentEnvelope(value: unknown, config: SessionServ
     : null;
 }
 
-export function encodeLogoutIntent(input: Omit<LogoutIntent, "version">): string {
+export function parseLoginIntentEnvelope(value: unknown, config: SessionServerConfig, now = Date.now()): LoginIntentEnvelopeClaims | null {
+  const decoded = decodeEnvelope(value, loginIntentContext, config);
+  return decoded !== null && validateLoginIntent(decoded, config, now)
+    ? Object.freeze(decoded) as unknown as LoginIntentEnvelopeClaims
+    : null;
+}
+
+export function encodeLogoutIntent(input: LogoutIntentInput): string {
   if (!validSafeInteger(input.epoch) || (input.scope !== "current" && input.scope !== "all")) {
     throw new Error("Logout intent is invalid");
   }
   if (input.sessionHint !== undefined && !validUUID(input.sessionHint)) {
     throw new Error("Logout intent session hint is invalid");
+  }
+  if (input.preservedSwitchChallengeId !== undefined) {
+    if (
+      input.scope !== "current"
+      || input.sessionHint === undefined
+      || !validUUID(input.preservedSwitchChallengeId)
+    ) throw new Error("Logout intent switch identity is invalid");
+    return `v2.${input.epoch}.current.${input.sessionHint}.${input.preservedSwitchChallengeId}`;
   }
   return `v1.${input.epoch}.${input.scope}${input.sessionHint === undefined ? "" : `.${input.sessionHint}`}`;
 }
@@ -349,11 +461,28 @@ export function encodeLogoutIntent(input: Omit<LogoutIntent, "version">): string
 export function parseLogoutIntent(value: unknown): LogoutIntent | null {
   if (typeof value !== "string" || value.length === 0 || value.length > 128) return null;
   const parts = value.split(".");
-  if (parts.length !== 3 && parts.length !== 4) return null;
-  const [version, encodedEpoch, scope, sessionHint] = parts;
-  if (version !== "v1" || !/^(0|[1-9][0-9]*)$/u.test(encodedEpoch ?? "")) return null;
+  const [version, encodedEpoch, scope, sessionHint, preservedSwitchChallengeId] = parts;
+  if (!/^(0|[1-9][0-9]*)$/u.test(encodedEpoch ?? "")) return null;
   const epoch = Number(encodedEpoch);
-  if (!validSafeInteger(epoch) || (scope !== "current" && scope !== "all")) return null;
-  if (sessionHint !== undefined && !validUUID(sessionHint)) return null;
-  return Object.freeze({ version: "v1", epoch, scope, sessionHint });
+  if (!validSafeInteger(epoch)) return null;
+  if (version === "v1") {
+    if (parts.length !== 3 && parts.length !== 4) return null;
+    if (scope !== "current" && scope !== "all") return null;
+    if (sessionHint !== undefined && !validUUID(sessionHint)) return null;
+    return Object.freeze({ version: "v1", epoch, scope, sessionHint });
+  }
+  if (
+    version !== "v2"
+    || parts.length !== 5
+    || scope !== "current"
+    || !validUUID(sessionHint)
+    || !validUUID(preservedSwitchChallengeId)
+  ) return null;
+  return Object.freeze({
+    version: "v2",
+    epoch,
+    scope,
+    sessionHint,
+    preservedSwitchChallengeId,
+  });
 }

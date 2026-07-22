@@ -349,7 +349,7 @@ describe("resumable registration flow", () => {
     apiRequestMock.mockClear();
 
     mocks.session = { accessToken: "access-b", user: { id: "user-b", phoneVerified: true } };
-    window.dispatchEvent(new StorageEvent("storage", { key: "spott.web.session.v1" }));
+    window.dispatchEvent(new StorageEvent("storage", { key: "spott.web.session-metadata.v1" }));
     fireEvent.submit(oldForm);
 
     await waitFor(() => {

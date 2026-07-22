@@ -46,6 +46,8 @@ enum GroupJoinReadiness: Equatable, Sendable {
 
 struct GroupsHomeView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.locale) private var locale
     @State private var groups: [GroupSummary] = []
@@ -59,22 +61,32 @@ struct GroupsHomeView: View {
     private var usesVerticalActions: Bool {
         GroupCommunityLayout.usesVerticalActions(for: dynamicTypeSize)
     }
+    private var displayAccommodations: GroupCommunityDisplayAccommodations {
+        GroupCommunityDisplayAccommodations(
+            systemReduceTransparency: reduceTransparency,
+            systemIncreasedContrast: colorSchemeContrast == .increased
+        )
+    }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 20) {
-                header
-                controls
-                if model.session == nil {
-                    signedOutCard
+        ZStack {
+            GroupCommunityBackdrop(accommodations: displayAccommodations)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    header
+                    controls
+                    content
+                    if model.session == nil {
+                        signedOutCard
+                    }
                 }
-                content
+                .padding(.horizontal, SpottMetric.pageInset)
+                .padding(.top, 14)
+                .padding(.bottom, 36)
             }
-            .padding(.horizontal, SpottMetric.pageInset)
-            .padding(.top, 18)
-            .padding(.bottom, 36)
+            .safeAreaPadding(.top, 8)
         }
-        .background(SpottColor.canvas.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .task(id: loadID) {
             if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -103,59 +115,83 @@ struct GroupsHomeView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("COMMUNITIES")
-                .font(.caption2.weight(.bold).monospaced())
-                .tracking(1.6)
-                .foregroundStyle(SpottColor.coral)
-            Text("一次见面，\n可以有很长的以后。")
-                .font(.largeTitle.weight(.bold))
+        VStack(alignment: .leading, spacing: 7) {
+            Text(copy.text("找到你的社群"))
+                .font(.system(.largeTitle, design: .rounded, weight: .bold))
                 .fontDesign(.rounded)
+                .foregroundStyle(SpottColor.ink)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("发现公开社群，关注共同兴趣，也把一次活动延续成长期关系。")
-                .font(.subheadline)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("community.header.title")
+            Text(copy.text("找到同好，也找到下一次见面的理由。"))
+                .font(.body)
                 .fontDesign(.rounded)
                 .foregroundStyle(SpottColor.muted)
-                .lineSpacing(3)
+                .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("community.header.subtitle")
         }
+        .padding(.top, 2)
     }
 
     private var controls: some View {
-        GroupGlassCluster(spacing: 12) {
-            VStack(spacing: 12) {
-                scopeControlPanel
+        VStack(spacing: 12) {
+            scopeControlPanel
 
-                HStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(SpottColor.twilight)
-                    TextField("搜索社群名称、兴趣或地区", text: $query)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    if !query.isEmpty {
-                        Button {
-                            query = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(SpottColor.muted)
-                                .frame(
-                                    minWidth: GroupCommunityLayout.minimumTouchTarget,
-                                    minHeight: GroupCommunityLayout.minimumTouchTarget
-                                )
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("清除搜索")
-                    }
-                }
-                .padding(.horizontal, 16)
-                .frame(minHeight: 52)
-                .spottGlassPanel(
-                    shape: RoundedRectangle(cornerRadius: SpottMetric.controlRadius, style: .continuous),
-                    interactive: true
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(SpottColor.twilightDeep)
+                    .accessibilityHidden(true)
+                TextField(
+                    copy.text("搜索社群名称、兴趣或地区"),
+                    text: $query,
+                    prompt: Text(copy.text("搜索社群名称、兴趣或地区"))
+                        .foregroundStyle(SpottColor.muted)
                 )
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .accessibilityLabel(copy.text("搜索社群名称、兴趣或地区"))
+                .accessibilityIdentifier("community.search")
+                if !query.isEmpty {
+                    Button {
+                        query = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(SpottColor.muted)
+                            .frame(
+                                minWidth: GroupCommunityLayout.minimumTouchTarget,
+                                minHeight: GroupCommunityLayout.minimumTouchTarget
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(copy.text("清除搜索"))
+                }
             }
+            .padding(.leading, 17)
+            .padding(.trailing, query.isEmpty ? 17 : 4)
+            .frame(minHeight: 56)
+            .background(
+                SpottColor.surface,
+                in: RoundedRectangle(cornerRadius: SpottMetric.controlRadius, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: SpottMetric.controlRadius, style: .continuous)
+                    .stroke(
+                        displayAccommodations.increasedContrast
+                            ? SpottColor.ink.opacity(0.42)
+                            : SpottColor.ink.opacity(0.10),
+                        lineWidth: displayAccommodations.increasedContrast ? 1.5 : 1
+                    )
+            }
+            .shadow(
+                color: displayAccommodations.reduceTransparency
+                    ? .clear
+                    : SpottColor.ink.opacity(0.045),
+                radius: 12,
+                y: 5
+            )
         }
     }
 
@@ -198,9 +234,13 @@ struct GroupsHomeView: View {
                     NavigationLink {
                         GroupDetailView(groupID: group.id)
                     } label: {
-                        CommunityCard(group: group)
+                        CommunityCard(
+                            group: group,
+                            increasedContrast: displayAccommodations.increasedContrast
+                        )
                     }
                     .buttonStyle(.plain)
+                    .accessibilityHint(copy.text("查看社群详情"))
                 }
             }
         }
@@ -290,7 +330,7 @@ struct GroupsHomeView: View {
         if GroupCommunityUITestFixture.isEnabled {
             loading = false
             error = nil
-            groups = GroupCommunityUITestFixture.groups
+            groups = GroupCommunityUITestFixture.localizedDemoGroups(locale: locale)
             return
         }
 #endif
@@ -343,9 +383,10 @@ struct GroupsHomeView: View {
                 }
             }
             .padding(6)
-            .spottGlassPanel(
+            .groupAdaptiveControlSurface(
                 shape: RoundedRectangle(cornerRadius: SpottMetric.controlRadius, style: .continuous),
-                interactive: true
+                reduceTransparency: displayAccommodations.reduceTransparency,
+                increasedContrast: displayAccommodations.increasedContrast
             )
         } else {
             HStack(spacing: 8) {
@@ -357,12 +398,22 @@ struct GroupsHomeView: View {
                 }
             }
             .padding(5)
-            .spottGlassPanel(shape: Capsule(), interactive: true)
+            .groupAdaptiveControlSurface(
+                shape: Capsule(),
+                reduceTransparency: displayAccommodations.reduceTransparency,
+                increasedContrast: displayAccommodations.increasedContrast
+            )
         }
     }
 
     private func scopeButton(_ item: GroupDirectoryScope) -> some View {
-        Button {
+        let isSelected = scope == item
+        let colors = GroupCommunityControlPalette.scope(
+            isSelected: isSelected,
+            increasedContrast: displayAccommodations.increasedContrast
+        )
+
+        return Button {
             select(item)
         } label: {
             Label(copy.scopeTitle(item), systemImage: item == .discover ? "sparkles" : "person.2.fill")
@@ -371,7 +422,7 @@ struct GroupsHomeView: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity)
-                .foregroundStyle(scope == item ? SpottColor.twilightDeep : SpottColor.muted)
+                .foregroundStyle(colors.foreground)
         }
         .buttonStyle(.plain)
         .frame(
@@ -379,12 +430,25 @@ struct GroupsHomeView: View {
             minHeight: GroupCommunityLayout.minimumTouchTarget
         )
         .background(
-            scope == item ? SpottColor.twilight.opacity(0.13) : Color.clear,
+            colors.background,
             in: Capsule()
         )
+        .overlay {
+            if isSelected {
+                Capsule()
+                    .stroke(
+                        displayAccommodations.increasedContrast
+                            ? SpottColor.canvas.opacity(0.72)
+                            : SpottColor.twilight.opacity(0.18),
+                        lineWidth: displayAccommodations.increasedContrast ? 1.5 : 1
+                    )
+            }
+        }
         .contentShape(Capsule())
         .accessibilityLabel(copy.scopeTitle(item))
         .accessibilityIdentifier("community.scope.\(item.rawValue)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityRemoveTraits(isSelected ? [] : .isSelected)
     }
 
     @ViewBuilder
@@ -426,6 +490,7 @@ private struct CommunityCard: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.locale) private var locale
     let group: GroupSummary
+    var increasedContrast = false
 
     private var copy: GroupCommunityCopy { GroupCommunityCopy(locale: locale) }
     private var usesVerticalMetadata: Bool {
@@ -439,8 +504,15 @@ private struct CommunityCard: View {
         cardContent
             .background(SpottColor.surface)
             .clipShape(cardShape)
-            .overlay(cardShape.stroke(SpottColor.ink.opacity(0.06), lineWidth: 1))
-            .shadow(color: SpottColor.ink.opacity(0.05), radius: 14, y: 6)
+            .overlay(
+                cardShape.stroke(
+                    increasedContrast
+                        ? SpottColor.ink.opacity(0.44)
+                        : SpottColor.ink.opacity(0.10),
+                    lineWidth: increasedContrast ? 1.5 : 1
+                )
+            )
+            .shadow(color: SpottColor.ink.opacity(0.09), radius: 22, y: 10)
             .contentShape(cardShape)
     }
 
@@ -450,36 +522,21 @@ private struct CommunityCard: View {
 
     private var cardContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ZStack(alignment: .bottomLeading) {
-                LinearGradient(colors: palette, startPoint: .topLeading, endPoint: .bottomTrailing)
-                Circle()
-                    .fill(Color.white.opacity(0.58))
-                    .frame(width: 160, height: 160)
-                    .offset(x: 215, y: -56)
-                VStack(alignment: .leading, spacing: 7) {
-                    Image(systemName: groupSymbol)
-                        .font(.title2.weight(.semibold))
-                        .foregroundStyle(SpottColor.twilightDeep)
-                    Text(verbatim: group.name)
-                        .font(.title3.weight(.bold))
-                        .fontDesign(.rounded)
-                        .foregroundStyle(SpottColor.ink)
-                        .lineLimit(usesVerticalMetadata ? nil : 2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(18)
-            }
-            .frame(
-                minHeight: GroupCommunityLayout.cardCoverMinimumHeight(for: dynamicTypeSize)
-            )
+            artwork
 
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(verbatim: group.name)
+                    .font(.system(.title2, design: .rounded, weight: .bold))
+                    .foregroundStyle(SpottColor.ink)
+                    .lineLimit(usesVerticalMetadata ? nil : 2)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 if !group.description.isEmpty {
                     Text(verbatim: group.description)
-                        .font(.subheadline)
+                        .font(.body)
                         .fontDesign(.rounded)
                         .foregroundStyle(SpottColor.muted)
-                        .lineLimit(usesVerticalMetadata ? nil : 2)
+                        .lineLimit(usesVerticalMetadata ? nil : 3)
                         .lineSpacing(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -507,28 +564,89 @@ private struct CommunityCard: View {
                         .accessibilityElement(children: .contain)
                     }
                 }
-                if usesVerticalMetadata {
-                    VStack(alignment: .leading, spacing: 9) {
+
+                Divider()
+                    .overlay(SpottColor.divider)
+
+                metadata
+            }
+            .padding(18)
+        }
+    }
+
+    private var artwork: some View {
+        ZStack(alignment: .bottomLeading) {
+            LinearGradient(
+                colors: palette,
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            Circle()
+                .stroke(Color.white.opacity(0.24), lineWidth: 1.5)
+                .frame(width: 250, height: 250)
+                .offset(x: 154, y: -78)
+            Circle()
+                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                .frame(width: 176, height: 176)
+                .offset(x: 94, y: 54)
+            RoundedRectangle(cornerRadius: 64, style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 1.5)
+                .frame(width: 290, height: 96)
+                .rotationEffect(.degrees(-16))
+                .offset(x: 46, y: -18)
+
+            Image(systemName: groupSymbol)
+                .font(.system(size: 31, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 62, height: 62)
+                .background(Color.black.opacity(0.13), in: RoundedRectangle(cornerRadius: 19, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 19, style: .continuous)
+                        .stroke(Color.white.opacity(0.28), lineWidth: 1)
+                }
+                .padding(18)
+        }
+        .frame(
+            maxWidth: .infinity,
+            minHeight: GroupCommunityLayout.cardCoverMinimumHeight(for: dynamicTypeSize),
+            maxHeight: GroupCommunityLayout.cardCoverMinimumHeight(for: dynamicTypeSize),
+            alignment: .bottomLeading
+        )
+        .clipped()
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var metadata: some View {
+        if usesVerticalMetadata {
+            VStack(alignment: .leading, spacing: 10) {
+                memberCountLabel
+                regionLabel
+                GroupStatusPill(group: group)
+            }
+        } else {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    memberCountLabel
+                    regionLabel
+                    Spacer(minLength: 0)
+                    GroupStatusPill(group: group)
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 16) {
                         memberCountLabel
                         regionLabel
-                        GroupStatusPill(group: group)
                     }
-                } else {
-                    HStack(spacing: 10) {
-                        memberCountLabel
-                        regionLabel
-                        Spacer(minLength: 0)
-                        GroupStatusPill(group: group)
-                    }
+                    GroupStatusPill(group: group)
                 }
             }
-            .padding(17)
         }
     }
 
     private var memberCountLabel: some View {
         Label("\(group.memberCount) / \(group.capacity)", systemImage: "person.2")
-            .font(.caption.weight(.semibold))
+            .font(.subheadline.weight(.semibold))
             .fontDesign(.rounded)
             .foregroundStyle(SpottColor.muted)
     }
@@ -538,30 +656,42 @@ private struct CommunityCard: View {
             Text(copy.regionName(group.regionId))
                 .accessibilityIdentifier("community.fixture.region")
         } icon: {
-            Image(systemName: "mappin.and.ellipse")
+            Image(systemName: "mappin")
         }
-        .font(.caption.weight(.semibold))
+        .font(.subheadline.weight(.semibold))
         .fontDesign(.rounded)
         .foregroundStyle(SpottColor.muted)
     }
 
     private func tagPill(_ tag: String) -> some View {
-        Text(verbatim: "#\(tag)")
+        let colors = GroupCommunityControlPalette.tag(
+            increasedContrast: increasedContrast
+        )
+
+        return Text(verbatim: "#\(tag)")
             .font(.caption.weight(.semibold))
-            .foregroundStyle(SpottColor.twilightDeep)
+            .foregroundStyle(colors.foreground)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background(SpottColor.twilightPale, in: Capsule())
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(colors.background, in: Capsule())
+            .overlay {
+                if increasedContrast {
+                    Capsule()
+                        .stroke(SpottColor.canvas.opacity(0.72), lineWidth: 1.5)
+                }
+            }
             .accessibilityIdentifier("community.fixture.tag.\(tag)")
     }
 
     private var palette: [Color] {
-        let seed = abs(group.id.uuidString.hashValue) % 3
-        switch seed {
-        case 0: return [Color(red: 0.86, green: 0.96, blue: 0.93), Color(red: 0.91, green: 0.95, blue: 1)]
-        case 1: return [Color(red: 0.94, green: 0.91, blue: 1), Color(red: 1, green: 0.93, blue: 0.90)]
-        default: return [Color(red: 1, green: 0.94, blue: 0.84), Color(red: 0.91, green: 0.97, blue: 0.92)]
+        switch group.categoryId {
+        case "outdoor", "sports":
+            [SpottColor.twilightDeep, SpottColor.twilight, SpottColor.mint]
+        case "family", "culture":
+            [SpottColor.coral, SpottColor.twilight, SpottColor.twilightDeep]
+        default:
+            [SpottColor.twilightDeep, SpottColor.coral, SpottColor.amber]
         }
     }
 
@@ -585,12 +715,13 @@ private struct GroupStatusPill: View {
     private var copy: GroupCommunityCopy { GroupCommunityCopy(locale: locale) }
 
     var body: some View {
-        Text(title)
-            .font(.caption2.weight(.bold))
+        Label(title, systemImage: symbol)
+            .font(.caption.weight(.bold))
             .foregroundStyle(color)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
-            .background(color.opacity(0.1), in: Capsule())
+            .padding(.horizontal, 11)
+            .frame(minHeight: 36)
+            .background(color.opacity(0.14), in: Capsule())
+            .overlay(Capsule().stroke(color.opacity(0.18), lineWidth: 1))
             .accessibilityIdentifier("community.fixture.status")
     }
 
@@ -609,6 +740,14 @@ private struct GroupStatusPill: View {
         if group.membershipStatus == "pending" { return SpottColor.amber }
         if group.membershipStatus != nil { return SpottColor.mint }
         return group.memberCount >= group.capacity ? SpottColor.amber : SpottColor.twilight
+    }
+
+    private var symbol: String {
+        if group.status == "closing" { return "exclamationmark.triangle.fill" }
+        if group.membershipStatus == "pending" { return "clock.fill" }
+        if group.membershipStatus != nil { return "checkmark.circle.fill" }
+        if group.memberCount >= group.capacity { return "person.2.slash" }
+        return group.joinMode == .approval ? "person.badge.clock" : "person.badge.plus"
     }
 }
 
@@ -2956,23 +3095,67 @@ private struct GroupContentCard<Content: View>: View {
     }
 }
 
-private struct GroupGlassCluster<Content: View>: View {
-    let spacing: CGFloat
-    @ViewBuilder let content: Content
+private struct GroupCommunityBackdrop: View {
+    let accommodations: GroupCommunityDisplayAccommodations
 
-    init(spacing: CGFloat, @ViewBuilder content: () -> Content) {
-        self.spacing = spacing
-        self.content = content()
-    }
-
-    @ViewBuilder
     var body: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: spacing) {
-                content
+        ZStack {
+            SpottColor.canvas
+
+            if !accommodations.increasedContrast {
+                RadialGradient(
+                    colors: [
+                        SpottColor.twilight.opacity(
+                            accommodations.reduceTransparency ? 0.045 : 0.09
+                        ),
+                        .clear,
+                    ],
+                    center: .topTrailing,
+                    startRadius: 12,
+                    endRadius: 280
+                )
+                RadialGradient(
+                    colors: [
+                        SpottColor.coral.opacity(
+                            accommodations.reduceTransparency ? 0.025 : 0.055
+                        ),
+                        .clear,
+                    ],
+                    center: .bottomLeading,
+                    startRadius: 20,
+                    endRadius: 340
+                )
             }
+        }
+        .ignoresSafeArea()
+        .accessibilityHidden(true)
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func groupAdaptiveControlSurface<S: Shape>(
+        shape: S,
+        reduceTransparency: Bool,
+        increasedContrast: Bool
+    ) -> some View {
+        if GroupCommunityControlSurfacePolicy.style(
+            reduceTransparency: reduceTransparency,
+            increasedContrast: increasedContrast
+        ) == .opaque {
+            self
+                .background(SpottColor.surface, in: shape)
+                .overlay(
+                    shape.stroke(
+                        SpottColor.ink.opacity(increasedContrast ? 0.44 : 0.12),
+                        lineWidth: increasedContrast ? 1.5 : 1
+                    )
+                )
         } else {
-            content
+            self
+                .spottGlassPanel(shape: shape, interactive: true)
+                .overlay(shape.stroke(SpottColor.ink.opacity(0.08), lineWidth: 1))
+                .shadow(color: SpottColor.ink.opacity(0.045), radius: 12, y: 5)
         }
     }
 }
@@ -3037,3 +3220,36 @@ private extension String {
     var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
     var nilIfEmpty: String? { isEmpty ? nil : self }
 }
+
+#if DEBUG
+private struct CommunityCardPreview: View {
+    let locale: Locale
+
+    var body: some View {
+        ZStack {
+            GroupCommunityBackdrop(
+                accommodations: GroupCommunityDisplayAccommodations(
+                    reduceTransparency: false,
+                    increasedContrast: false
+                )
+            )
+            ScrollView {
+                CommunityCard(group: GroupCommunityUITestFixture.localizedDemoGroups(locale: locale)[0])
+                    .padding(20)
+            }
+        }
+        .environment(\.locale, locale)
+    }
+}
+
+#Preview("Community card · Japanese") {
+    CommunityCardPreview(locale: Locale(identifier: "ja"))
+        .preferredColorScheme(.light)
+}
+
+#Preview("Community card · AX5") {
+    CommunityCardPreview(locale: Locale(identifier: "en"))
+        .environment(\.dynamicTypeSize, .accessibility5)
+        .preferredColorScheme(.dark)
+}
+#endif

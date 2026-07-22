@@ -2,18 +2,22 @@ import { describe, expect, test } from "vitest";
 
 import {
   clearDeviceBindingCookie,
+  clearLoginIntentCookie,
   clearLogoutIntentCookie,
   clearMigrationIntentCookie,
   clearRefreshCookie,
   encodeDeviceBindingEnvelope,
+  encodeLoginIntentEnvelope,
   encodeLogoutIntent,
   encodeMigrationIntentEnvelope,
   encodeRefreshEnvelope,
   issueDeviceBindingCookie,
+  issueLoginIntentCookie,
   issueLogoutIntentCookie,
   issueMigrationIntentCookie,
   issueRefreshCookie,
   parseDeviceBindingEnvelope,
+  parseLoginIntentEnvelope,
   parseLogoutIntent,
   parseMigrationIntentEnvelope,
   parseRefreshEnvelope,
@@ -70,14 +74,31 @@ const migrationClaims = {
   expiresAt: future,
 };
 
+const loginIntentClaims = {
+  purpose: "login_intent" as const,
+  audience: "https://spott.example",
+  phase: "prepare" as const,
+  challengeId: "88888888-8888-4888-8888-888888888888",
+  deviceId: "44444444-4444-4444-8444-444444444444",
+  attemptId: "99999999-9999-4999-8999-999999999999",
+  sessionId: null,
+  bindingId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  bindingGeneration: 0 as const,
+  bindingSecret: Buffer.alloc(32, 0x7c).toString("base64url"),
+  issuedAt: now,
+  expiresAt: future,
+};
+
 describe("host-only session Cookie contracts", () => {
   test.each([
     [issueRefreshCookie("value"), "__Host-spott_refresh=value; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000; Priority=High"],
     [issueDeviceBindingCookie("value"), "__Host-spott_device_binding=value; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2678400; Priority=High"],
+    [issueLoginIntentCookie("value"), "__Host-spott_login_intent=value; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=600; Priority=High"],
     [issueMigrationIntentCookie("value"), "__Host-spott_migration_intent=value; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=600; Priority=High"],
     [issueLogoutIntentCookie("v1.1.current"), "__Host-spott_logout_intent=v1.1.current; Path=/; Secure; SameSite=Strict; Max-Age=2678400; Priority=High"],
     [clearRefreshCookie(), "__Host-spott_refresh=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0; Priority=High"],
     [clearDeviceBindingCookie(), "__Host-spott_device_binding=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0; Priority=High"],
+    [clearLoginIntentCookie(), "__Host-spott_login_intent=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0; Priority=High"],
     [clearMigrationIntentCookie(), "__Host-spott_migration_intent=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0; Priority=High"],
     [clearLogoutIntentCookie(), "__Host-spott_logout_intent=; Path=/; Secure; SameSite=Strict; Max-Age=0; Priority=High"],
   ])("serializes an exact immutable contract", (actual, expected) => {
@@ -105,6 +126,55 @@ describe("logout intent", () => {
     });
   });
 
+  test("round-trips a v2 current-session switch reservation without changing revocation hints", () => {
+    const sessionHint = "11111111-1111-4111-8111-111111111111";
+    const preservedSwitchChallengeId = "22222222-2222-4222-8222-222222222222";
+    const encoded = encodeLogoutIntent({
+      epoch: 6,
+      scope: "current",
+      sessionHint,
+      preservedSwitchChallengeId,
+    });
+
+    expect(encoded.length).toBeLessThanOrEqual(128);
+    expect(parseLogoutIntent(encoded)).toEqual({
+      version: "v2",
+      epoch: 6,
+      scope: "current",
+      sessionHint,
+      preservedSwitchChallengeId,
+    });
+    expect(issueLogoutIntentCookie(encoded)).toContain(
+      `__Host-spott_logout_intent=${encoded};`,
+    );
+  });
+
+  test("rejects v2 switch reservations without exact current session and challenge identity", () => {
+    expect(() => encodeLogoutIntent({
+      epoch: 6,
+      scope: "all",
+      sessionHint: "11111111-1111-4111-8111-111111111111",
+      preservedSwitchChallengeId: "22222222-2222-4222-8222-222222222222",
+    })).toThrow();
+    expect(() => encodeLogoutIntent({
+      epoch: 6,
+      scope: "current",
+      preservedSwitchChallengeId: "22222222-2222-4222-8222-222222222222",
+    })).toThrow();
+    expect(() => encodeLogoutIntent({
+      epoch: 6,
+      scope: "current",
+      sessionHint: "11111111-1111-4111-8111-111111111111",
+      preservedSwitchChallengeId: "not-a-challenge",
+    })).toThrow();
+    expect(parseLogoutIntent(
+      "v2.6.all.11111111-1111-4111-8111-111111111111.22222222-2222-4222-8222-222222222222",
+    )).toBeNull();
+    expect(parseLogoutIntent(
+      "v2.6.current.11111111-1111-4111-8111-111111111111",
+    )).toBeNull();
+  });
+
   test.each([
     "v2.1.current",
     "v1.-1.current",
@@ -114,6 +184,8 @@ describe("logout intent", () => {
     "v1.1.current.not-a-uuid",
     "v1.1.current.11111111-1111-4111-8111-11111111111A",
     "v1.1.current.11111111-1111-4111-8111-111111111111.extra",
+    "v2.1.current.11111111-1111-4111-8111-111111111111.not-a-challenge",
+    "v2.1.current.11111111-1111-4111-8111-111111111111.22222222-2222-4222-8222-222222222222.extra",
   ])("rejects malformed value %s", (value) => expect(parseLogoutIntent(value)).toBeNull());
 
   test("fails closed for non-string or oversized input", () => {
@@ -185,5 +257,127 @@ describe("purpose-separated HttpOnly envelopes", () => {
     expect(() => encodeMigrationIntentEnvelope({ ...migrationClaims, audience: "https://evil.example" }, config)).toThrow();
     expect(() => encodeRefreshEnvelope({ ...refreshClaims, transportClass: "native" as "web_bff" }, config)).toThrow();
     expect(() => encodeRefreshEnvelope({ ...refreshClaims, bffAttemptKid: "removed-kid" }, config)).toThrow();
+  });
+});
+
+describe("login-intent envelope", () => {
+  test("round-trips prepare and reconcile phases under a dotted KID", () => {
+    const dotted = parseSessionServerConfig({
+      NODE_ENV: "test",
+      SPOTT_WEB_BFF_KEYS: `cookie.2026.07:${key}`,
+      SPOTT_WEB_BFF_CURRENT_KID: "cookie.2026.07",
+      SPOTT_WEB_CANONICAL_ORIGIN: "https://spott.example",
+      API_INTERNAL_URL: "http://api.internal/v1",
+      WEB_SESSION_RECOVERY_SECONDS: "120",
+    });
+    const prepare = encodeLoginIntentEnvelope(loginIntentClaims, dotted);
+    const reconcileClaims = {
+      ...loginIntentClaims,
+      phase: "reconcile" as const,
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      expiresAt: now + 2_678_400_000,
+    };
+    const reconcile = encodeLoginIntentEnvelope(reconcileClaims, dotted);
+
+    expect(parseLoginIntentEnvelope(prepare, dotted, now)).toEqual(loginIntentClaims);
+    expect(parseLoginIntentEnvelope(reconcile, dotted, now)).toEqual(reconcileClaims);
+  });
+
+  test("requires phase and session ID to agree exactly", () => {
+    expect(() => encodeLoginIntentEnvelope({
+      ...loginIntentClaims,
+      sessionId: "11111111-1111-4111-8111-111111111111",
+    }, config)).toThrow();
+    expect(() => encodeLoginIntentEnvelope({
+      ...loginIntentClaims,
+      phase: "reconcile" as const,
+      sessionId: null,
+    }, config)).toThrow();
+  });
+
+  test("serializes the exact canonical claims order and round-trips the stable proof", () => {
+    const encoded = encodeLoginIntentEnvelope(loginIntentClaims, config);
+    const [, kid, payload] = encoded.split(".");
+
+    expect(kid).toBe("cookie-2026-07");
+    expect(Buffer.from(payload!, "base64url").toString("utf8")).toBe(
+      '{"purpose":"login_intent","audience":"https://spott.example","phase":"prepare","challengeId":"88888888-8888-4888-8888-888888888888","deviceId":"44444444-4444-4444-8444-444444444444","attemptId":"99999999-9999-4999-8999-999999999999","sessionId":null,"bindingId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","bindingGeneration":0,"bindingSecret":"fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHw","issuedAt":1784246400000,"expiresAt":1784247000000}',
+    );
+    expect(parseLoginIntentEnvelope(encoded, config, now)).toEqual(loginIntentClaims);
+    expect(Object.isFrozen(parseLoginIntentEnvelope(encoded, config, now))).toBe(true);
+  });
+
+  test("keeps login intent cryptographically separate from migration and session authority", () => {
+    const loginIntent = encodeLoginIntentEnvelope(loginIntentClaims, config);
+    const migration = encodeMigrationIntentEnvelope(migrationClaims, config);
+
+    expect(parseLoginIntentEnvelope(migration, config, now)).toBeNull();
+    expect(parseMigrationIntentEnvelope(loginIntent, config, now)).toBeNull();
+    expect(parseRefreshEnvelope(loginIntent, config, now)).toBeNull();
+    expect(parseDeviceBindingEnvelope(loginIntent, config, now)).toBeNull();
+  });
+
+  test("rejects noncanonical identifiers, generation, secret, audience, and time claims", () => {
+    expect(() => encodeLoginIntentEnvelope({
+      ...loginIntentClaims,
+      bindingId: loginIntentClaims.bindingId.toUpperCase(),
+    }, config)).toThrow();
+    expect(() => encodeLoginIntentEnvelope({
+      ...loginIntentClaims,
+      bindingGeneration: 1 as 0,
+    }, config)).toThrow();
+    expect(() => encodeLoginIntentEnvelope({
+      ...loginIntentClaims,
+      bindingSecret: `${loginIntentClaims.bindingSecret}=`,
+    }, config)).toThrow();
+    expect(() => encodeLoginIntentEnvelope({
+      ...loginIntentClaims,
+      bindingSecret: Buffer.alloc(31, 0x7c).toString("base64url"),
+    }, config)).toThrow();
+    expect(() => encodeLoginIntentEnvelope({
+      ...loginIntentClaims,
+      audience: "https://evil.example",
+    }, config)).toThrow();
+    expect(() => encodeLoginIntentEnvelope({
+      ...loginIntentClaims,
+      expiresAt: loginIntentClaims.issuedAt,
+    }, config)).toThrow();
+    expect(() => encodeLoginIntentEnvelope({
+      ...loginIntentClaims,
+      unexpected: true,
+    } as typeof loginIntentClaims, config)).toThrow();
+  });
+
+  test("fails closed for tampering, removed KIDs, future issuance, and expiry", () => {
+    const encoded = encodeLoginIntentEnvelope(loginIntentClaims, config);
+    const [version, kid, payload, mac] = encoded.split(".");
+    const mutate = (value: string) => `${value[0] === "A" ? "B" : "A"}${value.slice(1)}`;
+
+    expect(parseLoginIntentEnvelope(`${version}.${kid}.${mutate(payload!)}.${mac}`, config, now)).toBeNull();
+    expect(parseLoginIntentEnvelope(`${version}.${kid}.${payload}.${mutate(mac!)}`, config, now)).toBeNull();
+    expect(parseLoginIntentEnvelope(encoded, config, now - 1)).toBeNull();
+    expect(parseLoginIntentEnvelope(encoded, config, future)).toBeNull();
+    expect(parseLoginIntentEnvelope(undefined, config, now)).toBeNull();
+
+    const nextKey = Buffer.from("abcdef0123456789abcdef0123456789").toString("base64url");
+    const rotatedWithOldKey = parseSessionServerConfig({
+      NODE_ENV: "test",
+      SPOTT_WEB_BFF_KEYS: `cookie-2026-07:${key},cookie-2026-08:${nextKey}`,
+      SPOTT_WEB_BFF_CURRENT_KID: "cookie-2026-08",
+      SPOTT_WEB_CANONICAL_ORIGIN: "https://spott.example",
+      API_INTERNAL_URL: "http://api.internal/v1",
+      WEB_SESSION_RECOVERY_SECONDS: "120",
+    });
+    const rotatedWithoutOldKey = parseSessionServerConfig({
+      NODE_ENV: "test",
+      SPOTT_WEB_BFF_KEYS: `cookie-2026-08:${nextKey}`,
+      SPOTT_WEB_BFF_CURRENT_KID: "cookie-2026-08",
+      SPOTT_WEB_CANONICAL_ORIGIN: "https://spott.example",
+      API_INTERNAL_URL: "http://api.internal/v1",
+      WEB_SESSION_RECOVERY_SECONDS: "120",
+    });
+
+    expect(parseLoginIntentEnvelope(encoded, rotatedWithOldKey, now)).toEqual(loginIntentClaims);
+    expect(parseLoginIntentEnvelope(encoded, rotatedWithoutOldKey, now)).toBeNull();
   });
 });

@@ -41,7 +41,7 @@ function fixture({ replaceableRuntime = false } = {}) {
       'if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) process.exit(22);',
       "if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(['test','--config=playwright.config.ts','--list'])) process.exit(23);",
       'if (process.env.DATABASE_URL || process.env.SPOTT_DATABASE_ADMIN_URL || process.env.PLAYWRIGHT_SECRET_SENTINEL) process.exit(24);',
-      `writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ database: process.env.SPOTT_TEST_DATABASE_URL ?? null, output: process.env.SPOTT_E2E_OUTPUT_DIR ?? null }) + '\\n');`,
+      `writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ database: process.env.SPOTT_TEST_DATABASE_URL ?? null, output: process.env.SPOTT_E2E_OUTPUT_DIR ?? null, tls: process.env.SPOTT_E2E_TLS_SPKI_SHA256 ?? null }) + '\\n');`,
     ].join('\n'),
     { mode: 0o600 },
   );
@@ -121,10 +121,11 @@ test('one wrapper verifies, launches the exact Playwright CLI, and re-verifies r
   assert.deepEqual(JSON.parse(readFileSync(paths.marker, 'utf8')), {
     database: null,
     output: null,
+    tls: null,
   });
 });
 
-test('launcher forwards only a validated owned database and repository output path', () => {
+test('launcher forwards only validated owned database, output, and loopback TLS evidence', () => {
   const paths = fixture();
   const database =
     'postgres://spott:private@127.0.0.1:5432/spott_ci_0123456789abcdef0123456789abcdef_test';
@@ -132,6 +133,7 @@ test('launcher forwards only a validated owned database and repository output pa
     paths.root,
     'output/playwright/core-journey/0123456789abcdef0123456789abcdef',
   );
+  const tls = Buffer.alloc(32, 7).toString('base64');
   const result = run(
     paths,
     {
@@ -139,12 +141,21 @@ test('launcher forwards only a validated owned database and repository output pa
       SPOTT_DATABASE_ADMIN_URL: 'postgres://admin:must-not-cross@127.0.0.1:5432/postgres',
       SPOTT_TEST_DATABASE_URL: database,
       SPOTT_E2E_OUTPUT_DIR: output,
+      SPOTT_E2E_TLS_SPKI_SHA256: tls,
     },
     paths.root,
   );
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(readFileSync(paths.marker, 'utf8')), { database, output });
+  assert.deepEqual(JSON.parse(readFileSync(paths.marker, 'utf8')), { database, output, tls });
   assert.equal(`${result.stdout}${result.stderr}`.includes('must-not-cross'), false);
+});
+
+test('launcher rejects malformed TLS trust evidence before Playwright code executes', () => {
+  const paths = fixture();
+  const result = run(paths, { SPOTT_E2E_TLS_SPKI_SHA256: 'not-a-fingerprint' });
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stderr, 'PLAYWRIGHT_TLS_SPKI_INVALID\n');
+  assert.equal(existsSync(paths.marker), false);
 });
 
 test('launcher rejects a non-owned database URL before Playwright code executes', () => {

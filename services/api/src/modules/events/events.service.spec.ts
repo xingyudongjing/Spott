@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventsService, serializeRegistrationQuestionOptions } from './events.service.js';
 
 const publisher = {
@@ -13,6 +13,10 @@ const publisher = {
 const draftFingerprintCrypto = {
   lookupHash: (value: string) => createHmac('sha256', 'unit-test-draft-pepper').update(value).digest(),
 };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function eventRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -739,6 +743,9 @@ describe('EventsService event contract', () => {
   });
 
   it('assembles a config-ordered, banner-flagged recommendation feed distinct from search', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-18T02:00:00.000Z'));
+
     const bannerEventId = '019b0000-0000-7000-8100-00000000beef';
     const interestEventId = '019b0000-0000-7000-8100-00000000cafe';
     const configRows = [

@@ -121,9 +121,13 @@ test('IP preview uses a digest-pinned production runtime and immutable PostGIS i
   assert.match(dockerfile, /pnpm --filter @spott\/api build/u);
   assert.match(dockerfile, /pnpm --filter @spott\/web build/u);
   assert.match(dockerfile, /NEXT_PUBLIC_MAP_STYLE_URL/u);
+  assert.match(dockerfile, /NEXT_PUBLIC_APP_STORE_STATE/u);
+  assert.match(dockerfile, /NEXT_PUBLIC_APP_STORE_URL/u);
+  assert.match(dockerfile, /NEXT_PUBLIC_APP_STORE_ID/u);
   assert.match(dockerfile, /! grep -R -E '\/Users\/\|\\\.worktrees\/\|\/private\/tmp\/'/u);
   assert.match(source('Runtime.Dockerfile.dockerignore'), /\*\*\/\.vinext/u);
   assert.match(source('compose.yaml'), /NEXT_PUBLIC_MAP_STYLE_URL/u);
+  assert.match(source('compose.yaml'), /NEXT_PUBLIC_APP_STORE_STATE/u);
   assert.equal(
     compose.services.postgres.image,
     'postgis/postgis@sha256:05d68c7f0f19b9aa0bf7c4a2049b2e8b38b44a63116392b95726a4c913766cf6',
@@ -339,10 +343,13 @@ test('internal functional-test entry stays loopback-only and uses same-origin br
   assert.doesNotMatch(nginx, /listen (?:0\.0\.0\.0:)?8080/u);
   assert.match(readme, /ssh -N -L 8080:127\.0\.0\.1:8080/u);
   assert.match(readme, /Do not expose port 8080/u);
-  assert.match(source('verify.sh'), /307 http:\/\/18\.178\.203\.117\/discover/u);
-  assert.match(source('verify.sh'), /307 \$\{origin\}\/discover/u);
-  assert.match(source('verify.sh'), /Rendered discovery response leaked an absolute build path/u);
-  assert.match(source('verify.sh'), /assets\/_vinext_fonts/u);
+  const verifier = source('verify.sh');
+  assert.match(verifier, /for path in \/ \/ja \/en \/discover/u);
+  assert.match(verifier, /expect_status 200 GET "\$path"/u);
+  assert.match(verifier, /Rendered product website did not contain the Spott brand/u);
+  assert.doesNotMatch(verifier, /expect_status 307/u);
+  assert.match(verifier, /Rendered discovery response leaked an absolute build path/u);
+  assert.match(verifier, /assets\/_vinext_fonts/u);
 });
 
 test('OTP helper extracts only the latest exact email or phone match', () => {

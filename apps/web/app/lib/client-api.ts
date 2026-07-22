@@ -1,30 +1,40 @@
 "use client";
 
 import type { EventView } from "./demo-data";
+import {
+  bootstrapSession,
+  clearSession,
+  readSession,
+  refreshSessionFor,
+  type WebSession,
+} from "./session-runtime";
+import { deviceId } from "./browser-device-identity";
 
-const SESSION_KEY = "spott.web.session.v1";
-const DEVICE_KEY = "spott.web.device.v1";
-let volatileDeviceId: string | null = null;
-let volatileSession: WebSession | null = null;
-let volatileSessionIsAuthoritative = false;
-
-export interface SessionUser {
-  id: string;
-  publicHandle: string;
-  phoneVerified: boolean;
-  restrictions: string[];
-}
-
-export interface WebSession {
-  accessToken: string;
-  accessTokenExpiresAt: string;
-  refreshToken: string;
-  sessionId: string;
-  user: SessionUser;
-}
+export {
+  abandonEmailSessionSwitch,
+  bootstrapSession,
+  clearSession,
+  completeEmailSession,
+  logoutCurrentSession,
+  readSession,
+  refreshCurrentSession,
+  registerEmailSessionSwitch,
+  saveSession,
+  subscribeSessionChanges,
+  type EmailLoginSessionExpectation,
+  type SessionUser,
+  type WebSession,
+} from "./session-runtime";
+export {
+  DeviceIdentityStorageError,
+  deviceId,
+  prepareEmailLoginDevice,
+  type LoginDevicePlan,
+} from "./browser-device-identity";
 
 type APIRequestInit = RequestInit & {
   authenticated?: boolean;
+  deviceIdOverride?: string;
   idempotent?: boolean;
   idempotencyKey?: string;
   ifMatch?: number;
@@ -36,7 +46,6 @@ type RequestSessionContext = { readonly generation: SessionGeneration };
 
 let observedSessionKey: string | null | undefined;
 let observedSessionGeneration: SessionGeneration = { marker: Symbol("spott-session-generation") };
-const refreshesInFlight = new Map<SessionGeneration, Promise<WebSession | null>>();
 
 export interface APIErrorBody {
   code?: string;
@@ -199,111 +208,6 @@ export function apiBase(): string {
   return "https://api.spott.jp/v1";
 }
 
-export function deviceId(): string {
-  if (typeof window === "undefined") return "00000000-0000-4000-8000-000000000000";
-  try {
-    const stored = window.localStorage.getItem(DEVICE_KEY);
-    if (stored) return stored;
-    const generated = volatileDeviceId ?? generateDeviceId();
-    volatileDeviceId = generated;
-    window.localStorage.setItem(DEVICE_KEY, generated);
-    return generated;
-  } catch {
-    if (!volatileDeviceId) volatileDeviceId = generateDeviceId();
-    return volatileDeviceId;
-  }
-}
-
-function generateDeviceId(): string {
-  if (typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
-
-  // randomUUID is restricted to secure contexts, while getRandomValues remains
-  // available on raw-HTTP preview origins. Keep the same RFC 4122 v4 contract.
-  const bytes = window.crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-export function readSession(): WebSession | null {
-  if (typeof window === "undefined") return null;
-  if (volatileSessionIsAuthoritative) return volatileSession;
-  let value: string | null;
-  try {
-    value = window.localStorage.getItem(SESSION_KEY);
-  } catch {
-    return volatileSession;
-  }
-  if (!value) {
-    volatileSession = null;
-    return null;
-  }
-  try {
-    const session = JSON.parse(value) as WebSession;
-    volatileSession = session;
-    return session;
-  } catch {
-    volatileSession = null;
-    try {
-      window.localStorage.removeItem(SESSION_KEY);
-    } catch {
-      // Ignore cleanup failures for malformed persistent state.
-    }
-    return null;
-  }
-}
-
-export function saveSession(session: WebSession): void {
-  persistSession(session, { marker: Symbol("spott-session-generation") });
-}
-
-function persistSession(session: WebSession, generation: SessionGeneration): void {
-  volatileSession = session;
-  try {
-    window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-    volatileSessionIsAuthoritative = false;
-  } catch {
-    volatileSessionIsAuthoritative = true;
-  }
-  observedSessionKey = sessionAuthenticationKey(session);
-  observedSessionGeneration = generation;
-  window.dispatchEvent(new CustomEvent("spott:session", { detail: session }));
-}
-
-export function clearSession(): void {
-  volatileSession = null;
-  try {
-    window.localStorage.removeItem(SESSION_KEY);
-    volatileSessionIsAuthoritative = false;
-  } catch {
-    try {
-      // An empty persistent value is a logout tombstone that survives module reloads.
-      window.localStorage.setItem(SESSION_KEY, "");
-      volatileSessionIsAuthoritative = false;
-    } catch {
-      volatileSessionIsAuthoritative = true;
-    }
-  }
-  observedSessionKey = null;
-  observedSessionGeneration = { marker: Symbol("spott-session-generation") };
-  window.dispatchEvent(new CustomEvent("spott:session", { detail: null }));
-}
-
-export function subscribeSessionChanges(listener: () => void): () => void {
-  if (typeof window === "undefined") return () => undefined;
-  const onSession = () => listener();
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === SESSION_KEY) listener();
-  };
-  window.addEventListener("spott:session", onSession);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener("spott:session", onSession);
-    window.removeEventListener("storage", onStorage);
-  };
-}
-
 function sameSessionIdentity(left: WebSession | null, right: WebSession | null): boolean {
   return Boolean(
     left
@@ -317,13 +221,13 @@ function sameSessionSnapshot(left: WebSession | null, right: WebSession | null):
   return Boolean(
     sameSessionIdentity(left, right)
       && left?.accessToken === right?.accessToken
-      && left?.refreshToken === right?.refreshToken,
+      && left?.refreshGeneration === right?.refreshGeneration,
   );
 }
 
 function sessionAuthenticationKey(session: WebSession | null): string | null {
   return session
-    ? [session.user.id, session.sessionId, session.accessToken, session.refreshToken].join("\u0000")
+    ? [session.user.id, session.sessionId].join("\u0000")
     : null;
 }
 
@@ -372,7 +276,11 @@ export async function apiRequest<T>(
   const headers = new Headers(init.headers);
   if (init.idempotencyKey) headers.set("Idempotency-Key", init.idempotencyKey);
   else if (init.idempotent && !headers.has("Idempotency-Key")) headers.set("Idempotency-Key", crypto.randomUUID());
-  const initial = currentSessionState();
+  let initial = currentSessionState();
+  if (init.authenticated && !initial.session) {
+    await bootstrapSession();
+    initial = currentSessionState();
+  }
   const requestContext = initial.session ? { generation: initial.generation } : null;
   return apiRequestAttempt<T>(path, { ...init, headers }, true, requestContext);
 }
@@ -390,23 +298,26 @@ async function apiRequestAttempt<T>(
   const ownerContext = requestContext ?? (session ? { generation: state.generation } : null);
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
-  headers.set("X-Spott-Device-Id", deviceId());
+  headers.set("X-Spott-Device-Id", init.deviceIdOverride ?? deviceId());
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (session) headers.set("Authorization", `Bearer ${session.accessToken}`);
   if (init.ifMatch !== undefined) headers.set("If-Match", `\"${init.ifMatch}\"`);
 
   const response = await fetch(`${apiBase()}${path}`, { ...init, headers, credentials: "omit" });
   if (ownerContext) assertRequestSession(ownerContext);
-  if (response.status === 401 && session && path !== "/auth/refresh") {
+  if (response.status === 401 && session) {
     if (allowRefresh) {
       const latestSession = ownerContext ? assertRequestSession(ownerContext) : readSession();
       if (latestSession && !sameSessionSnapshot(latestSession, session)) {
         return apiRequestAttempt<T>(path, init, false, ownerContext);
       }
       if (latestSession && ownerContext) {
-        const refreshed = await refreshSessionOnce(latestSession, ownerContext);
-        assertRequestSession(ownerContext);
+        const refreshed = await refreshSessionFor(latestSession);
+        const currentAfterRefresh = assertRequestSession(ownerContext);
         if (refreshed) return apiRequestAttempt<T>(path, init, false, ownerContext);
+        if (currentAfterRefresh && !sameSessionSnapshot(currentAfterRefresh, latestSession)) {
+          throw sessionChangedError();
+        }
       }
     } else {
       clearSessionIfCurrent(session, ownerContext ?? undefined);
@@ -431,64 +342,6 @@ async function apiRequestAttempt<T>(
   const payload = (await response.json()) as T;
   if (ownerContext) assertRequestSession(ownerContext);
   return payload;
-}
-
-async function refreshSession(
-  session: WebSession,
-  context: RequestSessionContext,
-): Promise<WebSession | null> {
-  const response = await fetch(`${apiBase()}/auth/refresh`, {
-    method: "POST",
-    credentials: "omit",
-    headers: { "Content-Type": "application/json", "X-Spott-Device-Id": deviceId() },
-    body: JSON.stringify({ refreshToken: session.refreshToken, deviceId: deviceId() }),
-  });
-  let currentSession: WebSession | null;
-  try {
-    currentSession = assertRequestSession(context);
-  } catch {
-    return null;
-  }
-  if (!response.ok) {
-    if (!sameSessionSnapshot(currentSession, session) && sameSessionIdentity(currentSession, session)) {
-      return currentSession;
-    }
-    clearSessionIfCurrent(session, context);
-    return null;
-  }
-  const refreshed = (await response.json()) as WebSession;
-  try {
-    currentSession = assertRequestSession(context);
-  } catch {
-    return null;
-  }
-  if (!sameSessionSnapshot(currentSession, session)) {
-    return sameSessionIdentity(currentSession, session) ? currentSession : null;
-  }
-  if (refreshed.user.id !== session.user.id) return null;
-  persistSession(refreshed, context.generation);
-  return refreshed;
-}
-
-function refreshSessionOnce(
-  session: WebSession,
-  context: RequestSessionContext,
-): Promise<WebSession | null> {
-  let refresh = refreshesInFlight.get(context.generation);
-  if (!refresh) {
-    refresh = refreshSession(session, context).finally(() => {
-      refreshesInFlight.delete(context.generation);
-    });
-    refreshesInFlight.set(context.generation, refresh);
-  }
-  return refresh;
-}
-
-export async function refreshCurrentSession(): Promise<WebSession | null> {
-  const current = currentSessionState();
-  return current.session
-    ? refreshSessionOnce(current.session, { generation: current.generation })
-    : null;
 }
 
 export function errorMessage(error: unknown): string {

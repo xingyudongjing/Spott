@@ -18,6 +18,7 @@ const sessionSecurityVariables = [
   'REFRESH_TOKEN_DERIVATION_CURRENT_KID',
   'WEB_SESSION_BFF_ENFORCEMENT',
   'WEB_SESSION_RECOVERY_SECONDS',
+  'WEB_SESSION_COMPLETION_RECOVERY_SECONDS',
   'SPOTT_WEB_CANONICAL_ORIGIN',
 ] as const;
 
@@ -35,6 +36,7 @@ function baseEnvironment(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
     REFRESH_TOKEN_DERIVATION_CURRENT_KID: 'refresh-current',
     WEB_SESSION_BFF_ENFORCEMENT: 'off',
     WEB_SESSION_RECOVERY_SECONDS: '120',
+    WEB_SESSION_COMPLETION_RECOVERY_SECONDS: '120',
     SPOTT_WEB_CANONICAL_ORIGIN: 'https://spott.jp',
     ...overrides,
   };
@@ -105,6 +107,7 @@ describe('session security configuration', () => {
     );
     expect(parsed.WEB_SESSION_BFF_ENFORCEMENT).toBe('off');
     expect(parsed.WEB_SESSION_RECOVERY_SECONDS).toBe(120);
+    expect(parsed.WEB_SESSION_COMPLETION_RECOVERY_SECONDS).toBe(120);
     expect(parsed.SPOTT_WEB_CANONICAL_ORIGIN).toBe('https://spott.jp');
   });
 
@@ -279,6 +282,24 @@ describe('session security configuration', () => {
       }))).toThrow(/WEB_SESSION_RECOVERY_SECONDS/);
     },
   );
+
+  it('rejects an ordinary refresh recovery window above 120 seconds', () => {
+    expect(() => parseConfiguration(baseEnvironment({
+      WEB_SESSION_RECOVERY_SECONDS: '121',
+    }))).toThrow(/WEB_SESSION_RECOVERY_SECONDS/);
+  });
+
+  it('accepts the independent database maximum Web completion recovery window', () => {
+    expect(parseConfiguration(baseEnvironment({
+      WEB_SESSION_COMPLETION_RECOVERY_SECONDS: '900',
+    })).WEB_SESSION_COMPLETION_RECOVERY_SECONDS).toBe(900);
+  });
+
+  it('rejects an independent Web completion recovery window above the database maximum', () => {
+    expect(() => parseConfiguration(baseEnvironment({
+      WEB_SESSION_COMPLETION_RECOVERY_SECONDS: '901',
+    }))).toThrow(/WEB_SESSION_COMPLETION_RECOVERY_SECONDS/);
+  });
 
   it('rejects a canonical origin with a path', () => {
     expect(() => parseConfiguration(baseEnvironment({

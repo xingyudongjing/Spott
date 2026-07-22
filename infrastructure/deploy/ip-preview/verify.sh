@@ -28,9 +28,20 @@ expect_status() {
   fi
 }
 
-for path in /discover /tokyo /ja/tokyo /en/tokyo /privacy /terms; do
+for path in / /ja /en /discover /tokyo /ja/tokyo /en/tokyo /privacy /terms; do
   expect_status 200 GET "$path"
 done
+
+rendered_marketing=$(curl --fail --silent --show-error \
+  --connect-timeout 3 --max-time 15 "${origin}/")
+if ! grep -Fq 'Spott' <<< "$rendered_marketing"; then
+  printf 'Rendered product website did not contain the Spott brand\n' >&2
+  exit 1
+fi
+if grep -Eq 'href=["'"'][^"'"']*apps\.apple\.com' <<< "$rendered_marketing"; then
+  printf 'Unavailable preview unexpectedly rendered an App Store link\n' >&2
+  exit 1
+fi
 
 rendered_discover=$(curl --silent --show-error --include \
   --connect-timeout 3 --max-time 15 "${origin}/discover")
@@ -45,20 +56,6 @@ if [[ -z $font_path ]]; then
   exit 1
 fi
 expect_status 200 GET "$font_path"
-
-root_redirect=$(curl --silent --show-error --connect-timeout 3 --max-time 15 \
-  --output /dev/null --write-out '%{http_code} %{redirect_url}' \
-  "${origin}/")
-if [[ $mode == public ]]; then
-  expected_root_redirect='307 http://18.178.203.117/discover'
-else
-  expected_root_redirect="307 ${origin}/discover"
-fi
-if [[ $root_redirect != "$expected_root_redirect" ]]; then
-  printf 'Expected GET / redirect %s, got %s\n' \
-    "$expected_root_redirect" "$root_redirect" >&2
-  exit 1
-fi
 
 health=$(curl --fail --silent --show-error --connect-timeout 3 --max-time 15 \
   "${origin}/v1/health")

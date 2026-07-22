@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "vitest";
 
 import {
+  clearAllRegistrationDrafts,
   clearRegistrationDraft,
   gateDestination,
   loadRegistrationDraft,
@@ -51,6 +52,28 @@ describe("versioned registration draft", () => {
     clearRegistrationDraft(window.sessionStorage, eventId, 7);
 
     expect(loadRegistrationDraft(window.sessionStorage, eventId, 7, draft.ownerUserId)).toBeNull();
+  });
+
+  test("clears every registration draft version without removing unrelated session state", () => {
+    const secondEventId = "019b0000-0000-7000-8100-000000000002";
+    saveRegistrationDraft(window.sessionStorage, draft);
+    saveRegistrationDraft(window.sessionStorage, {
+      ...draft,
+      eventId: secondEventId,
+      eventVersion: 8,
+    });
+    window.sessionStorage.setItem(
+      `spott.web.registration-draft.v1.${secondEventId}.v6`,
+      JSON.stringify({ legacy: true }),
+    );
+    window.sessionStorage.setItem("spott.web.registration-draft-settings", "keep-me");
+
+    clearAllRegistrationDrafts(window.sessionStorage);
+
+    expect(window.sessionStorage.getItem(registrationDraftKey(eventId, 7))).toBeNull();
+    expect(window.sessionStorage.getItem(registrationDraftKey(secondEventId, 8))).toBeNull();
+    expect(window.sessionStorage.getItem(`spott.web.registration-draft.v1.${secondEventId}.v6`)).toBeNull();
+    expect(window.sessionStorage.getItem("spott.web.registration-draft-settings")).toBe("keep-me");
   });
 
   test("keeps a draft through token refresh for the same owner", () => {

@@ -2,7 +2,13 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { defineConfig, devices } from '@playwright/test';
 
+import { createLoopbackTLSLaunchArguments } from './scripts/e2e/loopback-https-proxy.js';
+
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:3000';
+const loopbackTLSLaunchArguments = createLoopbackTLSLaunchArguments(
+  baseURL,
+  process.env.SPOTT_E2E_TLS_SPKI_SHA256,
+);
 
 interface RuntimeBinaryContract {
   path: string;
@@ -63,7 +69,10 @@ export default defineConfig({
   use: {
     ...devices['Desktop Chrome'],
     browserName: 'chromium',
-    launchOptions: { executablePath: playwrightRuntime.chromium.path },
+    launchOptions: {
+      executablePath: playwrightRuntime.chromium.path,
+      args: loopbackTLSLaunchArguments,
+    },
     baseURL,
     locale: 'ja-JP',
     timezoneId: 'Asia/Tokyo',

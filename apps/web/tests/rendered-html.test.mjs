@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
-async function render(path = "/", headers = {}, origin = "http://localhost") {
+process.env.SPOTT_WEB_CANONICAL_ORIGIN = "https://spott.jp";
+
+async function render(path = "/", headers = {}, origin = "https://spott.jp") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}-${Math.random()}`);
   const { default: worker } = await import(workerUrl.href);
@@ -88,9 +90,9 @@ test("deindexes every filtered Tokyo variant without publishing filter-shaped st
 });
 
 test("adds production security headers without replacing the streamed body or status", async () => {
-  const http = await render("/tokyo");
-  const secure = await render("/tokyo", {}, "https://localhost");
-  assert.equal(http.status, 200);
+  const http = await render("/tokyo", {}, "http://spott.jp");
+  const secure = await render("/tokyo");
+  assert.equal(http.status, 308);
   assert.equal(secure.status, 200);
   assert.match(await secure.text(), /东京，遇见真正想参加的活动/);
 

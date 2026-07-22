@@ -74,6 +74,27 @@ describe('SessionAuthority live database authorization', () => {
     for (const fragment of requiredSQL) expect(sql).toContain(fragment);
   });
 
+  it('rejects an access JWT for a completion-linked session until its disposition is accepted', async () => {
+    const requiredSQL = [
+      'identity.web_session_completion_outcomes',
+      'completion_outcome.session_id = session.id',
+      'identity.web_session_completion_dispositions',
+      'completion_disposition.attempt_hash = completion_outcome.attempt_hash',
+      'completion_disposition.challenge_id = completion_outcome.challenge_id',
+      'completion_disposition.device_id = completion_outcome.device_id',
+      'completion_disposition.binding_id = completion_outcome.binding_id',
+      'completion_disposition.binding_generation = completion_outcome.binding_generation',
+      'completion_disposition.session_id = completion_outcome.session_id',
+      "completion_disposition.state = 'accepted'",
+      'AND NOT EXISTS',
+    ] as const;
+    const { authority, database } = harness(boundaryRejectsWhenEnforced(requiredSQL));
+
+    await expect(authority.authorize(claims, 'consumer')).resolves.toBeNull();
+    const [sql] = queryCall(database);
+    for (const fragment of requiredSQL) expect(sql).toContain(fragment);
+  });
+
   it('binds the queried session to both JWT sid and JWT sub', async () => {
     const requiredSQL = ['session.id = $1::uuid', 'session.user_id = $2::uuid'] as const;
     const { authority, database } = harness(boundaryRejectsWhenEnforced(requiredSQL));

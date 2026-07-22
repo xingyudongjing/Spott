@@ -2,6 +2,70 @@ const maximumEnvelopeLength = 4_096;
 const maximumCookieHeaderLength = 16_384;
 const logoutIntentPresencePattern = /(?:^|;)[\t ]*__Host-spott_logout_intent[\t ]*(?:=|;|$)/u;
 
+export type SessionCookieSlot =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'value'; readonly value: string }
+  | { readonly kind: 'invalid' };
+
+export interface AuthoritativeSessionCookieHeader {
+  readonly refreshEnvelope: SessionCookieSlot;
+  readonly deviceBindingEnvelope: SessionCookieSlot;
+  readonly loginIntentEnvelope: SessionCookieSlot;
+  readonly logoutIntent: SessionCookieSlot;
+}
+
+const authoritativeCookieNames = {
+  '__Host-spott_refresh': 'refreshEnvelope',
+  '__Host-spott_device_binding': 'deviceBindingEnvelope',
+  '__Host-spott_login_intent': 'loginIntentEnvelope',
+  '__Host-spott_logout_intent': 'logoutIntent',
+} as const;
+
+function absentSlot(): SessionCookieSlot {
+  return { kind: 'absent' };
+}
+
+/**
+ * Parses the four cookies that can authorize or fence a session mutation.
+ * Every slot is independent so a malformed completion capability can never
+ * hide a durable logout intent in the same header.
+ */
+export function parseAuthoritativeSessionCookieHeader(
+  header: string | null | undefined,
+): AuthoritativeSessionCookieHeader {
+  const result: Record<keyof AuthoritativeSessionCookieHeader, SessionCookieSlot> = {
+    refreshEnvelope: absentSlot(),
+    deviceBindingEnvelope: absentSlot(),
+    loginIntentEnvelope: absentSlot(),
+    logoutIntent: absentSlot(),
+  };
+  if (header !== null && header !== undefined && header.length > maximumCookieHeaderLength) {
+    return {
+      refreshEnvelope: { kind: 'invalid' },
+      deviceBindingEnvelope: { kind: 'invalid' },
+      loginIntentEnvelope: { kind: 'invalid' },
+      logoutIntent: { kind: 'invalid' },
+    };
+  }
+
+  for (const segment of header?.split(';') ?? []) {
+    const separator = segment.indexOf('=');
+    const name = cookieName(segment) as keyof typeof authoritativeCookieNames;
+    const slotName = authoritativeCookieNames[name];
+    if (slotName === undefined) continue;
+    if (result[slotName].kind !== 'absent' || separator < 0) {
+      result[slotName] = { kind: 'invalid' };
+      continue;
+    }
+    const value = segment.slice(separator + 1).trim();
+    const maximumLength = slotName === 'logoutIntent' ? 128 : maximumEnvelopeLength;
+    result[slotName] = value === '' || value.length > maximumLength
+      ? { kind: 'invalid' }
+      : { kind: 'value', value };
+  }
+  return result;
+}
+
 export interface ParsedSessionCookieHeader {
   readonly kind: 'parsed';
   readonly refreshEnvelope: string | null;

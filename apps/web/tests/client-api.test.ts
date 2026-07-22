@@ -17,7 +17,7 @@ import { makeDetail } from "./event-fixtures";
 const expiredSession: WebSession = {
   accessToken: "expired-access-token",
   accessTokenExpiresAt: "2026-07-15T00:00:00.000Z",
-  refreshToken: "refresh-token",
+  refreshGeneration: 0,
   sessionId: "019b0000-0000-7000-8100-000000000091",
   user: {
     id: "019b0000-0000-7000-8100-000000000092",
@@ -30,13 +30,12 @@ const expiredSession: WebSession = {
 const freshSession: WebSession = {
   ...expiredSession,
   accessToken: "fresh-access-token",
-  accessTokenExpiresAt: "2026-07-17T00:00:00.000Z",
-  refreshToken: "rotated-refresh-token",
+  accessTokenExpiresAt: "2027-07-17T00:00:00.000Z",
+  refreshGeneration: 1,
 };
 
 const rotatedSession: WebSession = {
   ...freshSession,
-  sessionId: "019b0000-0000-7000-8100-000000000093",
   user: {
     ...freshSession.user,
     phoneVerified: true,
@@ -46,14 +45,14 @@ const rotatedSession: WebSession = {
 const newerSameUserSession: WebSession = {
   ...rotatedSession,
   accessToken: "newer-access-token",
-  refreshToken: "newer-refresh-token",
+  refreshGeneration: 2,
   sessionId: "019b0000-0000-7000-8100-000000000094",
 };
 
 const otherUserSession: WebSession = {
   accessToken: "other-user-access-token",
-  accessTokenExpiresAt: "2026-07-17T00:00:00.000Z",
-  refreshToken: "other-user-refresh-token",
+  accessTokenExpiresAt: "2027-07-17T00:00:00.000Z",
+  refreshGeneration: 0,
   sessionId: "019b0000-0000-7000-8100-000000000191",
   user: {
     id: "019b0000-0000-7000-8100-000000000192",
@@ -62,6 +61,18 @@ const otherUserSession: WebSession = {
     restrictions: [],
   },
 };
+
+function bootstrapSnapshot(session: WebSession = expiredSession): WebSession {
+  return {
+    ...session,
+    accessToken: "bootstrap-access-token",
+    accessTokenExpiresAt: "2027-07-17T00:00:00.000Z",
+  };
+}
+
+function isSessionBootstrap(input: string | URL | Request): boolean {
+  return String(input) === "/api/session/bootstrap";
+}
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -133,25 +144,28 @@ describe("refresh-aware client requests", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  test("never attaches browser cookies to the legacy direct refresh request", async () => {
+  test("uses the same-origin Cookie BFF for refresh", async () => {
     saveSession(expiredSession);
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      expect(String(input)).toMatch(/\/auth\/refresh$/u);
-      expect(init?.credentials).toBe("omit");
+      if (isSessionBootstrap(input)) return jsonResponse(bootstrapSnapshot());
+      expect(String(input)).toBe("/api/session/refresh");
+      expect(init?.credentials).toBe("include");
       return jsonResponse(freshSession);
     });
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(refreshCurrentSession()).resolves.toEqual(freshSession);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  test("accepts an authoritative same-user refresh that rotates the session id", async () => {
-    saveSession({
+  test("accepts an authoritative same-user refresh that advances generation", async () => {
+    const initial = {
       ...expiredSession,
       user: { ...expiredSession.user, phoneVerified: false },
-    });
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(rotatedSession)));
+    };
+    saveSession(initial);
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) =>
+      jsonResponse(isSessionBootstrap(input) ? bootstrapSnapshot(initial) : rotatedSession)));
 
     await expect(refreshCurrentSession()).resolves.toEqual(rotatedSession);
     expect(readSession()).toEqual(rotatedSession);
@@ -160,7 +174,8 @@ describe("refresh-aware client requests", () => {
   test("replays an authenticated request after a same-user refresh rotates the session id", async () => {
     saveSession(expiredSession);
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      if (String(input).endsWith("/auth/refresh")) return jsonResponse(rotatedSession);
+      if (isSessionBootstrap(input)) return jsonResponse(bootstrapSnapshot());
+      if (String(input).endsWith("/api/session/refresh")) return jsonResponse(rotatedSession);
       const authorization = new Headers(init?.headers).get("Authorization");
       return authorization === "Bearer fresh-access-token"
         ? jsonResponse({ ok: true })
@@ -177,7 +192,8 @@ describe("refresh-aware client requests", () => {
     saveSession(expiredSession);
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith("/auth/refresh")) return jsonResponse(rotatedSession);
+      if (isSessionBootstrap(input)) return jsonResponse(bootstrapSnapshot());
+      if (url.endsWith("/api/session/refresh")) return jsonResponse(rotatedSession);
       return new Headers(init?.headers).get("Authorization") === "Bearer fresh-access-token"
         ? jsonResponse(viewerEvent)
         : jsonResponse({ error: { message: "expired" } }, 401);
@@ -192,7 +208,8 @@ describe("refresh-aware client requests", () => {
 
   test("rejects a refresh response for a different user", async () => {
     saveSession(expiredSession);
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(otherUserSession)));
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) =>
+      jsonResponse(isSessionBootstrap(input) ? bootstrapSnapshot() : otherUserSession)));
 
     await expect(refreshCurrentSession()).resolves.toBeNull();
     expect(readSession()).toEqual(expiredSession);
@@ -202,13 +219,14 @@ describe("refresh-aware client requests", () => {
     saveSession(expiredSession);
     let releaseRefresh!: () => void;
     const delayedRefresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
-    vi.stubGlobal("fetch", vi.fn(async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (isSessionBootstrap(input)) return jsonResponse(bootstrapSnapshot());
       await delayedRefresh;
       return jsonResponse(rotatedSession);
     }));
 
     const refresh = refreshCurrentSession();
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     saveSession(otherUserSession);
     releaseRefresh();
 
@@ -220,13 +238,14 @@ describe("refresh-aware client requests", () => {
     saveSession(expiredSession);
     let releaseRefresh!: () => void;
     const delayedRefresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
-    vi.stubGlobal("fetch", vi.fn(async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      if (isSessionBootstrap(input)) return jsonResponse(bootstrapSnapshot());
       await delayedRefresh;
       return jsonResponse(rotatedSession);
     }));
 
     const refresh = refreshCurrentSession();
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     saveSession(newerSameUserSession);
     releaseRefresh();
 
@@ -240,7 +259,8 @@ describe("refresh-aware client requests", () => {
     let refreshCalls = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith("/auth/refresh")) {
+      if (isSessionBootstrap(input)) return jsonResponse(bootstrapSnapshot());
+      if (url.endsWith("/api/session/refresh")) {
         refreshCalls += 1;
         return jsonResponse(freshSession);
       }
@@ -272,7 +292,8 @@ describe("refresh-aware client requests", () => {
     let refreshCalls = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith("/auth/refresh")) {
+      if (isSessionBootstrap(input)) return jsonResponse(bootstrapSnapshot());
+      if (url.endsWith("/api/session/refresh")) {
         refreshCalls += 1;
         return jsonResponse(freshSession);
       }
@@ -303,7 +324,8 @@ describe("refresh-aware client requests", () => {
     let refreshCalls = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
-      if (url.endsWith("/auth/refresh")) {
+      if (isSessionBootstrap(input)) return jsonResponse(bootstrapSnapshot());
+      if (url.endsWith("/api/session/refresh")) {
         refreshCalls += 1;
         return jsonResponse(freshSession);
       }
@@ -427,7 +449,8 @@ describe("refresh-aware client requests", () => {
     const callerKey = "019b0000-0000-7000-8400-000000000001";
     const keys: Array<string | null> = [];
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      if (String(input).endsWith("/auth/refresh")) return jsonResponse(freshSession);
+      if (isSessionBootstrap(input)) return jsonResponse(bootstrapSnapshot());
+      if (String(input).endsWith("/api/session/refresh")) return jsonResponse(freshSession);
       const headers = new Headers(init?.headers);
       keys.push(headers.get("Idempotency-Key"));
       return headers.get("Authorization") === "Bearer fresh-access-token"
@@ -452,7 +475,8 @@ describe("refresh-aware client requests", () => {
     let protectedCalls = 0;
     let refreshCalls = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
-      if (String(input).endsWith("/auth/refresh")) {
+      if (isSessionBootstrap(input)) return jsonResponse(bootstrapSnapshot());
+      if (String(input).endsWith("/api/session/refresh")) {
         refreshCalls += 1;
         await delayedRefresh;
         return jsonResponse(freshSession);
@@ -478,7 +502,8 @@ describe("refresh-aware client requests", () => {
     const delayedRefresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
     let refreshCalls = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
-      if (String(input).endsWith("/auth/refresh")) {
+      if (isSessionBootstrap(input)) return jsonResponse(bootstrapSnapshot());
+      if (String(input).endsWith("/api/session/refresh")) {
         refreshCalls += 1;
         await delayedRefresh;
         return jsonResponse({ error: { message: "refresh rejected" } }, 401);
@@ -501,7 +526,8 @@ describe("refresh-aware client requests", () => {
     const delayedRefresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
     const authorizations: Array<string | null> = [];
     vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      if (String(input).endsWith("/auth/refresh")) {
+      if (isSessionBootstrap(input)) return jsonResponse(bootstrapSnapshot());
+      if (String(input).endsWith("/api/session/refresh")) {
         await delayedRefresh;
         return jsonResponse({ error: { message: "old refresh rejected" } }, 401);
       }
@@ -537,8 +563,12 @@ describe("refresh-aware client requests", () => {
     expect(readSession()).toEqual(expiredSession);
   });
 
-  test("persists a logout tombstone across module reload when storage refuses removal", async () => {
+  test("overwrites a legacy credential with a logout tombstone when removal is denied", async () => {
     saveSession(expiredSession);
+    window.localStorage.setItem("spott.web.session.v1", JSON.stringify({
+      ...expiredSession,
+      refreshToken: "legacy-refresh-must-be-scrubbed",
+    }));
     vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
       throw new DOMException("Storage denied", "SecurityError");
     });

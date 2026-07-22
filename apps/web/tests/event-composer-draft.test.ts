@@ -1,10 +1,13 @@
-import { describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 
 import {
+  clearAllComposerDrafts,
   composerDraftStorageKey,
   parseComposerDraft,
   serializeComposerDraft,
 } from "../app/create/event-composer-draft";
+
+beforeEach(() => window.localStorage.clear());
 
 describe("EventComposer owner-scoped draft persistence", () => {
   test("isolates anonymous and authenticated owners", () => {
@@ -12,6 +15,20 @@ describe("EventComposer owner-scoped draft persistence", () => {
     expect(composerDraftStorageKey("owner-a")).toBe("spott.event-composer.v3.user.owner-a");
     expect(composerDraftStorageKey("owner-b")).toBe("spott.event-composer.v3.user.owner-b");
     expect(composerDraftStorageKey("owner-a")).not.toBe(composerDraftStorageKey("owner-b"));
+  });
+
+  test("clears every owner draft without removing unrelated local state", () => {
+    window.localStorage.setItem(composerDraftStorageKey("owner-a"), JSON.stringify({ draft: { title: "A" } }));
+    window.localStorage.setItem(composerDraftStorageKey("owner-b"), JSON.stringify({ draft: { title: "B" } }));
+    window.localStorage.setItem(composerDraftStorageKey(null), JSON.stringify({ draft: { title: "Anonymous" } }));
+    window.localStorage.setItem("spott.event-composer-settings", "keep-me");
+
+    clearAllComposerDrafts(window.localStorage);
+
+    expect(window.localStorage.getItem(composerDraftStorageKey("owner-a"))).toBeNull();
+    expect(window.localStorage.getItem(composerDraftStorageKey("owner-b"))).toBeNull();
+    expect(window.localStorage.getItem(composerDraftStorageKey(null))).toBeNull();
+    expect(window.localStorage.getItem("spott.event-composer-settings")).toBe("keep-me");
   });
 
   test("fails closed on corrupted JSON instead of leaking another draft", () => {

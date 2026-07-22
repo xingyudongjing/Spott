@@ -26,11 +26,29 @@ interface IssuanceRequest {
 
 interface ControllerContract {
   verifyEmail(request: IssuanceRequest, body: unknown): Promise<unknown>;
+  completeWebSession(request: IssuanceRequest, body: unknown): Promise<unknown>;
+  acceptWebSessionCompletion(
+    request: IssuanceRequest,
+    attemptId: string,
+    body: unknown,
+  ): Promise<unknown>;
+  discardWebSessionCompletion(
+    request: IssuanceRequest,
+    attemptId: string,
+    body: unknown,
+  ): Promise<unknown>;
+  revokeWebSessionCompletion(
+    request: IssuanceRequest,
+    attemptId: string,
+    body: unknown,
+  ): Promise<unknown>;
   apple(request: IssuanceRequest, body: unknown): Promise<unknown>;
   google(request: IssuanceRequest, body: unknown): Promise<unknown>;
   refresh(request: IssuanceRequest, body: unknown, key?: string): Promise<unknown>;
   bootstrap(request: IssuanceRequest, body: unknown): Promise<unknown>;
   upgradeDeviceBinding(request: IssuanceRequest, body: unknown): Promise<unknown>;
+  logout(request: IssuanceRequest, body: unknown): Promise<void>;
+  logoutAll(request: IssuanceRequest, body: unknown): Promise<unknown>;
   mergeCommit(
     user: AuthenticatedUser,
     request: IssuanceRequest,
@@ -73,6 +91,32 @@ function guardContext(request: unknown) {
 function harness() {
   const auth = {
     verifyEmailChallenge: vi.fn().mockResolvedValue({ sessionId: 'email-session' }),
+    completeWebEmailSession: vi.fn().mockResolvedValue({
+      state: 'pending',
+      sessionId: 'web-session',
+      bindingId: bootstrapProof.bindingId,
+      deviceId,
+    }),
+    acceptWebSessionCompletionAttempt: vi.fn().mockResolvedValue({
+      state: 'accepted',
+      material: {
+        sessionId: bootstrapSessionId,
+        bindingId: bootstrapProof.bindingId,
+        deviceId,
+      },
+    }),
+    discardWebSessionCompletionAttempt: vi.fn().mockResolvedValue({
+      state: 'discarded',
+      sessionId: bootstrapSessionId,
+      bindingId: bootstrapProof.bindingId,
+      deviceId,
+    }),
+    revokeWebSessionCompletionAttempt: vi.fn().mockResolvedValue({
+      state: 'revoked',
+      sessionId: bootstrapSessionId,
+      bindingId: bootstrapProof.bindingId,
+      deviceId,
+    }),
     authenticateApple: vi.fn().mockResolvedValue({ sessionId: 'apple-session' }),
     authenticateGoogle: vi.fn().mockResolvedValue({ sessionId: 'google-session' }),
     refresh: vi.fn().mockResolvedValue({ sessionId: 'refresh-session' }),
@@ -81,13 +125,103 @@ function harness() {
       sessionId: bootstrapSessionId,
       bindingId: bootstrapProof.bindingId,
     }),
+    logoutWebSession: vi.fn().mockResolvedValue({ revokedCount: 1 }),
+    logoutAllWebSessions: vi.fn().mockResolvedValue({ revokedCount: 4 }),
     mergeCommit: vi.fn().mockResolvedValue({ sessionId: 'merge-session' }),
   };
   const controller = new AuthController(auth as never) as unknown as ControllerContract;
   return { auth, controller };
 }
 
+describe('AuthController verified Web logout authority', () => {
+  const logoutBody = {
+    refreshToken: bootstrapRefreshToken,
+    deviceId,
+    deviceBindingProof: bootstrapProof,
+    refreshEnvelopeClaims,
+  };
+
+  it('passes only strict credential authority to current logout and emits no body', async () => {
+    const { auth, controller } = harness();
+    const request: IssuanceRequest = {
+      verifiedBFFAuthority: authority,
+      sessionRequestChannel: 'verified_bff',
+    };
+
+    await expect(controller.logout(request, logoutBody)).resolves.toBeUndefined();
+    expect(auth.logoutWebSession).toHaveBeenCalledWith(
+      logoutBody,
+      authority,
+      'verified_bff',
+    );
+  });
+
+  it('routes logout-all from the verified credential without accepting a user or session selector', async () => {
+    const { auth, controller } = harness();
+    const request: IssuanceRequest = {
+      verifiedBFFAuthority: authority,
+      sessionRequestChannel: 'verified_bff',
+    };
+
+    await expect(controller.logoutAll(request, logoutBody)).resolves.toEqual({ revokedCount: 4 });
+    expect(auth.logoutAllWebSessions).toHaveBeenCalledWith(
+      logoutBody,
+      authority,
+      'verified_bff',
+    );
+  });
+
+  it.each([
+    ['forged scope', { scope: 'all' }],
+    ['victim session selector', { sessionId: '019b0000-0000-7000-8000-000000000099' }],
+    ['victim user selector', { userId: '019b0000-0000-7000-8000-000000000098' }],
+    ['temporary proof', {
+      deviceBindingProof: { ...bootstrapProof, proofClass: 'migration_temporary' },
+    }],
+    ['missing proof', { deviceBindingProof: undefined }],
+    ['missing envelope claims', { refreshEnvelopeClaims: undefined }],
+  ])('rejects %s before AuthService', async (_label, mutation) => {
+    const { auth, controller } = harness();
+    const request: IssuanceRequest = {
+      verifiedBFFAuthority: authority,
+      sessionRequestChannel: 'verified_bff',
+    };
+    const body = { ...logoutBody, ...mutation };
+
+    await expect(Promise.resolve().then(() => controller.logout(request, body))).rejects.toBeDefined();
+    await expect(Promise.resolve().then(() => controller.logoutAll(request, body))).rejects.toBeDefined();
+    expect(auth.logoutWebSession).not.toHaveBeenCalled();
+    expect(auth.logoutAllWebSessions).not.toHaveBeenCalled();
+  });
+});
+
 describe('AuthController trusted session issuance authority', () => {
+  it('passes only the guard-attached authority into atomic Web email completion', async () => {
+    const { auth, controller } = harness();
+    const request: IssuanceRequest = {
+      verifiedBFFAuthority: authority,
+      sessionRequestChannel: 'verified_bff',
+    };
+    const body = {
+      credential: { provider: 'email', challengeId, code: '123456' },
+      deviceId,
+      attemptId: '019b0000-0000-7000-8000-000000000031',
+      newBinding: { ...bootstrapProof, generation: 0 },
+    };
+
+    await expect(controller.completeWebSession(request, body)).resolves.toEqual({
+      state: 'pending',
+      sessionId: 'web-session',
+      bindingId: bootstrapProof.bindingId,
+      deviceId,
+    });
+    expect(auth.completeWebEmailSession).toHaveBeenCalledWith(
+      body,
+      authority,
+      'verified_bff',
+    );
+  });
+
   it('passes only guard-attached transport authority into email verification', async () => {
     const { auth, controller } = harness();
     const request: IssuanceRequest = {
@@ -528,6 +662,76 @@ describe('AuthController trusted session issuance authority', () => {
   });
 });
 
+describe('AuthController Web completion disposition boundary', () => {
+  const attemptId = '019b0000-0000-7000-8000-000000000031';
+  const body = {
+    challengeId,
+    deviceId,
+    binding: { ...bootstrapProof, generation: 0 },
+  };
+  const request: IssuanceRequest = {
+    verifiedBFFAuthority: authority,
+    sessionRequestChannel: 'verified_bff',
+  };
+
+  it('routes strict accept, discard, and revoke authority without caller-selected session identity', async () => {
+    const { auth, controller } = harness();
+
+    await expect(controller.acceptWebSessionCompletion(request, attemptId, body)).resolves
+      .toMatchObject({ state: 'accepted', material: { sessionId: bootstrapSessionId } });
+    await expect(controller.discardWebSessionCompletion(request, attemptId, body)).resolves
+      .toMatchObject({ state: 'discarded', sessionId: bootstrapSessionId });
+    await expect(controller.revokeWebSessionCompletion(request, attemptId, body)).resolves
+      .toMatchObject({ state: 'revoked', sessionId: bootstrapSessionId });
+    expect(auth.acceptWebSessionCompletionAttempt).toHaveBeenCalledWith(
+      attemptId,
+      body,
+      authority,
+      'verified_bff',
+    );
+    expect(auth.discardWebSessionCompletionAttempt).toHaveBeenCalledWith(
+      attemptId,
+      body,
+      authority,
+      'verified_bff',
+    );
+    expect(auth.revokeWebSessionCompletionAttempt).toHaveBeenCalledWith(
+      attemptId,
+      body,
+      authority,
+      'verified_bff',
+    );
+  });
+
+  it.each([
+    ['extra session selector', { ...body, sessionId: bootstrapSessionId }],
+    ['extra user selector', { ...body, userId: '019b0000-0000-7000-8000-000000000098' }],
+    ['temporary proof', {
+      ...body,
+      binding: { ...body.binding, proofClass: 'migration_temporary' },
+    }],
+    ['non-initial generation', {
+      ...body,
+      binding: { ...body.binding, generation: 1 },
+    }],
+  ])('rejects %s before AuthService', async (_label, malformed) => {
+    const { auth, controller } = harness();
+
+    await expect(Promise.resolve().then(() => (
+      controller.acceptWebSessionCompletion(request, attemptId, malformed)
+    ))).rejects.toBeDefined();
+    await expect(Promise.resolve().then(() => (
+      controller.discardWebSessionCompletion(request, attemptId, malformed)
+    ))).rejects.toBeDefined();
+    await expect(Promise.resolve().then(() => (
+      controller.revokeWebSessionCompletion(request, attemptId, malformed)
+    ))).rejects.toBeDefined();
+    expect(auth.acceptWebSessionCompletionAttempt).not.toHaveBeenCalled();
+    expect(auth.discardWebSessionCompletionAttempt).not.toHaveBeenCalled();
+    expect(auth.revokeWebSessionCompletionAttempt).not.toHaveBeenCalled();
+  });
+});
+
 describe('Auth bootstrap global guard to controller chain', () => {
   it('classifies a headerless current native credential before invoking the controller', async () => {
     const { auth, controller } = harness();
@@ -626,4 +830,82 @@ describe('Auth bootstrap global guard to controller chain', () => {
       refreshEnvelopeClaims,
     );
   });
+});
+
+describe('Atomic Web completion global guard', () => {
+  const completionBody = {
+    credential: { provider: 'email', challengeId, code: '123456' },
+    deviceId,
+    attemptId: '019b0000-0000-7000-8000-000000000031',
+    newBinding: { ...bootstrapProof, generation: 0 },
+  };
+
+  it('requires and attaches verified BFF authority independently of rollout mode', async () => {
+    const request = {
+      method: 'POST',
+      url: '/v1/auth/web/complete',
+      headers: { 'x-spott-bff-version': 'v1' },
+      body: completionBody,
+    };
+    const database = { query: vi.fn() };
+    const bffAuthority = {
+      hasAuthorityHeaders: vi.fn().mockReturnValue(true),
+      verifyRequest: vi.fn().mockResolvedValue(authority),
+    };
+    const guard = new WebBFFTransportGuard(database as never, bffAuthority as never);
+
+    await expect(guard.canActivate(guardContext(request))).resolves.toBe(true);
+    expect(request).toMatchObject({
+      verifiedBFFAuthority: authority,
+      sessionRequestChannel: 'verified_bff',
+    });
+    expect(database.query).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsigned atomic completion before the controller is invoked', async () => {
+    const request = {
+      method: 'POST',
+      url: '/v1/auth/web/complete',
+      headers: {},
+      body: completionBody,
+    };
+    const guard = new WebBFFTransportGuard(
+      { query: vi.fn() } as never,
+      {
+        hasAuthorityHeaders: vi.fn().mockReturnValue(false),
+        verifyRequest: vi.fn(),
+      } as never,
+    );
+
+    await expect(guard.canActivate(guardContext(request))).rejects.toMatchObject({
+      code: 'WEB_BFF_AUTHORITY_REQUIRED',
+    });
+  });
+
+  it.each(['accept', 'discard', 'revoke'] as const)(
+    'requires verified BFF authority for the %s disposition endpoint',
+    async (operation) => {
+      const request = {
+        method: 'POST',
+        url: `/v1/auth/web/completion-attempts/019b0000-0000-7000-8000-000000000031/${operation}`,
+        headers: {},
+        body: {
+          challengeId,
+          deviceId,
+          binding: { ...bootstrapProof, generation: 0 },
+        },
+      };
+      const guard = new WebBFFTransportGuard(
+        { query: vi.fn() } as never,
+        {
+          hasAuthorityHeaders: vi.fn().mockReturnValue(false),
+          verifyRequest: vi.fn(),
+        } as never,
+      );
+
+      await expect(guard.canActivate(guardContext(request))).rejects.toMatchObject({
+        code: 'WEB_BFF_AUTHORITY_REQUIRED',
+      });
+    },
+  );
 });

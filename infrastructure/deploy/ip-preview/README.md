@@ -2,7 +2,7 @@
 
 This deployment intentionally exposes two different trust boundaries:
 
-- `http://18.178.203.117`: public anonymous read-only preview.
+- `http://18.178.203.117`: public anonymous read-only product-website preview.
 - `http://localhost:8080`: internal functional-test entry, reachable only
   through an authenticated SSH local-forward tunnel.
 

@@ -99,6 +99,10 @@ services:
         NEXT_PUBLIC_API_URL: /v1
         NEXT_PUBLIC_SITE_URL: ${SPOTT_PUBLIC_ORIGIN:?SPOTT_PUBLIC_ORIGIN is required}
         NEXT_PUBLIC_MAP_STYLE_URL: ${NEXT_PUBLIC_MAP_STYLE_URL:?NEXT_PUBLIC_MAP_STYLE_URL is required}
+        NEXT_PUBLIC_APP_STORE_STATE: ${NEXT_PUBLIC_APP_STORE_STATE:-unavailable}
+        NEXT_PUBLIC_APP_STORE_URL: ${NEXT_PUBLIC_APP_STORE_URL:-}
+        NEXT_PUBLIC_APP_STORE_ID: ${NEXT_PUBLIC_APP_STORE_ID:-}
+        SPOTT_WEB_CANONICAL_ORIGIN: ${SPOTT_CANONICAL_ORIGIN:?SPOTT_CANONICAL_ORIGIN is required}
         API_INTERNAL_URL: http://api:4100/v1
     restart: unless-stopped
     working_dir: /app
@@ -128,6 +132,7 @@ services:
       REFRESH_TOKEN_DERIVATION_CURRENT_KID: ${REFRESH_TOKEN_DERIVATION_CURRENT_KID:?REFRESH_TOKEN_DERIVATION_CURRENT_KID is required}
       WEB_SESSION_BFF_ENFORCEMENT: 'off'
       WEB_SESSION_RECOVERY_SECONDS: '120'
+      WEB_SESSION_COMPLETION_RECOVERY_SECONDS: '120'
       SPOTT_WEB_CANONICAL_ORIGIN: ${SPOTT_CANONICAL_ORIGIN:?SPOTT_CANONICAL_ORIGIN is required}
       ACCOUNT_MERGE_EXECUTION_ENABLED: 'false'
     ports:
@@ -174,7 +179,12 @@ services:
       NEXT_PUBLIC_API_URL: /v1
       NEXT_PUBLIC_SITE_URL: ${SPOTT_PUBLIC_ORIGIN:?SPOTT_PUBLIC_ORIGIN is required}
       NEXT_PUBLIC_MAP_STYLE_URL: ${NEXT_PUBLIC_MAP_STYLE_URL:?NEXT_PUBLIC_MAP_STYLE_URL is required}
+      NEXT_PUBLIC_APP_STORE_STATE: ${NEXT_PUBLIC_APP_STORE_STATE:-unavailable}
+      NEXT_PUBLIC_APP_STORE_URL: ${NEXT_PUBLIC_APP_STORE_URL:-}
+      NEXT_PUBLIC_APP_STORE_ID: ${NEXT_PUBLIC_APP_STORE_ID:-}
       API_INTERNAL_URL: http://api:4100/v1
+      SPOTT_WEB_CANONICAL_ORIGIN: ${SPOTT_CANONICAL_ORIGIN:?SPOTT_CANONICAL_ORIGIN is required}
+      SPOTT_DEPLOYMENT_PROFILE: ip-preview
       WRANGLER_WRITE_LOGS: 'false'
       WRANGLER_LOG_PATH: .wrangler/wrangler.log
       MINIFLARE_REGISTRY_PATH: .wrangler/registry
@@ -189,7 +199,8 @@ services:
         - node
         - -e
         - >-
-          fetch('http://127.0.0.1:3000/discover').then(response => {
+          fetch('http://127.0.0.1:3000/discover', {
+          headers: { 'x-spott-preview-mode': 'read-only' }, redirect: 'manual' }).then(response => {
           if (!response.ok) process.exit(1); }).catch(() => process.exit(1))
       interval: 10s
       timeout: 5s

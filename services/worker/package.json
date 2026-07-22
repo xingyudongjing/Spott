@@ -10,7 +10,8 @@
     "once": "tsx src/main.ts --once",
     "lint": "eslint src --max-warnings=0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "pnpm run test:unit",
+    "test:unit": "vitest run --config vitest.unit.config.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1086.0",

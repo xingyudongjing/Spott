@@ -56,7 +56,8 @@ const rawConfigurationSchema = z.object({
   REFRESH_TOKEN_DERIVATION_KEYS: z.string(),
   REFRESH_TOKEN_DERIVATION_CURRENT_KID: z.string().min(1),
   WEB_SESSION_BFF_ENFORCEMENT: z.enum(['off', 'observe', 'enforce']),
-  WEB_SESSION_RECOVERY_SECONDS: z.coerce.number().int().positive(),
+  WEB_SESSION_RECOVERY_SECONDS: z.coerce.number().int().positive().max(120),
+  WEB_SESSION_COMPLETION_RECOVERY_SECONDS: z.coerce.number().int().positive().max(900).default(120),
   SPOTT_WEB_CANONICAL_ORIGIN: canonicalOriginSchema,
   ACCOUNT_MERGE_EXECUTION_ENABLED: z.enum(['true', 'false']).default('false'),
   // Opt-in local-debugging backdoor: trust `x-spott-user-id`/`x-spott-role` request
@@ -90,6 +91,7 @@ const nonProductionSessionSecurityDefaults = {
   REFRESH_TOKEN_DERIVATION_CURRENT_KID: 'refresh-2026-07',
   WEB_SESSION_BFF_ENFORCEMENT: 'off',
   WEB_SESSION_RECOVERY_SECONDS: '120',
+  WEB_SESSION_COMPLETION_RECOVERY_SECONDS: '120',
   SPOTT_WEB_CANONICAL_ORIGIN: 'https://spott.jp',
 } satisfies NodeJS.ProcessEnv;
 

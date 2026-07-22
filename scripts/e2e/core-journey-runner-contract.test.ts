@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
+
+import { resolvePostgresSocketDirectory } from './postgres-socket-path.js';
 
 const repositoryRoot = resolve(import.meta.dirname, '../..');
 const runnerPath = resolve(repositoryRoot, 'scripts/run-core-journey-e2e.ts');
@@ -48,6 +50,38 @@ void test('database ownership token is scoped to migration proof and never enter
   assert.match(source, /SPOTT_DATABASE_OWNERSHIP_REQUIRED/u);
 });
 
+void test('session E2E injects complete independent BFF and refresh-derivation keyrings', async () => {
+  const source = await readFile(runnerPath, 'utf8');
+  const sharedStart = source.indexOf('const sharedEnvironment');
+  const sharedEnd = source.indexOf('let apiProcess');
+  const sharedBlock = source.slice(sharedStart, sharedEnd);
+
+  assert.match(sharedBlock, /SPOTT_WEB_BFF_KEYS/u);
+  assert.match(sharedBlock, /SPOTT_WEB_BFF_CURRENT_KID/u);
+  assert.match(sharedBlock, /REFRESH_TOKEN_DERIVATION_KEYS/u);
+  assert.match(sharedBlock, /REFRESH_TOKEN_DERIVATION_CURRENT_KID/u);
+  assert.match(sharedBlock, /WEB_SESSION_COMPLETION_RECOVERY_SECONDS/u);
+  assert.match(source, /const webBFFKey = randomBytes\(32\)/u);
+  assert.match(source, /const refreshDerivationKey = randomBytes\(32\)/u);
+});
+
+void test('browser acceptance enters through owned loopback HTTPS origins', async () => {
+  const source = await readFile(runnerPath, 'utf8');
+
+  assert.match(source, /findUniqueAvailablePorts\(6\)/u);
+  assert.match(source, /startLoopbackHTTPSProxy/u);
+  assert.match(source, /createLoopbackCertificateArguments/u);
+  assert.match(source, /VINEXT_TRUST_PROXY:\s*['"]1['"]/u);
+  assert.match(source, /const webOrigin = `https:\/\/127\.0\.0\.1:/u);
+  assert.match(source, /const publicAPIBaseURL = `https:\/\/127\.0\.0\.1:/u);
+  assert.match(source, /SPOTT_WEB_CANONICAL_ORIGIN:\s*webOrigin/u);
+  assert.match(source, /PLAYWRIGHT_BASE_URL:\s*webOrigin/u);
+  assert.match(source, /NEXT_PUBLIC_API_URL:\s*publicAPIBaseURL/u);
+  assert.match(source, /trustedLoopbackCertificate/u);
+  assert.doesNotMatch(source, /SPOTT_WEB_CANONICAL_ORIGIN:\s*`http:\/\//u);
+  assert.doesNotMatch(source, /NODE_TLS_REJECT_UNAUTHORIZED/u);
+});
+
 void test('web branch can launch Playwright only through the locked verify-run-verify boundary', async () => {
   const source = await readFile(runnerPath, 'utf8');
   assert.match(source, /join\(root, 'scripts', 'ci', 'run-verified-playwright\.mjs'\)/u);
@@ -57,4 +91,18 @@ void test('web branch can launch Playwright only through the locked verify-run-v
   assert.match(source, /'--mode',\s*'test'/u);
   assert.doesNotMatch(source, /node_modules['"], ['"]\.bin['"], ['"]playwright/u);
   assert.doesNotMatch(source, /playwrightArguments/u);
+});
+
+void test('PostgreSQL socket ownership remains unpredictable without exceeding macOS sun_path', () => {
+  const runId = '0123456789abcdef0123456789abcdef';
+  const longSystemTemporaryDirectory = `/var/folders/${'a'.repeat(96)}/T`;
+  const socketDirectory = resolvePostgresSocketDirectory(
+    longSystemTemporaryDirectory,
+    runId,
+  );
+  const socketPath = join(socketDirectory, '.s.PGSQL.65535');
+
+  assert.ok(Buffer.byteLength(socketPath) <= 103);
+  assert.match(socketDirectory, /spott-pg-s-[a-f0-9]{16,32}$/u);
+  assert.equal(socketDirectory.includes(runId.slice(0, 16)), true);
 });

@@ -55,6 +55,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/web/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare a device-bound Web BFF session for explicit acceptance
+         * @description Verified-BFF-only operation. One canonical attempt atomically consumes the email challenge and prepares the user, profile, wallet, owned device, generation-zero web_bff session, persistent binding, and response-loss recovery outcome. The response contains identifiers only: the session is unusable until a verified BFF holding the exact binding proof accepts the attempt. A discarded attempt can never be completed or accepted.
+         */
+        post: operations["completeWebEmailSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/web/completion-attempts/{attemptId}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept a prepared Web session completion attempt
+         * @description Verified-BFF-only operation. The caller must prove the exact challenge, device, generation-zero persistent binding, and binding proof used by the completion attempt. Acceptance atomically publishes the recoverable session material. Repeated acceptance and discard-after-accept return the accepted material so an unknown prior response can be reconciled safely.
+         */
+        post: operations["acceptWebSessionCompletionAttempt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/web/completion-attempts/{attemptId}/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discard a Web session completion attempt
+         * @description Verified-BFF-only operation. A pending attempt is atomically revoked and terminally discarded. An absent attempt records a tombstone without a session identifier. Repeated discard is idempotent; discard-after-accept returns the accepted material and never revokes an accepted session.
+         */
+        post: operations["discardWebSessionCompletionAttempt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/web/completion-attempts/{attemptId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke the exact session retained by a completion attempt
+         * @description Verified-BFF-only operation. Exact v1 disposition authority must still be retained. A pending attempt is discarded; an accepted attempt revokes its immutable session, every refresh generation, and every persistent binding. The response never returns session credentials. Repeated revoke is idempotent.
+         */
+        post: operations["revokeWebSessionCompletionAttempt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/apple": {
         parameters: {
             query?: never;
@@ -129,6 +209,46 @@ export interface paths {
          * @description Returns a freshly signed access token for the same current stable session only after the refresh credential, device, immutable transport, current generation, current refresh history and active persistent binding all agree. This read-only operation never rotates or extends the refresh credential and never updates session, history or binding time fields. Web BFF envelope DB claims are compared in the same read-only SELECT snapshot; native, Ops and legacy callers omit them.
          */
         post: operations["bootstrapSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke the exactly verified current Web session
+         * @description BFF-only mutation. The API derives authority exclusively from the supplied current web_bff refresh credential, its locked persistent device binding, canonical refresh-envelope claims, and verified BFF request signature. No caller-selected session, user, or scope is accepted.
+         */
+        post: operations["logoutWebSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/logout-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke every session owned by the exactly verified Web credential
+         * @description BFF-only mutation. Account ownership is derived only after the current web_bff credential, persistent binding, and canonical refresh-envelope claims have been locked and verified. Request body selectors are rejected.
+         */
+        post: operations["logoutAllWebSessions"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2399,6 +2519,86 @@ export interface components {
             /** @constant */
             proofClass: "persistent";
         };
+        WebEmailSessionCompletionRequest: {
+            credential: {
+                /** @constant */
+                provider: "email";
+                challengeId: components["schemas"]["UUID"];
+                code: string;
+            };
+            deviceId: components["schemas"]["UUID"];
+            attemptId: components["schemas"]["UUID"];
+            newBinding: components["schemas"]["InitialPersistentDeviceBindingProof"];
+        };
+        WebSessionCompletionPending: {
+            /** @constant */
+            state: "pending";
+            sessionId: components["schemas"]["UUID"];
+            bindingId: components["schemas"]["UUID"];
+            deviceId: components["schemas"]["UUID"];
+        };
+        WebSessionCompletionDispositionRequest: {
+            challengeId: components["schemas"]["UUID"];
+            deviceId: components["schemas"]["UUID"];
+            binding: components["schemas"]["InitialPersistentDeviceBindingProof"];
+        };
+        WebSessionCompletionAccepted: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            state: "accepted";
+            material: components["schemas"]["WebSessionCompletionMaterial"];
+        };
+        WebSessionCompletionDiscarded: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            state: "discarded";
+            sessionId?: components["schemas"]["UUID"];
+            bindingId: components["schemas"]["UUID"];
+            deviceId: components["schemas"]["UUID"];
+        };
+        WebSessionCompletionDispositionResult: components["schemas"]["WebSessionCompletionAccepted"] | components["schemas"]["WebSessionCompletionDiscarded"];
+        WebSessionCompletionRevoked: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            state: "revoked";
+            sessionId: components["schemas"]["UUID"];
+            bindingId: components["schemas"]["UUID"];
+            deviceId: components["schemas"]["UUID"];
+        };
+        WebSessionCompletionRevokeResult: components["schemas"]["WebSessionCompletionRevoked"] | components["schemas"]["WebSessionCompletionDiscarded"];
+        WebSessionCompletionMaterial: {
+            accessToken: string;
+            /** Format: date-time */
+            accessTokenExpiresAt: string;
+            refreshToken: string;
+            /** @constant */
+            refreshGeneration: 0;
+            sessionId: components["schemas"]["UUID"];
+            refreshFamilyId: components["schemas"]["UUID"];
+            /** Format: date-time */
+            refreshTokenExpiresAt: string;
+            /** @constant */
+            transportClass: "web_bff";
+            bindingId: components["schemas"]["UUID"];
+            /** @constant */
+            bindingGeneration: 0;
+            /** Format: date-time */
+            bindingIssuedAt: string;
+            /** Format: date-time */
+            bindingAbsoluteExpiresAt: string;
+            user: {
+                id: components["schemas"]["UUID"];
+                publicHandle: string;
+                phoneVerified: boolean;
+                restrictions: string[];
+            };
+        };
         DeviceBindingUpgradeMaterial: {
             sessionId: components["schemas"]["UUID"];
             refreshFamilyId: components["schemas"]["UUID"];
@@ -2420,6 +2620,15 @@ export interface components {
                 phoneVerified: boolean;
                 restrictions: string[];
             };
+        };
+        WebBoundSessionMutationRequest: {
+            refreshToken: string;
+            deviceId: components["schemas"]["UUID"];
+            deviceBindingProof: components["schemas"]["PersistentDeviceBindingProof"];
+            refreshEnvelopeClaims: components["schemas"]["WebRefreshEnvelopeDBClaims"];
+        };
+        RevokedSessionCount: {
+            revokedCount: number;
         };
         WebRefreshEnvelopeDBClaims: {
             sessionId: components["schemas"]["UUID"];
@@ -4015,6 +4224,33 @@ export interface components {
                 "application/json": components["schemas"]["DeviceBindingUpgradeMaterial"];
             };
         };
+        /** @description Identifiers for a prepared Web session that remains unusable until accepted */
+        WebSessionCompletionPending: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["WebSessionCompletionPending"];
+            };
+        };
+        /** @description Terminal accepted material or discarded identifiers for a completion attempt */
+        WebSessionCompletionDispositionResult: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["WebSessionCompletionDispositionResult"];
+            };
+        };
+        /** @description Revoked session identifiers or discarded pending-attempt identifiers */
+        WebSessionCompletionRevokeResult: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["WebSessionCompletionRevokeResult"];
+            };
+        };
     };
     parameters: {
         ResourceId: components["schemas"]["UUID"] | string;
@@ -4089,6 +4325,93 @@ export interface operations {
         responses: {
             200: components["responses"]["AuthSession"];
             400: components["responses"]["Error"];
+        };
+    };
+    completeWebEmailSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebEmailSessionCompletionRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["WebSessionCompletionPending"];
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+        };
+    };
+    acceptWebSessionCompletionAttempt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attemptId: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebSessionCompletionDispositionRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["WebSessionCompletionDispositionResult"];
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    discardWebSessionCompletionAttempt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attemptId: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebSessionCompletionDispositionRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["WebSessionCompletionDispositionResult"];
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+        };
+    };
+    revokeWebSessionCompletionAttempt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attemptId: components["schemas"]["UUID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebSessionCompletionDispositionRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["WebSessionCompletionRevokeResult"];
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
         };
     };
     authenticateWithApple: {
@@ -4186,6 +4509,58 @@ export interface operations {
         };
         responses: {
             200: components["responses"]["AuthSession"];
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    logoutWebSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebBoundSessionMutationRequest"];
+            };
+        };
+        responses: {
+            /** @description Session revoked; response body is empty. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+        };
+    };
+    logoutAllWebSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebBoundSessionMutationRequest"];
+            };
+        };
+        responses: {
+            /** @description Exact number of sessions revoked for the verified owner */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevokedSessionCount"];
+                };
+            };
             400: components["responses"]["Error"];
             401: components["responses"]["Error"];
             403: components["responses"]["Error"];

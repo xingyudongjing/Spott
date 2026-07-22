@@ -88,6 +88,26 @@ function jsonUpstream(value: unknown, status = 200): Response {
   });
 }
 
+function problemUpstream(
+  code: string,
+  status = 401,
+  contentType = 'application/problem+json',
+): Response {
+  return new Response(JSON.stringify({
+    error: {
+      code,
+      message: 'upstream detail must not pass',
+      retryable: false,
+    },
+  }), {
+    status,
+    headers: {
+      'content-type': contentType,
+      'set-cookie': 'upstream=must-not-pass; Path=/',
+    },
+  });
+}
+
 async function bootstrapWith(fetchUpstream: typeof globalThis.fetch): Promise<Response> {
   return handleSessionBootstrap(request(sessionCookies()), {
     loadConfig: () => config,
@@ -118,7 +138,27 @@ function expectPrivateResponse(response: Response): void {
   expect(response.headers.get('cache-control')).toBe('private, no-store, max-age=0');
   expect(response.headers.get('pragma')).toBe('no-cache');
   expect(response.headers.get('vary')).toBe('Cookie');
-  expect(response.headers.get('set-cookie')).toBeNull();
+}
+
+function setCookies(response: Response): string[] {
+  const headers = response.headers as Headers & { getSetCookie?: () => string[] };
+  return headers.getSetCookie?.() ?? [response.headers.get('set-cookie') ?? ''].filter(Boolean);
+}
+
+const allSessionClears = [
+  '__Host-spott_refresh=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0; Priority=High',
+  '__Host-spott_device_binding=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0; Priority=High',
+  '__Host-spott_login_intent=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0; Priority=High',
+  '__Host-spott_migration_intent=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0; Priority=High',
+  '__Host-spott_logout_intent=; Path=/; Secure; SameSite=Strict; Max-Age=0; Priority=High',
+] as const;
+
+function expectNoSetCookies(response: Response): void {
+  expect(setCookies(response)).toEqual([]);
+}
+
+function expectAtomicSessionClear(response: Response): void {
+  expect(setCookies(response)).toEqual(allSessionClears);
 }
 
 describe('credentialless session bootstrap', () => {
@@ -142,6 +182,7 @@ describe('credentialless session bootstrap', () => {
     expect(loadConfig).not.toHaveBeenCalled();
     expect(fetchUpstream).not.toHaveBeenCalled();
     expectPrivateResponse(response);
+    expectNoSetCookies(response);
   });
 
   test.each([undefined, 'locale=ja; theme=dark'])(
@@ -159,6 +200,7 @@ describe('credentialless session bootstrap', () => {
       expect(loadConfig).not.toHaveBeenCalled();
       expect(fetchUpstream).not.toHaveBeenCalled();
       expectPrivateResponse(response);
+      expectNoSetCookies(response);
     },
   );
 
@@ -185,6 +227,7 @@ describe('credentialless session bootstrap', () => {
       expect(loadConfig).not.toHaveBeenCalled();
       expect(fetchUpstream).not.toHaveBeenCalled();
       expectPrivateResponse(response);
+      expectAtomicSessionClear(response);
     },
   );
 
@@ -206,6 +249,7 @@ describe('credentialless session bootstrap', () => {
     expect(loadConfig).toHaveBeenCalledOnce();
     expect(fetchUpstream).not.toHaveBeenCalled();
     expectPrivateResponse(response);
+    expectNoSetCookies(response);
   });
 
   test('requires reauthentication when either sealed envelope is invalid', async () => {
@@ -225,6 +269,7 @@ describe('credentialless session bootstrap', () => {
     });
     expect(fetchUpstream).not.toHaveBeenCalled();
     expectPrivateResponse(response);
+    expectAtomicSessionClear(response);
   });
 
   test.each([
@@ -250,6 +295,7 @@ describe('credentialless session bootstrap', () => {
       expect(response.status).toBe(401);
       expect(fetchUpstream).not.toHaveBeenCalled();
       expectPrivateResponse(response);
+      expectAtomicSessionClear(response);
     },
   );
 
@@ -271,6 +317,7 @@ describe('credentialless session bootstrap', () => {
     });
     expect(fetchUpstream).not.toHaveBeenCalled();
     expectPrivateResponse(response);
+    expectAtomicSessionClear(response);
   });
 
   test.each([200, 201])(
@@ -322,6 +369,7 @@ describe('credentialless session bootstrap', () => {
       });
       expect(JSON.stringify(browserBody)).not.toContain(refreshToken);
       expectPrivateResponse(response);
+      expectNoSetCookies(response);
 
       expect(fetchUpstream).toHaveBeenCalledOnce();
       const [url, init] = fetchUpstream.mock.calls[0] ?? [];
@@ -388,24 +436,48 @@ describe('credentialless session bootstrap', () => {
     },
   );
 
-  test.each([400, 401, 403])('maps upstream %s to stable reauthentication', async (status) => {
-    const fetchUpstream = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ secret: refreshToken, reason: 'must not pass' }), {
-          status,
-          headers: {
-            'content-type': 'application/json',
-            'set-cookie': 'upstream=must-not-pass; Path=/',
-          },
-        }),
+  test('clears Cookies only for an exact TOKEN_EXPIRED problem response', async () => {
+    const response = await bootstrapWith(
+      vi.fn(async () => problemUpstream('TOKEN_EXPIRED')) as typeof globalThis.fetch,
     );
 
-    await expectStableError(
-      await bootstrapWith(fetchUpstream as typeof globalThis.fetch),
-      401,
-      'SESSION_REAUTH_REQUIRED',
-      false,
+    await expectStableError(response, 401, 'SESSION_REAUTH_REQUIRED', false);
+    expectAtomicSessionClear(response);
+  });
+
+  test.each([
+    ['validation 400', () => problemUpstream('VALIDATION_FAILED', 400)],
+    ['authority 401', () => problemUpstream('WEB_BFF_AUTHORITY_INVALID', 401)],
+    ['transport 403', () => problemUpstream('SESSION_TRANSPORT_MISMATCH', 403)],
+    ['terminal code with wrong media', () => problemUpstream('TOKEN_EXPIRED', 401, 'application/json')],
+    ['malformed terminal problem', () => new Response('{"error":', {
+      status: 401,
+      headers: { 'content-type': 'application/problem+json' },
+    })],
+    ['invalid UTF-8 terminal problem', () => new Response(new Uint8Array([
+      ...new TextEncoder().encode('{"error":{"code":"TOKEN_EXPIRED","message":"'),
+      0xff,
+      ...new TextEncoder().encode('"}}'),
+    ]), {
+      status: 401,
+      headers: { 'content-type': 'application/problem+json' },
+    })],
+    ['length-mismatched terminal problem', () => new Response(JSON.stringify({
+      error: { code: 'TOKEN_EXPIRED' },
+    }), {
+      status: 401,
+      headers: {
+        'content-type': 'application/problem+json',
+        'content-length': '1',
+      },
+    })],
+  ])('preserves every Cookie for non-terminal upstream failure: %s', async (_label, upstream) => {
+    const response = await bootstrapWith(
+      vi.fn(async () => upstream()) as typeof globalThis.fetch,
     );
+
+    await expectStableError(response, 503, 'SESSION_BOOTSTRAP_UNAVAILABLE', true);
+    expectNoSetCookies(response);
   });
 
   test.each([429, 500, 502])(
@@ -497,12 +569,14 @@ describe('credentialless session bootstrap', () => {
     'reauthenticates when upstream %s disagrees with the verified Cookies',
     async (_label, value) => {
       const fetchUpstream = vi.fn(async () => jsonUpstream(value));
+      const response = await bootstrapWith(fetchUpstream as typeof globalThis.fetch);
       await expectStableError(
-        await bootstrapWith(fetchUpstream as typeof globalThis.fetch),
+        response,
         401,
         'SESSION_REAUTH_REQUIRED',
         false,
       );
+      expectAtomicSessionClear(response);
     },
   );
 

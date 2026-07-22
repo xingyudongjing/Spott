@@ -2,12 +2,20 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { LoginForm } from "../app/login/LoginForm";
+import { clearSession } from "../app/lib/client-api";
 import { renderWithI18n } from "./event-fixtures";
 
+const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: navigation.replace }),
+}));
+
 const session = {
+  state: "authenticated",
   accessToken: "access-token",
   accessTokenExpiresAt: new Date(Date.now() + 900_000).toISOString(),
-  refreshToken: "refresh-token",
+  refreshGeneration: 0,
   sessionId: "019b0000-0000-7000-8000-000000000001",
   user: {
     id: "019b0000-0000-7000-8000-000000000002",
@@ -17,22 +25,49 @@ const session = {
   },
 };
 
+const challengeId = "019b0000-0000-7000-8000-000000000010";
+const attemptId = "019b0000-0000-7000-8000-000000000011";
+const bindingId = "019b0000-0000-7000-8000-000000000012";
 function stubApi() {
+  let completionCalls = 0;
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes("/auth/email/challenges")) {
         return new Response(
           JSON.stringify({
-            challengeId: "challenge-1",
+            challengeId,
             expiresAt: new Date(Date.now() + 600_000).toISOString(),
             retryAfterSeconds: 30,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
-      if (url.includes("/auth/email/verify")) {
+      if (url.endsWith("/api/session/complete")) {
+        completionCalls += 1;
+        const body = JSON.parse(String(init?.body)) as {
+          deviceId: string;
+        };
+        return new Response(JSON.stringify(completionCalls === 1
+          ? {
+              state: "completion_ready",
+              attemptId,
+              expiresAt: Date.now() + 119_000,
+            }
+          : {
+              state: "completion_pending",
+              attemptId,
+              sessionId: session.sessionId,
+              bindingId,
+              deviceId: body.deviceId,
+              reconcileExpiresAt: Date.now() + 2_678_400_000,
+            }), {
+          status: completionCalls === 1 ? 202 : 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/session/completion/accept")) {
         return new Response(JSON.stringify(session), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -44,11 +79,7 @@ function stubApi() {
 }
 
 async function loginWith(returnTo: string): Promise<string[]> {
-  const assign = vi.fn();
-  Object.defineProperty(window, "location", {
-    configurable: true,
-    value: { ...window.location, assign, pathname: "/login", search: "" },
-  });
+  navigation.replace.mockReset();
 
   renderWithI18n(<LoginForm returnTo={returnTo} />, "en");
 
@@ -61,19 +92,49 @@ async function loginWith(returnTo: string): Promise<string[]> {
   fireEvent.change(codeField, { target: { value: "123456" } });
   fireEvent.click(screen.getByRole("button", { name: "Verify and log in" }));
 
-  await waitFor(() => expect(assign).toHaveBeenCalled());
-  return assign.mock.calls.map((call) => String(call[0]));
+  await waitFor(() => expect(navigation.replace).toHaveBeenCalled());
+  const fetchMock = vi.mocked(fetch);
+  const completionCalls = fetchMock.mock.calls.filter(([input]) =>
+    String(input).endsWith("/api/session/complete"));
+  expect(completionCalls).toHaveLength(2);
+  const completionBodies = completionCalls.map(([, init]) => {
+    expect(init).toMatchObject({ method: "POST", credentials: "include" });
+    return JSON.parse(String(init?.body)) as Record<string, unknown>;
+  });
+  expect(completionBodies[0]).toEqual({
+    credential: { provider: "email", challengeId, code: "123456" },
+    deviceId: expect.any(String),
+  });
+  expect(completionBodies[1]).toEqual({
+    credential: { provider: "email", challengeId, code: "123456" },
+    deviceId: expect.any(String),
+    attemptId,
+  });
+  expect(completionBodies[1]?.deviceId).toBe(completionBodies[0]?.deviceId);
+  const acceptCalls = fetchMock.mock.calls.filter(([input]) =>
+    String(input).endsWith("/api/session/completion/accept"));
+  expect(acceptCalls).toHaveLength(1);
+  expect(JSON.parse(String(acceptCalls[0]?.[1]?.body))).toEqual({ attemptId });
+  expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/auth/email/verify")))
+    .toBe(false);
+  expect(window.localStorage.getItem("spott.web.session.v1")).toBeNull();
+  return navigation.replace.mock.calls.map((call) => String(call[0]));
 }
 
 describe("login returnTo redirect safety", () => {
   beforeEach(() => {
+    clearSession();
     window.localStorage.clear();
+    window.sessionStorage.clear();
     stubApi();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    clearSession();
     window.localStorage.clear();
+    window.sessionStorage.clear();
+    navigation.replace.mockReset();
   });
 
   test("follows a safe same-origin returnTo", async () => {

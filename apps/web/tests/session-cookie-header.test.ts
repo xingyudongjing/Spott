@@ -1,6 +1,41 @@
 import { describe, expect, test } from 'vitest';
 
-import { parseSessionCookieHeader } from '../app/lib/session-cookie-header';
+import {
+  parseAuthoritativeSessionCookieHeader,
+  parseSessionCookieHeader,
+} from '../app/lib/session-cookie-header';
+
+describe('parseAuthoritativeSessionCookieHeader', () => {
+  test('extracts one global completion capability and durable logout intent exactly', () => {
+    expect(parseAuthoritativeSessionCookieHeader(
+      'locale=ja; __Host-spott_login_intent=opaque; '
+      + '__Host-spott_logout_intent=v1.7.current; __Host-spott_refresh=refresh',
+    )).toEqual({
+      refreshEnvelope: { kind: 'value', value: 'refresh' },
+      deviceBindingEnvelope: { kind: 'absent' },
+      loginIntentEnvelope: { kind: 'value', value: 'opaque' },
+      logoutIntent: { kind: 'value', value: 'v1.7.current' },
+    });
+  });
+
+  test.each([
+    '__Host-spott_login_intent=one; __Host-spott_login_intent=two',
+    '__Host-spott_login_intent=',
+    '__Host-spott_login_intent',
+  ])('marks a duplicate or malformed completion capability invalid: %s', (header) => {
+    expect(parseAuthoritativeSessionCookieHeader(header).loginIntentEnvelope)
+      .toEqual({ kind: 'invalid' });
+  });
+
+  test('does not let an invalid completion capability hide a valid logout intent', () => {
+    const parsed = parseAuthoritativeSessionCookieHeader(
+      '__Host-spott_login_intent=one; __Host-spott_login_intent=two; '
+      + '__Host-spott_logout_intent=v1.7.current',
+    );
+    expect(parsed.loginIntentEnvelope).toEqual({ kind: 'invalid' });
+    expect(parsed.logoutIntent).toEqual({ kind: 'value', value: 'v1.7.current' });
+  });
+});
 
 describe('parseSessionCookieHeader', () => {
   test('extracts only the two credential envelopes without percent-decoding them', () => {

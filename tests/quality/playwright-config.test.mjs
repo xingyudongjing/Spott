@@ -55,4 +55,6 @@ test('Playwright acceptance remains deterministic and retains failure evidence',
   assert.match(source, /trace\s*:\s*["']retain-on-failure["']/u);
   assert.match(source, /screenshot\s*:\s*["']only-on-failure["']/u);
   assert.match(source, /video\s*:\s*["']retain-on-failure["']/u);
+  assert.match(source, /createLoopbackTLSLaunchArguments/u);
+  assert.doesNotMatch(source, /ignoreHTTPSErrors\s*:\s*true/u);
 });

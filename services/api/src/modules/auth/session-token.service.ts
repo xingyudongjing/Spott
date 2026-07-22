@@ -14,6 +14,7 @@ import {
   type ParsedRefreshCredential,
   type SessionTransportClass,
 } from '../../platform/web-bff-authority.js';
+import { webSessionCompletionAcceptedSQL } from '../../platform/web-session-completion-disposition.js';
 import type { SessionResponse } from './auth.service.js';
 import {
   webRefreshEnvelopeDBClaimsSchema,
@@ -39,6 +40,31 @@ export interface RefreshMutationInput {
   readonly attemptKey?: string | undefined;
   readonly deviceBindingProof?: DeviceBindingProof | undefined;
   readonly refreshEnvelopeClaims?: WebRefreshEnvelopeDBClaims | undefined;
+}
+
+export interface WebLogoutInput {
+  readonly refreshToken: string;
+  readonly deviceId: string;
+  readonly deviceBindingProof: DeviceBindingProof & {
+    readonly proofClass: 'persistent';
+  };
+  readonly refreshEnvelopeClaims: WebRefreshEnvelopeDBClaims;
+}
+
+export type WebLogoutOutcome =
+  | { readonly kind: 'revoked'; readonly userId: string; readonly revokedCount: number }
+  | { readonly kind: 'reauth_required' }
+  | { readonly kind: 'transport_mismatch' };
+
+export async function lockSessionMutationUser(
+  client: PoolClient,
+  userId: string,
+): Promise<void> {
+  await client.query(
+    `SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text, 7346620260718))
+     /* session-mutation-user */`,
+    [userId],
+  );
 }
 
 export interface SessionTokenResponse extends SessionResponse {
@@ -81,6 +107,7 @@ interface LockedSessionRow {
   readonly revoked_at: Date | null;
   readonly reuse_detected_at: Date | null;
   readonly transport_class: SessionTransportClass;
+  readonly device_risk_state: string;
   readonly public_handle: string;
   readonly status: string;
   readonly phone_verified_at: Date | null;
@@ -212,6 +239,132 @@ export function persistentDeviceBindingHash(
 
 @Injectable()
 export class SessionTokenService {
+  async revokeWebSessions(
+    client: PoolClient,
+    input: WebLogoutInput,
+    scope: 'current' | 'all',
+  ): Promise<WebLogoutOutcome> {
+    const credential = parseRefreshToken(input.refreshToken);
+    if (
+      !credential
+      || !canonicalUUIDPattern.test(input.deviceId)
+      || input.deviceBindingProof.proofClass !== 'persistent'
+      || !this.validBindingProofShape(input.deviceBindingProof)
+      || !webRefreshEnvelopeDBClaimsSchema.safeParse(input.refreshEnvelopeClaims).success
+    ) return { kind: 'reauth_required' };
+
+    const candidateOwner = await client.query<{ user_id: string }>(
+      'SELECT user_id FROM identity.sessions WHERE id = $1',
+      [credential.sessionId],
+    );
+    const candidateUserId = candidateOwner.rows[0]?.user_id;
+    if (!candidateUserId) return { kind: 'reauth_required' };
+    await lockSessionMutationUser(client, candidateUserId);
+
+    const session = await this.lockSession(client, credential.sessionId);
+    if (!session) return { kind: 'reauth_required' };
+    if (session.user_id !== candidateUserId) return { kind: 'reauth_required' };
+    if (session.transport_class !== 'web_bff') return { kind: 'transport_mismatch' };
+    if (
+      session.device_id !== input.deviceId
+      || session.device_risk_state === 'blocked'
+      || session.status !== 'active'
+      || session.restriction_flags.includes('loginBlocked')
+      || session.revoked_at !== null
+      || session.reuse_detected_at !== null
+      || !session.session_unexpired
+    ) return { kind: 'reauth_required' };
+
+    const generation = this.generation(session.refresh_generation);
+    if (generation === null) return { kind: 'reauth_required' };
+    const credentialHash = this.refreshHash(credential.secret);
+    const storedLegacyCredential = generation === 0 && session.current_derivation_kid === null;
+    const canonicalCredential = credential.version === 'legacy'
+      ? storedLegacyCredential
+      : !storedLegacyCredential && credential.generation === generation;
+    if (!canonicalCredential || !this.equalHash(credentialHash, session.refresh_hash)) {
+      return { kind: 'reauth_required' };
+    }
+
+    const history = await this.lockHistoryGeneration(client, session.id, generation);
+    if (
+      !this.isCurrentHistory(history, session, generation, credentialHash)
+      || history === null
+      || !this.matchesRefreshEnvelopeClaims(
+        input.refreshEnvelopeClaims,
+        session,
+        history,
+        generation,
+      )
+    ) return { kind: 'reauth_required' };
+    const binding = await this.verifyBinding(client, session, input.deviceBindingProof);
+    if (!binding) return { kind: 'reauth_required' };
+
+    let targetSessionIds: string[];
+    let expectedRevokedCount: number;
+    if (scope === 'all') {
+      const targets = await client.query<{ id: string; active: boolean }>(
+        `SELECT id, revoked_at IS NULL AS active FROM identity.sessions
+         WHERE user_id = $1
+         ORDER BY id
+         FOR UPDATE`,
+        [session.user_id],
+      );
+      targetSessionIds = targets.rows.map(({ id }) => id);
+      expectedRevokedCount = targets.rows.filter(({ active }) => active).length;
+    } else {
+      targetSessionIds = [session.id];
+      expectedRevokedCount = 1;
+    }
+    if (!targetSessionIds.includes(session.id)) return { kind: 'reauth_required' };
+
+    await client.query(
+      `UPDATE identity.session_refresh_history
+       SET state = 'revoked',
+           consumed_reason = CASE WHEN state = 'current' THEN $2 ELSE consumed_reason END,
+           consumed_at = COALESCE(consumed_at, clock_timestamp()),
+           rotation_key_hash = NULL,
+           successor_generation = NULL,
+           successor_hash = NULL,
+           successor_derivation_kid = NULL,
+           recovery_expires_at = NULL
+       WHERE session_id = ANY($1::uuid[]) AND state IN ('current', 'consumed')`,
+      [targetSessionIds, scope === 'all' ? 'logout_all' : 'logout'],
+    );
+    const revokedBindings = scope === 'all'
+      ? await client.query(
+        `UPDATE identity.device_bindings
+         SET revoked_at = COALESCE(revoked_at, clock_timestamp())
+         WHERE user_id = $1 AND proof_class = 'persistent' AND revoked_at IS NULL`,
+        [session.user_id],
+      )
+      : await client.query(
+        `UPDATE identity.device_bindings
+         SET revoked_at = COALESCE(revoked_at, clock_timestamp())
+         WHERE id = $1 AND session_id = $2 AND user_id = $3 AND revoked_at IS NULL`,
+        [input.deviceBindingProof.bindingId, session.id, session.user_id],
+      );
+    if (scope === 'current' && revokedBindings.rowCount !== 1) {
+      throw new Error('Verified Web logout lost its locked binding');
+    }
+    const revoked = await client.query<{ id: string }>(
+      `UPDATE identity.sessions
+       SET revoked_at = COALESCE(revoked_at, clock_timestamp())
+       WHERE id = ANY($1::uuid[]) AND user_id = $2 AND revoked_at IS NULL
+       RETURNING id`,
+      [targetSessionIds, session.user_id],
+    );
+    const revokedCount = revoked.rowCount ?? 0;
+    if (revokedCount !== expectedRevokedCount) {
+      throw new Error('Verified Web logout lost a locked session');
+    }
+    return {
+      kind: 'revoked',
+      userId: session.user_id,
+      revokedCount,
+    };
+  }
+
   async rotate(
     client: PoolClient,
     input: RefreshMutationInput,
@@ -543,11 +696,16 @@ export class SessionTokenService {
               session.current_binding_generation, session.expires_at,
               session.expires_at > clock_timestamp() AS session_unexpired, session.revoked_at,
               session.reuse_detected_at, session.transport_class,
+              device.risk_state AS device_risk_state,
               user_record.public_handle, user_record.status, user_record.phone_verified_at,
               user_record.restriction_flags
        FROM identity.sessions AS session
+       JOIN identity.devices AS device
+         ON device.id = session.device_id AND device.user_id = session.user_id
        JOIN identity.users AS user_record ON user_record.id = session.user_id
-       WHERE session.id = $1 AND user_record.deleted_at IS NULL
+       WHERE session.id = $1
+         AND user_record.deleted_at IS NULL
+         AND ${webSessionCompletionAcceptedSQL}
        FOR UPDATE OF session`,
       [id],
     );

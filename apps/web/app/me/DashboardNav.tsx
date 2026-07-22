@@ -8,7 +8,7 @@ export function DashboardNav({ current }: { current: "events" | "favorites" | "w
   const active = (value: typeof current) => current === value ? { className: "active", "aria-current": "page" as const } : {};
   return (
     <aside className="dashboard-nav">
-      <Link className="wordmark" href="/">SPOTT</Link>
+      <Link className="wordmark" href="/discover">SPOTT</Link>
       <nav>
         <Link {...active("events")} href="/me/events">{t("nav.myEvents")}</Link>
         <Link {...active("favorites")} href="/me/favorites">{t("dashboard.favorites")}</Link>

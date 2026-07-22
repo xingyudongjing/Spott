@@ -159,7 +159,7 @@ describe("single-request itinerary", () => {
 
       sessionMocks.session = { user: { id: "user-b" } };
       if (eventType === "storage") {
-        window.dispatchEvent(new StorageEvent("storage", { key: "spott.web.session.v1" }));
+        window.dispatchEvent(new StorageEvent("storage", { key: "spott.web.session-metadata.v1" }));
       } else {
         window.dispatchEvent(new CustomEvent("spott:session"));
       }

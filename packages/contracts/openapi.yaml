@@ -96,6 +96,113 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/AuthSession' }
         '400': { $ref: '#/components/responses/Error' }
+  /auth/web/complete:
+    post:
+      operationId: completeWebEmailSession
+      summary: Prepare a device-bound Web BFF session for explicit acceptance
+      description: >-
+        Verified-BFF-only operation. One canonical attempt atomically consumes the
+        email challenge and prepares the user, profile, wallet, owned device,
+        generation-zero web_bff session, persistent binding, and response-loss
+        recovery outcome. The response contains identifiers only: the session is
+        unusable until a verified BFF holding the exact binding proof accepts the
+        attempt. A discarded attempt can never be completed or accepted.
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebEmailSessionCompletionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/WebSessionCompletionPending' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /auth/web/completion-attempts/{attemptId}/accept:
+    post:
+      operationId: acceptWebSessionCompletionAttempt
+      summary: Accept a prepared Web session completion attempt
+      description: >-
+        Verified-BFF-only operation. The caller must prove the exact challenge,
+        device, generation-zero persistent binding, and binding proof used by the
+        completion attempt. Acceptance atomically publishes the recoverable session
+        material. Repeated acceptance and discard-after-accept return the accepted
+        material so an unknown prior response can be reconciled safely.
+      tags: [Auth]
+      security: []
+      parameters:
+        - name: attemptId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/UUID' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebSessionCompletionDispositionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/WebSessionCompletionDispositionResult' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /auth/web/completion-attempts/{attemptId}/discard:
+    post:
+      operationId: discardWebSessionCompletionAttempt
+      summary: Discard a Web session completion attempt
+      description: >-
+        Verified-BFF-only operation. A pending attempt is atomically revoked and
+        terminally discarded. An absent attempt records a tombstone without a
+        session identifier. Repeated discard is idempotent; discard-after-accept
+        returns the accepted material and never revokes an accepted session.
+      tags: [Auth]
+      security: []
+      parameters:
+        - name: attemptId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/UUID' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebSessionCompletionDispositionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/WebSessionCompletionDispositionResult' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /auth/web/completion-attempts/{attemptId}/revoke:
+    post:
+      operationId: revokeWebSessionCompletionAttempt
+      summary: Revoke the exact session retained by a completion attempt
+      description: >-
+        Verified-BFF-only operation. Exact v1 disposition authority must still be
+        retained. A pending attempt is discarded; an accepted attempt revokes its
+        immutable session, every refresh generation, and every persistent binding.
+        The response never returns session credentials. Repeated revoke is idempotent.
+      tags: [Auth]
+      security: []
+      parameters:
+        - name: attemptId
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/UUID' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebSessionCompletionDispositionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/WebSessionCompletionRevokeResult' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /auth/apple:
     post:
       operationId: authenticateWithApple
@@ -209,6 +316,51 @@ paths:
                 refreshEnvelopeClaims: { $ref: '#/components/schemas/WebRefreshEnvelopeDBClaims' }
       responses:
         '200': { $ref: '#/components/responses/AuthSession' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /auth/logout:
+    post:
+      operationId: logoutWebSession
+      summary: Revoke the exactly verified current Web session
+      description: >-
+        BFF-only mutation. The API derives authority exclusively from the supplied
+        current web_bff refresh credential, its locked persistent device binding,
+        canonical refresh-envelope claims, and verified BFF request signature.
+        No caller-selected session, user, or scope is accepted.
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebBoundSessionMutationRequest' }
+      responses:
+        '204': { description: Session revoked; response body is empty. }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /auth/logout-all:
+    post:
+      operationId: logoutAllWebSessions
+      summary: Revoke every session owned by the exactly verified Web credential
+      description: >-
+        BFF-only mutation. Account ownership is derived only after the current
+        web_bff credential, persistent binding, and canonical refresh-envelope
+        claims have been locked and verified. Request body selectors are rejected.
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebBoundSessionMutationRequest' }
+      responses:
+        '200':
+          description: Exact number of sessions revoked for the verified owner
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevokedSessionCount' }
         '400': { $ref: '#/components/responses/Error' }
         '401': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
@@ -2641,6 +2793,21 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/DeviceBindingUpgradeMaterial' }
+    WebSessionCompletionPending:
+      description: Identifiers for a prepared Web session that remains unusable until accepted
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WebSessionCompletionPending' }
+    WebSessionCompletionDispositionResult:
+      description: Terminal accepted material or discarded identifiers for a completion attempt
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WebSessionCompletionDispositionResult' }
+    WebSessionCompletionRevokeResult:
+      description: Revoked session identifiers or discarded pending-attempt identifiers
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WebSessionCompletionRevokeResult' }
   schemas:
     UUID:
       type: string
@@ -2696,6 +2863,124 @@ components:
           writeOnly: true
           description: Canonical base64url encoding of exactly 32 random bytes.
         proofClass: { type: string, const: persistent }
+    WebEmailSessionCompletionRequest:
+      type: object
+      additionalProperties: false
+      required: [credential, deviceId, attemptId, newBinding]
+      properties:
+        credential:
+          type: object
+          additionalProperties: false
+          required: [provider, challengeId, code]
+          properties:
+            provider: { type: string, const: email }
+            challengeId: { $ref: '#/components/schemas/UUID' }
+            code: { type: string, pattern: '^[0-9]{6}$' }
+        deviceId: { $ref: '#/components/schemas/UUID' }
+        attemptId: { $ref: '#/components/schemas/UUID' }
+        newBinding: { $ref: '#/components/schemas/InitialPersistentDeviceBindingProof' }
+    WebSessionCompletionPending:
+      type: object
+      additionalProperties: false
+      required: [state, sessionId, bindingId, deviceId]
+      properties:
+        state: { type: string, const: pending }
+        sessionId: { $ref: '#/components/schemas/UUID' }
+        bindingId: { $ref: '#/components/schemas/UUID' }
+        deviceId: { $ref: '#/components/schemas/UUID' }
+    WebSessionCompletionDispositionRequest:
+      type: object
+      additionalProperties: false
+      required: [challengeId, deviceId, binding]
+      properties:
+        challengeId: { $ref: '#/components/schemas/UUID' }
+        deviceId: { $ref: '#/components/schemas/UUID' }
+        binding: { $ref: '#/components/schemas/InitialPersistentDeviceBindingProof' }
+    WebSessionCompletionAccepted:
+      type: object
+      additionalProperties: false
+      required: [state, material]
+      properties:
+        state: { type: string, const: accepted }
+        material: { $ref: '#/components/schemas/WebSessionCompletionMaterial' }
+    WebSessionCompletionDiscarded:
+      type: object
+      additionalProperties: false
+      required: [state, bindingId, deviceId]
+      properties:
+        state: { type: string, const: discarded }
+        sessionId: { $ref: '#/components/schemas/UUID' }
+        bindingId: { $ref: '#/components/schemas/UUID' }
+        deviceId: { $ref: '#/components/schemas/UUID' }
+    WebSessionCompletionDispositionResult:
+      oneOf:
+        - { $ref: '#/components/schemas/WebSessionCompletionAccepted' }
+        - { $ref: '#/components/schemas/WebSessionCompletionDiscarded' }
+      discriminator:
+        propertyName: state
+        mapping:
+          accepted: '#/components/schemas/WebSessionCompletionAccepted'
+          discarded: '#/components/schemas/WebSessionCompletionDiscarded'
+    WebSessionCompletionRevoked:
+      type: object
+      additionalProperties: false
+      required: [state, sessionId, bindingId, deviceId]
+      properties:
+        state: { type: string, const: revoked }
+        sessionId: { $ref: '#/components/schemas/UUID' }
+        bindingId: { $ref: '#/components/schemas/UUID' }
+        deviceId: { $ref: '#/components/schemas/UUID' }
+    WebSessionCompletionRevokeResult:
+      oneOf:
+        - { $ref: '#/components/schemas/WebSessionCompletionRevoked' }
+        - { $ref: '#/components/schemas/WebSessionCompletionDiscarded' }
+      discriminator:
+        propertyName: state
+        mapping:
+          revoked: '#/components/schemas/WebSessionCompletionRevoked'
+          discarded: '#/components/schemas/WebSessionCompletionDiscarded'
+    WebSessionCompletionMaterial:
+      type: object
+      additionalProperties: false
+      required:
+        - accessToken
+        - accessTokenExpiresAt
+        - refreshToken
+        - refreshGeneration
+        - sessionId
+        - refreshFamilyId
+        - refreshTokenExpiresAt
+        - transportClass
+        - bindingId
+        - bindingGeneration
+        - bindingIssuedAt
+        - bindingAbsoluteExpiresAt
+        - user
+      properties:
+        accessToken: { type: string, minLength: 1, maxLength: 16384 }
+        accessTokenExpiresAt: { type: string, format: date-time }
+        refreshToken: { type: string, minLength: 1, maxLength: 512 }
+        refreshGeneration: { type: integer, const: 0 }
+        sessionId: { $ref: '#/components/schemas/UUID' }
+        refreshFamilyId: { $ref: '#/components/schemas/UUID' }
+        refreshTokenExpiresAt: { type: string, format: date-time }
+        transportClass: { type: string, const: web_bff }
+        bindingId: { $ref: '#/components/schemas/UUID' }
+        bindingGeneration: { type: integer, const: 0 }
+        bindingIssuedAt: { type: string, format: date-time }
+        bindingAbsoluteExpiresAt: { type: string, format: date-time }
+        user:
+          type: object
+          additionalProperties: false
+          required: [id, publicHandle, phoneVerified, restrictions]
+          properties:
+            id: { $ref: '#/components/schemas/UUID' }
+            publicHandle: { type: string, minLength: 1, maxLength: 128 }
+            phoneVerified: { type: boolean }
+            restrictions:
+              type: array
+              maxItems: 64
+              items: { type: string, minLength: 1, maxLength: 128 }
     DeviceBindingUpgradeMaterial:
       type: object
       additionalProperties: false
@@ -2732,6 +3017,21 @@ components:
               type: array
               maxItems: 64
               items: { type: string, minLength: 1, maxLength: 128 }
+    WebBoundSessionMutationRequest:
+      type: object
+      additionalProperties: false
+      required: [refreshToken, deviceId, deviceBindingProof, refreshEnvelopeClaims]
+      properties:
+        refreshToken: { type: string, minLength: 1, maxLength: 512, writeOnly: true }
+        deviceId: { $ref: '#/components/schemas/UUID' }
+        deviceBindingProof: { $ref: '#/components/schemas/PersistentDeviceBindingProof' }
+        refreshEnvelopeClaims: { $ref: '#/components/schemas/WebRefreshEnvelopeDBClaims' }
+    RevokedSessionCount:
+      type: object
+      additionalProperties: false
+      required: [revokedCount]
+      properties:
+        revokedCount: { type: integer, minimum: 0 }
     WebRefreshEnvelopeDBClaims:
       type: object
       additionalProperties: false

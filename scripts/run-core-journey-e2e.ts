@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { access, mkdir, rm } from 'node:fs/promises';
+import { access, chmod, mkdir, readFile, rm } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -10,6 +10,13 @@ import { createPostgresDatabaseOwnershipCoordinator } from './e2e/database-harne
 import { createDatabaseRunIdentity } from './e2e/database-safety.js';
 import { probeHTTPStatus } from './e2e/http-readiness.js';
 import { resolveLockedIOSDestination } from './e2e/ios-test-destination.js';
+import {
+  createLoopbackCertificateArguments,
+  createLoopbackCertificateSPKI,
+  startLoopbackHTTPSProxy,
+  type LoopbackHTTPSProxy,
+} from './e2e/loopback-https-proxy.js';
+import { resolvePostgresSocketDirectory } from './e2e/postgres-socket-path.js';
 import { assertIsolatedTestDatabase } from '../tests/e2e/fixtures/core-journey.js';
 
 type Mode = 'web' | 'ios';
@@ -36,9 +43,18 @@ if (process.argv.slice(3).some((argument) => argument !== '--')) {
 }
 const databaseMode = parseDatabaseMode(process.env.SPOTT_E2E_DATABASE_MODE);
 const databaseIdentity = createDatabaseRunIdentity();
-const allocatedPorts = await findUniqueAvailablePorts(4);
-if (allocatedPorts.length !== 4) throw new Error('LOOPBACK_PORT_ALLOCATION_FAILED');
-const [localPostgresPort, apiPort, webPort, opsPort] = allocatedPorts as [
+const allocatedPorts = await findUniqueAvailablePorts(6);
+if (allocatedPorts.length !== 6) throw new Error('LOOPBACK_PORT_ALLOCATION_FAILED');
+const [
+  localPostgresPort,
+  apiPort,
+  webPort,
+  apiHTTPSPort,
+  webHTTPSPort,
+  opsPort,
+] = allocatedPorts as [
+  number,
+  number,
   number,
   number,
   number,
@@ -52,6 +68,15 @@ const tsx = join(root, 'node_modules', '.bin', 'tsx');
 const verifiedPlaywright = join(root, 'scripts', 'ci', 'run-verified-playwright.mjs');
 const outputDirectory = join(root, 'output', 'playwright', 'core-journey', databaseIdentity.runId);
 const derivedDataPath = join(tmpdir(), `spott-core-journey-e2e-derived-${databaseIdentity.runId}`);
+const tlsDirectory = join(tmpdir(), `spott-core-journey-e2e-tls-${databaseIdentity.runId}`);
+const tlsKeyPath = join(tlsDirectory, 'loopback.key.pem');
+const tlsCertificatePath = join(tlsDirectory, 'loopback.cert.pem');
+const webOrigin = `https://127.0.0.1:${webHTTPSPort}`;
+const publicAPIBaseURL = `https://127.0.0.1:${apiHTTPSPort}/v1`;
+const webBFFKid = `e2e-${databaseIdentity.runId.slice(0, 16)}`;
+const webBFFKey = randomBytes(32).toString('base64url');
+const refreshDerivationKid = `e2e-refresh-${databaseIdentity.runId.slice(0, 16)}`;
+const refreshDerivationKey = randomBytes(32).toString('base64url');
 const databaseCoordinator = createPostgresDatabaseOwnershipCoordinator({
   adminURL: databaseRuntime.adminURL,
   targetURL: databaseRuntime.targetURL,
@@ -67,7 +92,7 @@ const sharedEnvironment: NodeJS.ProcessEnv = {
   PORT: String(apiPort),
   DATABASE_URL: databaseURL,
   SPOTT_TEST_DATABASE_URL: databaseURL,
-  WEB_ORIGIN: `http://127.0.0.1:${webPort},http://localhost:${webPort}`,
+  WEB_ORIGIN: webOrigin,
   OPS_ORIGIN: `http://127.0.0.1:${opsPort}`,
   ACCESS_TOKEN_SECRET: `e2e-access-${randomBytes(32).toString('hex')}`,
   REFRESH_TOKEN_SECRET: `e2e-refresh-${randomBytes(32).toString('hex')}`,
@@ -76,22 +101,39 @@ const sharedEnvironment: NodeJS.ProcessEnv = {
   OTP_PROVIDER: 'console',
   APPLE_ENABLE_ONLINE_CHECKS: 'false',
   API_INTERNAL_URL: `http://127.0.0.1:${apiPort}/v1`,
-  NEXT_PUBLIC_API_URL: `http://127.0.0.1:${apiPort}/v1`,
-  NEXT_PUBLIC_MAP_STYLE_URL: `http://127.0.0.1:${webPort}/__e2e-map-style.json`,
+  NEXT_PUBLIC_API_URL: publicAPIBaseURL,
+  NEXT_PUBLIC_MAP_STYLE_URL: `${webOrigin}/__e2e-map-style.json`,
+  NEXT_PUBLIC_APP_STORE_STATE: 'unavailable',
+  NEXT_PUBLIC_APP_STORE_URL: '',
+  NEXT_PUBLIC_APP_STORE_ID: '',
   SPOTT_API_BASE_URL: `http://127.0.0.1:${apiPort}/v1`,
-  PLAYWRIGHT_BASE_URL: `http://127.0.0.1:${webPort}`,
-  SPOTT_WEB_BASE_URL: `http://127.0.0.1:${webPort}`,
+  SPOTT_WEB_BFF_KEYS: `${webBFFKid}:${webBFFKey}`,
+  SPOTT_WEB_BFF_CURRENT_KID: webBFFKid,
+  REFRESH_TOKEN_DERIVATION_KEYS: `${refreshDerivationKid}:${refreshDerivationKey}`,
+  REFRESH_TOKEN_DERIVATION_CURRENT_KID: refreshDerivationKid,
+  SPOTT_WEB_CANONICAL_ORIGIN: webOrigin,
+  VINEXT_TRUST_PROXY: '1',
+  VINEXT_TRUSTED_HOSTS: `127.0.0.1:${webHTTPSPort}`,
+  WEB_SESSION_BFF_ENFORCEMENT: 'enforce',
+  WEB_SESSION_RECOVERY_SECONDS: '120',
+  WEB_SESSION_COMPLETION_RECOVERY_SECONDS: '120',
+  SPOTT_E2E_SESSION_COORDINATION: '1',
+  PLAYWRIGHT_BASE_URL: webOrigin,
+  SPOTT_WEB_BASE_URL: webOrigin,
   SPOTT_E2E_OUTPUT_DIR: outputDirectory,
   SPOTT_E2E_DATABASE_ORIGIN: databaseRuntime.mode,
 };
 
 let apiProcess: ChildProcess | undefined;
 let webProcess: ChildProcess | undefined;
+let apiHTTPSProxy: LoopbackHTTPSProxy | undefined;
+let webHTTPSProxy: LoopbackHTTPSProxy | undefined;
 let postgresStarted = false;
 let databaseProvisioned = false;
 let localDataDirectoryCreated = false;
 let localSocketDirectoryCreated = false;
 let derivedDataDirectoryCreated = false;
+let tlsDirectoryCreated = false;
 let cleaningUp = false;
 let cleanupPromise: Promise<void> | undefined;
 const migrationEnvironment: NodeJS.ProcessEnv = {
@@ -105,9 +147,27 @@ const migrationEnvironment: NodeJS.ProcessEnv = {
 
 async function main(): Promise<void> {
   await mkdir(outputDirectory, { recursive: true });
-  await assertPortsAvailable([apiPort, webPort, opsPort]);
+  await assertPortsAvailable([apiPort, webPort, apiHTTPSPort, webHTTPSPort, opsPort]);
 
   try {
+    await mkdir(tlsDirectory, { recursive: false, mode: 0o700 });
+    tlsDirectoryCreated = true;
+    await run(
+      'openssl',
+      createLoopbackCertificateArguments({
+        keyPath: tlsKeyPath,
+        certificatePath: tlsCertificatePath,
+      }),
+    );
+    await chmod(tlsKeyPath, 0o600);
+    const [tlsKey, trustedLoopbackCertificate] = await Promise.all([
+      readFile(tlsKeyPath),
+      readFile(tlsCertificatePath),
+    ]);
+    sharedEnvironment.SPOTT_E2E_TLS_SPKI_SHA256 = createLoopbackCertificateSPKI(
+      trustedLoopbackCertificate,
+    );
+
     if (databaseRuntime.localCluster) {
       await startLocalPostgres(databaseRuntime.localCluster);
     }
@@ -127,7 +187,30 @@ async function main(): Promise<void> {
       ['--filter', '@spott/web', 'start', '--', '-p', String(webPort), '-H', '127.0.0.1'],
       sharedEnvironment,
     );
-    await waitForURL(`http://127.0.0.1:${webPort}/discover`, 'Web discovery', 120_000);
+    apiHTTPSProxy = await startLoopbackHTTPSProxy({
+      port: apiHTTPSPort,
+      upstreamPort: apiPort,
+      key: tlsKey,
+      certificate: trustedLoopbackCertificate,
+    });
+    webHTTPSProxy = await startLoopbackHTTPSProxy({
+      port: webHTTPSPort,
+      upstreamPort: webPort,
+      key: tlsKey,
+      certificate: trustedLoopbackCertificate,
+    });
+    await waitForURL(
+      `${publicAPIBaseURL}/health`,
+      'HTTPS API health',
+      60_000,
+      trustedLoopbackCertificate,
+    );
+    await waitForURL(
+      `${webOrigin}/discover`,
+      'HTTPS Web discovery',
+      120_000,
+      trustedLoopbackCertificate,
+    );
 
     if (mode === 'web') {
       await run(
@@ -210,7 +293,7 @@ async function createDatabaseRuntime(
 
   const binDirectory = await resolvePostgresBin(selectedMode);
   const dataDirectory = join(tmpdir(), `spott-core-journey-e2e-pg-${databaseIdentity.runId}`);
-  const socketDirectory = join(tmpdir(), `spott-core-journey-e2e-socket-${databaseIdentity.runId}`);
+  const socketDirectory = resolvePostgresSocketDirectory(tmpdir(), databaseIdentity.runId);
   const adminURL = `postgres://postgres@127.0.0.1:${localPort}/postgres`;
   const targetURL = `postgres://postgres@127.0.0.1:${localPort}/${databaseIdentity.databaseName}`;
   return {
@@ -260,7 +343,7 @@ async function captureOutput(command: string, args: string[]): Promise<string> {
 
 async function startLocalPostgres(runtime: LocalClusterRuntime): Promise<void> {
   assertOwnedTemporaryPath(runtime.dataDirectory, 'spott-core-journey-e2e-pg-');
-  assertOwnedTemporaryPath(runtime.socketDirectory, 'spott-core-journey-e2e-socket-');
+  assertOwnedPostgresSocketDirectory(runtime.socketDirectory);
   if (/\s/u.test(runtime.socketDirectory)) throw new Error('POSTGRES_SOCKET_PATH_UNSAFE');
   await assertPortsAvailable([runtime.port]);
   await mkdir(runtime.dataDirectory, { recursive: false, mode: 0o700 });
@@ -329,11 +412,19 @@ function start(
   return child;
 }
 
-async function waitForURL(url: string, label: string, timeout = 60_000): Promise<void> {
+async function waitForURL(
+  url: string,
+  label: string,
+  timeout = 60_000,
+  trustedLoopbackCertificate?: Buffer,
+): Promise<void> {
   const deadline = Date.now() + timeout;
   let lastStatus = 'no response';
   while (Date.now() < deadline) {
-    const result = await probeHTTPStatus(url);
+    const result = await probeHTTPStatus(url, {
+      timeout: 5_000,
+      ...(trustedLoopbackCertificate === undefined ? {} : { trustedLoopbackCertificate }),
+    });
     if (result.status !== undefined) {
       lastStatus = `HTTP ${result.status}`;
       if (result.status >= 200 && result.status < 400) {
@@ -418,6 +509,15 @@ async function cleanup(): Promise<void> {
 
 async function performCleanup(): Promise<void> {
   const failures: unknown[] = [];
+  for (const proxy of [webHTTPSProxy, apiHTTPSProxy]) {
+    try {
+      await proxy?.close();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  webHTTPSProxy = undefined;
+  apiHTTPSProxy = undefined;
   for (const processToStop of [webProcess, apiProcess]) {
     try {
       await terminate(processToStop);
@@ -460,7 +560,7 @@ async function performCleanup(): Promise<void> {
   }
   if (localSocketDirectoryCreated && localCluster) {
     try {
-      assertOwnedTemporaryPath(localCluster.socketDirectory, 'spott-core-journey-e2e-socket-');
+      assertOwnedPostgresSocketDirectory(localCluster.socketDirectory);
       await rm(localCluster.socketDirectory, { recursive: true, force: false });
       localSocketDirectoryCreated = false;
     } catch (error) {
@@ -476,6 +576,15 @@ async function performCleanup(): Promise<void> {
       failures.push(error);
     }
   }
+  if (tlsDirectoryCreated) {
+    try {
+      assertOwnedTemporaryPath(tlsDirectory, 'spott-core-journey-e2e-tls-');
+      await rm(tlsDirectory, { recursive: true, force: false });
+      tlsDirectoryCreated = false;
+    } catch (error) {
+      failures.push(error);
+    }
+  }
   if (failures.length > 0) {
     throw new AggregateError(failures, 'CORE_JOURNEY_CLEANUP_FAILED');
   }
@@ -483,6 +592,11 @@ async function performCleanup(): Promise<void> {
 
 function assertOwnedTemporaryPath(path: string, prefix: string): void {
   const expected = join(tmpdir(), `${prefix}${databaseIdentity.runId}`);
+  if (path !== expected) throw new Error('E2E_TEMPORARY_PATH_NOT_OWNED');
+}
+
+function assertOwnedPostgresSocketDirectory(path: string): void {
+  const expected = resolvePostgresSocketDirectory(tmpdir(), databaseIdentity.runId);
   if (path !== expected) throw new Error('E2E_TEMPORARY_PATH_NOT_OWNED');
 }
 

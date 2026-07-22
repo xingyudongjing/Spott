@@ -108,6 +108,16 @@ function validatedOutputPath(value) {
   return candidate;
 }
 
+function validatedTLSFingerprint(value) {
+  if (value === undefined) return undefined;
+  if (!/^[A-Za-z0-9+/]{43}=$/u.test(value)) fail('PLAYWRIGHT_TLS_SPKI_INVALID');
+  const decoded = Buffer.from(value, 'base64');
+  if (decoded.length !== 32 || decoded.toString('base64') !== value) {
+    fail('PLAYWRIGHT_TLS_SPKI_INVALID');
+  }
+  return value;
+}
+
 function childEnvironment(attestation) {
   const environment = {
     NODE_ENV: 'test',
@@ -134,6 +144,8 @@ function childEnvironment(attestation) {
   if (databaseURL !== undefined) environment.SPOTT_TEST_DATABASE_URL = databaseURL;
   const outputPath = validatedOutputPath(process.env.SPOTT_E2E_OUTPUT_DIR);
   if (outputPath !== undefined) environment.SPOTT_E2E_OUTPUT_DIR = outputPath;
+  const tlsFingerprint = validatedTLSFingerprint(process.env.SPOTT_E2E_TLS_SPKI_SHA256);
+  if (tlsFingerprint !== undefined) environment.SPOTT_E2E_TLS_SPKI_SHA256 = tlsFingerprint;
   return environment;
 }
 

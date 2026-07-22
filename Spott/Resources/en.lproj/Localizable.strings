@@ -693,7 +693,7 @@
 "接收确认截止" = "Acceptance deadline";
 "提交加入申请" = "Submit join request";
 "提交后会开始 7 天通知期。期间可以撤销；社群有未结束活动时，服务端会拒绝解散。" = "Submitting starts a 7-day notice period. You can cancel during that time. The server will reject dissolution if the community has ongoing events.";
-"搜索社群名称、兴趣或地区" = "Search communities, interests, or areas";
+"搜索社群名称、兴趣或地区" = "Search groups, interests, or places";
 "撤销管理员" = "Remove admin";
 "撤销解散计划" = "Cancel dissolution";
 "文化" = "Culture";
@@ -889,3 +889,11 @@
 "日本全国" = "All Japan";
 "其他地区" = "Other area";
 "状态更新中" = "Status updating";
+"找到你的社群" = "Find your community";
+"找到同好，也找到下一次见面的理由。" = "Shared interests. Your next gathering.";
+"查看社群详情" = "View community details";
+"Weekend City Walks" = "Weekend City Walks";
+"A welcoming community for relaxed weekend walks." = "A welcoming community for relaxed weekend walks.";
+"walking" = "walking";
+"weekend" = "weekend";
+"Be kind and arrive on time." = "Be kind and arrive on time.";

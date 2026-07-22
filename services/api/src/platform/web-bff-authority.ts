@@ -38,6 +38,7 @@ export type SessionAuthorityRoute =
   | 'new_native_session'
   | 'session_successor'
   | 'binding_upgrade'
+  | 'logout'
   | 'consumed_token_recovery';
 
 export type ParsedRefreshCredential =
@@ -249,7 +250,8 @@ export function decideTransport(input: TransportDecisionInput): TransportDecisio
     if (
       input.route !== 'refresh' &&
       input.route !== 'session_successor' &&
-      input.route !== 'binding_upgrade'
+      input.route !== 'binding_upgrade' &&
+      input.route !== 'logout'
     ) {
       return { kind: 'reject', code: 'SESSION_TRANSPORT_MISMATCH' };
     }
@@ -432,6 +434,12 @@ export class WebBFFTransportGuard implements CanActivate {
     if (request.method !== 'POST') return true;
     const path = request.url.split('?', 1)[0];
     if (
+      path === '/v1/auth/web/complete'
+      || /^\/v1\/auth\/web\/completion-attempts\/[^/]+\/(?:accept|discard|revoke)$/u.test(path ?? '')
+    ) {
+      return this.authorizeAtomicWebCompletion(request);
+    }
+    if (
       path === '/v1/auth/email/verify' ||
       path === '/v1/auth/apple' ||
       path === '/v1/auth/google'
@@ -451,7 +459,8 @@ export class WebBFFTransportGuard implements CanActivate {
     const isRefresh = path === '/v1/auth/refresh';
     const isBootstrap = path === '/v1/auth/bootstrap';
     const isBindingUpgrade = path === '/v1/auth/device-binding/upgrade';
-    if (!isRefresh && !isBootstrap && !isBindingUpgrade) return true;
+    const isLogout = path === '/v1/auth/logout' || path === '/v1/auth/logout-all';
+    if (!isRefresh && !isBootstrap && !isBindingUpgrade && !isLogout) return true;
 
     const refreshToken = this.refreshToken(request.body);
     const parsed = parseRefreshCredential(refreshToken);
@@ -478,7 +487,13 @@ export class WebBFFTransportGuard implements CanActivate {
     const decision = decideTransport({
       mode: configuration().WEB_SESSION_BFF_ENFORCEMENT,
       storedTransport,
-      route: isBindingUpgrade ? 'binding_upgrade' : isBootstrap ? 'session_successor' : 'refresh',
+      route: isLogout
+        ? 'logout'
+        : isBindingUpgrade
+          ? 'binding_upgrade'
+          : isBootstrap
+            ? 'session_successor'
+            : 'refresh',
       authority: authorityState,
       requestChannel: request.sessionRequestChannel,
     });
@@ -486,6 +501,22 @@ export class WebBFFTransportGuard implements CanActivate {
     if (decision.kind === 'allow_observed') {
       this.logger.warn('Legacy Web refresh would be blocked under BFF enforcement');
     }
+    return true;
+  }
+
+  private async authorizeAtomicWebCompletion(request: SpottRequest): Promise<true> {
+    if (!this.authority.hasAuthorityHeaders(request)) {
+      this.reject('WEB_BFF_AUTHORITY_REQUIRED');
+    }
+    request.verifiedBFFAuthority = await this.authority.verifyRequest(request);
+    request.sessionRequestChannel = classifySessionRequestChannel({
+      hasVerifiedAuthority: true,
+      headers: request.headers,
+    });
+    if (request.sessionRequestChannel !== 'verified_bff') {
+      this.reject('SESSION_TRANSPORT_MISMATCH');
+    }
+    request.issuedSessionTransportClass = 'web_bff';
     return true;
   }
 

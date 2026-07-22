@@ -17,9 +17,12 @@ interface ComposerDraftStorageInput<TDraft> {
   uploadedNames?: string[];
 }
 
+type ComposerDraftNamespaceStorage = Pick<Storage, "key" | "length" | "removeItem">;
+
 const canonicalEventIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const publicSlugPattern = /^[a-z0-9][a-z0-9-]{0,199}$/u;
 const remoteStatusPattern = /^[a-z][a-z0-9_]{0,63}$/u;
+const COMPOSER_DRAFT_KEY_PREFIX = "spott.event-composer.v3.";
 const safeComposerDraftKeys = [
   "title",
   "description",
@@ -56,6 +59,17 @@ export function composerDraftStorageKey(ownerId: string | null): string {
   return ownerId
     ? `spott.event-composer.v3.user.${ownerId}`
     : "spott.event-composer.v3.anonymous";
+}
+
+export function clearAllComposerDrafts(storage: ComposerDraftNamespaceStorage): void {
+  try {
+    const keys = Array.from({ length: storage.length }, (_, index) => storage.key(index));
+    for (const key of keys) {
+      if (key?.startsWith(COMPOSER_DRAFT_KEY_PREFIX)) storage.removeItem(key);
+    }
+  } catch {
+    // Event creation remains usable when browser storage is blocked.
+  }
 }
 
 export function parseComposerDraft<TDraft = Record<string, unknown>>(

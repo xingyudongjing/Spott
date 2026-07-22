@@ -10,6 +10,7 @@ import { createServer as createNetServer } from 'node:net';
 import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
+import { SignJWT } from 'jose';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseVersionedKeyring } from '../../config.js';
@@ -155,6 +156,13 @@ describe('real HTTP Web BFF transport boundary', () => {
     if (client) {
       if (seededUserIds.length > 0) {
         await client.query(
+          `DELETE FROM identity.web_session_completion_dispositions
+           WHERE session_id IN (
+             SELECT id FROM identity.sessions WHERE user_id = ANY($1::uuid[])
+           )`,
+          [seededUserIds],
+        );
+        await client.query(
           `UPDATE identity.sessions
            SET current_binding_id = NULL, current_binding_generation = NULL
            WHERE user_id = ANY($1::uuid[])`,
@@ -243,6 +251,35 @@ describe('real HTTP Web BFF transport boundary', () => {
     return postJSONWithoutBrowserHeaders(`${targetBaseURL}/v1/auth/refresh`, body, headers);
   }
 
+  async function postWebLogout(
+    scope: 'current' | 'all',
+    body: string,
+    headers: Record<string, string> = {},
+  ): Promise<Response> {
+    const suffix = scope === 'all' ? 'logout-all' : 'logout';
+    return postJSONWithoutBrowserHeaders(`${baseURL}/v1/auth/${suffix}`, body, headers);
+  }
+
+  async function postWebComplete(
+    body: string,
+    headers: Record<string, string> = {},
+  ): Promise<Response> {
+    return postJSONWithoutBrowserHeaders(`${baseURL}/v1/auth/web/complete`, body, headers);
+  }
+
+  async function postWebCompletionDisposition(
+    attemptId: string,
+    operation: 'accept' | 'discard' | 'revoke',
+    body: string,
+    headers: Record<string, string> = {},
+  ): Promise<Response> {
+    return postJSONWithoutBrowserHeaders(
+      `${baseURL}/v1/auth/web/completion-attempts/${attemptId}/${operation}`,
+      body,
+      headers,
+    );
+  }
+
   async function postEmailVerify(
     targetBaseURL: string,
     body: string,
@@ -287,8 +324,12 @@ describe('real HTTP Web BFF transport boundary', () => {
               response.rawHeaders[index + 1] ?? '',
             );
           }
-          resolveResponse(new Response(Buffer.concat(chunks), {
-            status: response.statusCode ?? 500,
+          const status = response.statusCode ?? 500;
+          const body = status === 204 || status === 205 || status === 304
+            ? null
+            : Buffer.concat(chunks);
+          resolveResponse(new Response(body, {
+            status,
             statusText: response.statusMessage ?? '',
             headers: responseHeaders,
           }));
@@ -435,6 +476,176 @@ describe('real HTTP Web BFF transport boundary', () => {
     expect(count.rows[0]?.count).toBe('1');
   }
 
+  async function accessTokenFor(seeded: SeededSession): Promise<string> {
+    return new SignJWT({ sid: seeded.sessionId })
+      .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+      .setIssuer('spott-api')
+      .setAudience('spott-clients')
+      .setSubject(seeded.userId)
+      .setIssuedAt()
+      .setExpirationTime('5m')
+      .setJti(randomUUID())
+      .sign(new TextEncoder().encode(accessSecret));
+  }
+
+  it('requires fresh valid BFF authority before atomic Web completion can mutate identity state', async () => {
+    const seeded = await seedEmailChallenge();
+    const attemptId = randomUUID();
+    const binding = {
+      bindingId: randomUUID(),
+      generation: 0,
+      proof: randomBytes(32).toString('base64url'),
+      proofClass: 'persistent',
+    } as const;
+    const body = JSON.stringify({
+      credential: { provider: 'email', challengeId: seeded.challengeId, code: '123456' },
+      deviceId: seeded.deviceId,
+      attemptId,
+      newBinding: binding,
+    });
+    const path = '/v1/auth/web/complete';
+    const acceptPath = `/v1/auth/web/completion-attempts/${attemptId}/accept`;
+    const revokePath = `/v1/auth/web/completion-attempts/${attemptId}/revoke`;
+    const dispositionBody = JSON.stringify({
+      challengeId: seeded.challengeId,
+      deviceId: seeded.deviceId,
+      binding,
+    });
+
+    const completionState = async () => {
+      const state = await client.query<{
+        verified: boolean;
+        sessions: string;
+        bindings: string;
+        outcomes: string;
+        disposition: string | null;
+      }>(
+        `SELECT challenge.verified_at IS NOT NULL AS verified,
+                (SELECT count(*) FROM identity.sessions session
+                 WHERE session.device_id = challenge.device_id)::text AS sessions,
+                (SELECT count(*) FROM identity.device_bindings binding
+                 WHERE binding.device_id = challenge.device_id)::text AS bindings,
+                (SELECT count(*) FROM identity.web_session_completion_outcomes outcome
+                 WHERE outcome.challenge_id = challenge.id)::text AS outcomes,
+                (SELECT disposition.state
+                 FROM identity.web_session_completion_dispositions disposition
+                 WHERE disposition.challenge_id = challenge.id) AS disposition
+         FROM identity.email_challenges challenge WHERE challenge.id = $1`,
+        [seeded.challengeId],
+      );
+      return state.rows[0];
+    };
+
+    const unsigned = await postWebComplete(body);
+    const unsignedJSON = await expectRejectedWithoutRefresh(unsigned);
+    expect(unsignedJSON).toMatchObject({ error: { code: 'WEB_BFF_AUTHORITY_REQUIRED' } });
+    expect(await completionState()).toEqual({
+      verified: false,
+      sessions: '0',
+      bindings: '0',
+      outcomes: '0',
+      disposition: null,
+    });
+
+    const invalidHeaders = signedHeaders(path, body);
+    const signature = invalidHeaders['x-spott-bff-signature'] ?? '';
+    invalidHeaders['x-spott-bff-signature'] = `${signature.startsWith('A') ? 'B' : 'A'}${signature.slice(1)}`;
+    const invalid = await postWebComplete(body, invalidHeaders);
+    const invalidJSON = await expectRejectedWithoutRefresh(invalid);
+    expect(invalidJSON).toMatchObject({ error: { code: 'WEB_BFF_AUTHORITY_INVALID' } });
+    expect(await completionState()).toEqual({
+      verified: false,
+      sessions: '0',
+      bindings: '0',
+      outcomes: '0',
+      disposition: null,
+    });
+
+    const validHeaders = signedHeaders(path, body);
+    const completed = await postWebComplete(body, validHeaders);
+    expect(completed.status).toBe(200);
+    const completedBody = await responseJSON(completed) as Record<string, unknown>;
+    expect(completedBody.sessionId).toBeTypeOf('string');
+    expect(completedBody).toEqual({
+      state: 'pending',
+      sessionId: completedBody.sessionId,
+      bindingId: binding.bindingId,
+      deviceId: seeded.deviceId,
+    });
+    expect(containsRefreshToken(completedBody)).toBe(false);
+    expect(await completionState()).toEqual({
+      verified: true,
+      sessions: '1',
+      bindings: '1',
+      outcomes: '1',
+      disposition: 'pending',
+    });
+
+    const replayedNonce = await postWebComplete(body, validHeaders);
+    await expectRejectedWithoutRefresh(replayedNonce);
+    expect(await completionState()).toEqual({
+      verified: true,
+      sessions: '1',
+      bindings: '1',
+      outcomes: '1',
+      disposition: 'pending',
+    });
+
+    const unsignedAccept = await postWebCompletionDisposition(
+      attemptId,
+      'accept',
+      dispositionBody,
+    );
+    await expectRejectedWithoutRefresh(unsignedAccept);
+    expect((await completionState())?.disposition).toBe('pending');
+
+    const accepted = await postWebCompletionDisposition(
+      attemptId,
+      'accept',
+      dispositionBody,
+      signedHeaders(acceptPath, dispositionBody),
+    );
+    expect(accepted.status).toBe(200);
+    const acceptedBody = await responseJSON(accepted) as Record<string, unknown>;
+    const acceptedMaterial = typeof acceptedBody.material === 'object'
+      && acceptedBody.material !== null
+      ? acceptedBody.material as Record<string, unknown>
+      : {};
+    expect(acceptedMaterial.refreshToken).toBeTypeOf('string');
+    expect(acceptedBody).toMatchObject({
+      state: 'accepted',
+      material: {
+        sessionId: completedBody.sessionId,
+        bindingId: binding.bindingId,
+      },
+    });
+    expect(containsRefreshToken(acceptedBody)).toBe(true);
+    expect((await completionState())?.disposition).toBe('accepted');
+
+    const unsignedRevoke = await postWebCompletionDisposition(
+      attemptId,
+      'revoke',
+      dispositionBody,
+    );
+    const unsignedRevokeJSON = await expectRejectedWithoutRefresh(unsignedRevoke);
+    expect(unsignedRevokeJSON).toMatchObject({ error: { code: 'WEB_BFF_AUTHORITY_REQUIRED' } });
+    expect((await completionState())?.disposition).toBe('accepted');
+
+    const revoked = await postWebCompletionDisposition(
+      attemptId,
+      'revoke',
+      dispositionBody,
+      signedHeaders(revokePath, dispositionBody),
+    );
+    expect(revoked.status).toBe(200);
+    await expect(responseJSON(revoked)).resolves.toEqual({
+      state: 'revoked',
+      sessionId: completedBody.sessionId,
+      bindingId: binding.bindingId,
+      deviceId: seeded.deviceId,
+    });
+  });
+
   it('rejects a headerless genuine web_bff credential before the controller can rotate it', async () => {
     const seeded = await seedSession('headerless', 'web_bff', 'web');
     const response = await postRefresh(JSON.stringify({
@@ -448,6 +659,119 @@ describe('real HTTP Web BFF transport boundary', () => {
       [seeded.sessionId],
     );
     expect(state.rows[0]?.revoked_at).toBeNull();
+  });
+
+  it('requires signed BFF authority for bound Web logout and returns an exact empty 204', async () => {
+    const seeded = await seedSession('logout_current', 'web_bff', 'web');
+    const material = await upgradeWebSessionBinding(seeded);
+    const body = JSON.stringify({
+      refreshToken: seeded.token,
+      deviceId: seeded.deviceId,
+      ...material,
+    });
+    const path = '/v1/auth/logout';
+
+    const unsigned = await postWebLogout('current', body);
+    await expectRejectedWithoutRefresh(unsigned);
+    await expectSessionUnchanged(seeded);
+
+    const signed = await postWebLogout('current', body, signedHeaders(path, body));
+    const signedBody = await signed.text();
+    expect({ status: signed.status, body: signedBody }).toEqual({ status: 204, body: '' });
+    const state = await client.query<{ revoked_at: Date | null }>(
+      'SELECT revoked_at FROM identity.sessions WHERE id = $1',
+      [seeded.sessionId],
+    );
+    expect(state.rows[0]?.revoked_at).toBeInstanceOf(Date);
+  });
+
+  it('accepts signed bound logout-all and returns only the exact revoked count', async () => {
+    const seeded = await seedSession('logout_all_valid', 'web_bff', 'web');
+    const material = await upgradeWebSessionBinding(seeded);
+    const body = JSON.stringify({
+      refreshToken: seeded.token,
+      deviceId: seeded.deviceId,
+      ...material,
+    });
+    const path = '/v1/auth/logout-all';
+
+    const response = await postWebLogout('all', body, signedHeaders(path, body));
+    expect(response.status).toBe(200);
+    await expect(responseJSON(response)).resolves.toEqual({ revokedCount: 1 });
+    const state = await client.query<{ revoked_at: Date | null }>(
+      'SELECT revoked_at FROM identity.sessions WHERE id = $1',
+      [seeded.sessionId],
+    );
+    expect(state.rows[0]?.revoked_at).toBeInstanceOf(Date);
+  });
+
+  it.each([
+    ['native', 'ios'],
+    ['ops', 'ops'],
+  ] as const)('rejects signed %s credentials at the Web logout-all boundary', async (transport, platform) => {
+    const seeded = await seedSession(`logout_all_${transport}`, transport, platform);
+    const bindingId = randomUUID();
+    const body = JSON.stringify({
+      refreshToken: seeded.token,
+      deviceId: seeded.deviceId,
+      deviceBindingProof: {
+        bindingId,
+        generation: 0,
+        proof: randomBytes(32).toString('base64url'),
+        proofClass: 'persistent',
+      },
+      refreshEnvelopeClaims: {
+        sessionId: seeded.sessionId,
+        familyId: seeded.familyId,
+        generation: 0,
+        transportClass: 'web_bff',
+        persistentBindingId: bindingId,
+        persistentBindingGeneration: 0,
+      },
+    });
+    const path = '/v1/auth/logout-all';
+
+    const response = await postWebLogout('all', body, signedHeaders(path, body));
+    const rejected = await expectRejectedWithoutRefresh(response);
+    expect(response.status).toBe(403);
+    expect(rejected).toMatchObject({ error: { code: 'SESSION_TRANSPORT_MISMATCH' } });
+    await expectSessionUnchanged(seeded);
+  });
+
+  it('preserves the authenticated native DELETE sessions route after shared lock ordering', async () => {
+    const seeded = await seedSession('native_delete_all', 'native', 'ios');
+    const response = await fetch(`${baseURL}/v1/sessions`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${await accessTokenFor(seeded)}` },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(responseJSON(response)).resolves.toEqual({ revokedCount: 1 });
+    const state = await client.query<{ revoked_at: Date | null }>(
+      'SELECT revoked_at FROM identity.sessions WHERE id = $1',
+      [seeded.sessionId],
+    );
+    expect(state.rows[0]?.revoked_at).toBeInstanceOf(Date);
+  });
+
+  it.each([
+    ['scope', { scope: 'all' }],
+    ['victim session', { sessionId: '019b0000-0000-7000-8000-000000000099' }],
+    ['victim user', { userId: '019b0000-0000-7000-8000-000000000098' }],
+  ])('rejects signed logout-all body selector %s before any mutation', async (_label, selector) => {
+    const seeded = await seedSession(`logout_selector_${_label}`, 'web_bff', 'web');
+    const material = await upgradeWebSessionBinding(seeded);
+    const body = JSON.stringify({
+      refreshToken: seeded.token,
+      deviceId: seeded.deviceId,
+      ...material,
+      ...selector,
+    });
+    const path = '/v1/auth/logout-all';
+    const response = await postWebLogout('all', body, signedHeaders(path, body));
+
+    expect(response.status).toBe(400);
+    await expectSessionUnchanged(seeded);
   });
 
   it('does not trust a forged native caller platform or body-supplied authority metadata', async () => {
@@ -549,6 +873,10 @@ describe('real HTTP Web BFF transport boundary', () => {
   });
 
   it('accepts a valid one-time BFF authority and explicitly inherits web_bff on its successor', async () => {
+    const nonceRowsBefore = await client.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM identity.web_bff_request_nonces WHERE signing_kid = $1',
+      [bffKid],
+    );
     const seeded = await seedSession('signed', 'web_bff', 'web');
     const binding = await upgradeWebSessionBinding(seeded);
     const attemptId = randomUUID();
@@ -598,7 +926,7 @@ describe('real HTTP Web BFF transport boundary', () => {
       'SELECT count(*)::text AS count FROM identity.web_bff_request_nonces WHERE signing_kid = $1',
       [bffKid],
     );
-    expect(nonceRows.rows[0]?.count).toBe('2');
+    expect(Number(nonceRows.rows[0]?.count)).toBe(Number(nonceRowsBefore.rows[0]?.count) + 2);
   });
 
   it('hard-requires one-time BFF authority before the first persistent binding mutation', async () => {

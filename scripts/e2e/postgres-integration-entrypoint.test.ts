@@ -39,3 +39,12 @@ test('PostGIS runner passes only a sanitized environment into integration specs'
   assert.match(spawnBlock, /DATABASE_URL/u);
   assert.doesNotMatch(spawnBlock, /SPOTT_DATABASE_(?:ADMIN_URL|RUN_ID|RUN_TOKEN)/u);
 });
+
+test('root PostgreSQL integration includes the worker session-completion cleanup suite', () => {
+  const source = readFileSync(join(repositoryRoot, 'scripts/test-postgis.ts'), 'utf8');
+  assert.match(source, /services['"], ['"]worker/u);
+  assert.match(source, /session-completion-cleanup\.integration\.test\.ts/u);
+
+  const workflow = readFileSync(join(repositoryRoot, '.github/workflows/ci.yml'), 'utf8');
+  assert.match(workflow, /corepack pnpm test:integration:postgres/u);
+});

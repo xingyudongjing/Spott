@@ -3,6 +3,11 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
+      "env": [
+        "NEXT_PUBLIC_APP_STORE_STATE",
+        "NEXT_PUBLIC_APP_STORE_URL",
+        "NEXT_PUBLIC_APP_STORE_ID"
+      ],
       "outputs": [".next/**", "!.next/cache/**", "dist/**"]
     },
     "dev": {

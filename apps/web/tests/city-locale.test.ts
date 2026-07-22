@@ -1,10 +1,14 @@
 import { NextRequest } from "next/server";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { isTokyoPath, tokyoLanguageAlternates, tokyoPath } from "../app/lib/city-locale";
 import { proxy } from "../proxy";
 
 describe("Tokyo locale URLs", () => {
+  beforeEach(() => {
+    process.env.SPOTT_WEB_CANONICAL_ORIGIN = "https://spott.jp";
+  });
+
   it("uses one stable, distinct indexable URL for every supported language", () => {
     expect(tokyoPath("zh-Hans")).toBe("/tokyo");
     expect(tokyoPath("ja")).toBe("/ja/tokyo");
@@ -32,6 +36,16 @@ describe("Tokyo locale URLs", () => {
     const rewritten = response.headers.get("x-middleware-rewrite");
     expect(rewritten).toBe(`https://spott.jp/tokyo?availableOnly=true`);
     expect(response.cookies.get("spott_locale")?.value).toBe(locale);
+  });
+
+  it("redirects www before a locale rewrite or Cookie mutation", () => {
+    const response = proxy(new NextRequest("https://www.spott.jp/ja/tokyo?availableOnly=true"));
+
+    expect(response.status).toBe(308);
+    expect(response.headers.get("location"))
+      .toBe("https://spott.jp/ja/tokyo?availableOnly=true");
+    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+    expect(response.cookies.get("spott_locale")).toBeUndefined();
   });
 
   it.each([

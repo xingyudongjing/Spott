@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Database } from './database.js';
 import type { AuthenticatedUser } from './request-context.js';
+import { webSessionCompletionAcceptedSQL } from './web-session-completion-disposition.js';
 
 const canonicalUUIDPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -51,6 +52,7 @@ export class SessionAuthority {
         AND session.revoked_at IS NULL
         AND session.reuse_detected_at IS NULL
         AND session.expires_at > clock_timestamp()
+        AND ${webSessionCompletionAcceptedSQL}
         AND device.risk_state <> 'blocked'
         AND user_record.status = 'active'
         AND user_record.deleted_at IS NULL

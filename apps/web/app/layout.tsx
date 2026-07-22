@@ -7,10 +7,12 @@ import { AppDialogProvider } from "./components/AppDialog";
 import { I18nProvider } from "./components/I18nProvider";
 import { ServiceWorkerRegistrar } from "./components/ServiceWorkerRegistrar";
 import { SyncEngineRegistrar } from "./components/SyncEngineRegistrar";
+import { SessionProvider } from "./components/SessionProvider";
 import { PreviewModeProvider } from "./components/PreviewModeProvider";
 import { formatMessage, type Locale } from "./i18n/messages";
 import { serverLocale } from "./i18n/server";
 import { parsePreviewMode } from "./lib/preview-mode";
+import { routeShellFromHeader, routeShellRequestHeader } from "./lib/route-shell";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -60,20 +62,33 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const [locale, requestHeaders] = await Promise.all([serverLocale(), headers()]);
+  const routeShell = routeShellFromHeader(requestHeaders.get(routeShellRequestHeader));
+  if (routeShell === "marketing") {
+    return (
+      <html lang={locale} data-scroll-behavior="smooth">
+        <body className={inter.variable} data-route-shell="marketing">
+          {children}
+        </body>
+      </html>
+    );
+  }
+
   const previewMode = parsePreviewMode(requestHeaders.get("x-spott-preview-mode"));
   return (
     <html lang={locale} data-scroll-behavior="smooth">
-      <body className={inter.variable}>
+      <body className={inter.variable} data-route-shell="product">
         <I18nProvider initialLocale={locale}>
           <PreviewModeProvider initialMode={previewMode}>
             <AppDialogProvider>
-              <a className="skip-link" href="#spott-main-content">
-                {formatMessage(locale, "common.skipToContent")}
-              </a>
-              <SiteHeader />
-              <div id="spott-main-content" tabIndex={-1}>{children}</div>
-              <ServiceWorkerRegistrar />
-              <SyncEngineRegistrar />
+              <SessionProvider>
+                <a className="skip-link" href="#spott-main-content">
+                  {formatMessage(locale, "common.skipToContent")}
+                </a>
+                <SiteHeader />
+                <div id="spott-main-content" tabIndex={-1}>{children}</div>
+                <ServiceWorkerRegistrar />
+                <SyncEngineRegistrar />
+              </SessionProvider>
             </AppDialogProvider>
           </PreviewModeProvider>
         </I18nProvider>

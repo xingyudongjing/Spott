@@ -24,7 +24,7 @@ export default async function LoginPage({
         </div>
       </div>
       <div className="auth-panel">
-        <Link className="wordmark" href="/">
+        <Link className="wordmark" href="/discover">
           SPOTT
         </Link>
         <div className="auth-copy">

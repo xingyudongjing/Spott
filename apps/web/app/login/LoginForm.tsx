@@ -1,27 +1,39 @@
 'use client';
 
 import { PreviewModeLink as Link } from '../components/PreviewModeLink';
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   apiRequest,
-  deviceId,
+  abandonEmailSessionSwitch,
+  completeEmailSession,
+  DeviceIdentityStorageError,
   errorMessage,
-  saveSession,
-  type WebSession,
+  prepareEmailLoginDevice,
+  readSession,
+  registerEmailSessionSwitch,
+  type EmailLoginSessionExpectation,
+  type LoginDevicePlan,
 } from '../lib/client-api';
 import { safeReturnTo } from '../lib/safe-return-to';
 import { useI18n } from '../components/I18nProvider';
 
-interface Challenge {
+interface ChallengeResponse {
   challengeId: string;
   expiresAt: string;
   retryAfterSeconds: number;
   developmentCode?: string;
 }
 
+interface Challenge extends ChallengeResponse {
+  device: LoginDevicePlan;
+  expectedSession: EmailLoginSessionExpectation;
+}
+
 export function LoginForm({ returnTo = '/discover' }: { returnTo?: string }) {
   const { locale } = useI18n();
+  const router = useRouter();
   const copy =
     locale === 'ja'
       ? {
@@ -32,6 +44,8 @@ export function LoginForm({ returnTo = '/discover' }: { returnTo?: string }) {
           verify: '確認してログイン',
           send: '確認コードを送信',
           change: 'メールを変更',
+          network: '接続できませんでした。ネットワークを確認して、もう一度お試しください。',
+          secureSwitch: '安全にアカウントを切り替えられません。ブラウザのストレージ設定を確認して、もう一度お試しください。',
           termsPrefix: '続行すると、',
           terms: '利用規約',
           termsJoin: 'と',
@@ -47,6 +61,8 @@ export function LoginForm({ returnTo = '/discover' }: { returnTo?: string }) {
             verify: 'Verify and log in',
             send: 'Send email code',
             change: 'Use another email',
+            network: 'We could not connect. Check your network and try again.',
+            secureSwitch: 'We cannot switch accounts securely. Check your browser storage settings and try again.',
             termsPrefix: 'By continuing, you agree to the ',
             terms: 'Terms',
             termsJoin: ' and ',
@@ -61,6 +77,8 @@ export function LoginForm({ returnTo = '/discover' }: { returnTo?: string }) {
             verify: '验证并登录',
             send: '发送邮箱验证码',
             change: '更换邮箱',
+            network: '暂时无法连接，请检查网络后重试。',
+            secureSwitch: '无法安全切换账号，请检查浏览器存储设置后重试。',
             termsPrefix: '继续即表示你同意',
             terms: '服务条款',
             termsJoin: '和',
@@ -79,24 +97,48 @@ export function LoginForm({ returnTo = '/discover' }: { returnTo?: string }) {
     setMessage('');
     try {
       if (!challenge) {
-        const created = await apiRequest<Challenge>('/auth/email/challenges', {
+        const session = readSession();
+        let device: LoginDevicePlan;
+        try {
+          device = prepareEmailLoginDevice({ switching: session !== null });
+        } catch (error) {
+          if (error instanceof DeviceIdentityStorageError) {
+            setMessage(copy.secureSwitch);
+            return;
+          }
+          throw error;
+        }
+        const expectedSession: EmailLoginSessionExpectation = session
+          ? { state: 'authenticated', userId: session.user.id, sessionId: session.sessionId }
+          : { state: 'anonymous' };
+        const created = await apiRequest<ChallengeResponse>('/auth/email/challenges', {
           method: 'POST',
-          body: JSON.stringify({ email, deviceId: deviceId() }),
+          body: JSON.stringify({ email, deviceId: device.deviceId }),
+          deviceIdOverride: device.deviceId,
         });
-        setChallenge(created);
+        if (!await registerEmailSessionSwitch({
+          challengeId: created.challengeId,
+          device,
+          expectedSession,
+        })) {
+          setMessage(copy.secureSwitch);
+          return;
+        }
+        setChallenge({ ...created, device, expectedSession });
         if (created.developmentCode) setCode(created.developmentCode);
         setMessage(copy.sent);
       } else {
-        const session = await apiRequest<WebSession>('/auth/email/verify', {
-          method: 'POST',
-          idempotent: true,
-          body: JSON.stringify({ challengeId: challenge.challengeId, code, deviceId: deviceId() }),
+        await completeEmailSession({
+          challengeId: challenge.challengeId,
+          code,
+          device: challenge.device,
+          expectedSession: challenge.expectedSession,
+        }, {
+          onCommitted: () => router.replace(safeReturnTo(returnTo)),
         });
-        saveSession(session);
-        window.location.assign(safeReturnTo(returnTo));
       }
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessage(error instanceof TypeError ? copy.network : errorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -145,7 +187,12 @@ export function LoginForm({ returnTo = '/discover' }: { returnTo?: string }) {
         <button
           type="button"
           className="text-button"
+          disabled={busy}
           onClick={() => {
+            if (!abandonEmailSessionSwitch(challenge.challengeId)) {
+              setMessage(copy.secureSwitch);
+              return;
+            }
             setChallenge(null);
             setCode('');
             setMessage('');

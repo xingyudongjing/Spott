@@ -607,7 +607,7 @@ export function EventComposer() {
   return (
     <main className="studio-page">
       <aside className="composer-steps">
-        <Link className="wordmark" href="/">
+        <Link className="wordmark" href="/discover">
           SPOTT
         </Link>
         <span className="eyebrow-text">

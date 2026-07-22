@@ -7,6 +7,21 @@
       "kind": "browser-e2e"
     },
     {
+      "path": "apps/web/tests/favorites-layout-rendered.spec.ts",
+      "gate": "web-core-journey",
+      "kind": "browser-e2e"
+    },
+    {
+      "path": "apps/web/tests/group-detail-visible.spec.ts",
+      "gate": "web-core-journey",
+      "kind": "browser-e2e"
+    },
+    {
+      "path": "apps/web/tests/groups-rendered.spec.ts",
+      "gate": "web-core-journey",
+      "kind": "browser-e2e"
+    },
+    {
       "path": "scripts/ci/run-postgres-integration.ts",
       "gate": "postgres-integration",
       "kind": "database-runner"
@@ -47,6 +62,11 @@
       "kind": "service-integration"
     },
     {
+      "path": "services/api/src/modules/auth/auth.web-completion.integration.spec.ts",
+      "gate": "postgres-integration",
+      "kind": "service-integration"
+    },
+    {
       "path": "services/api/src/modules/auth/web-bff-boundary.integration.spec.ts",
       "gate": "postgres-integration",
       "kind": "service-integration"
@@ -72,12 +92,22 @@
       "kind": "service-integration"
     },
     {
+      "path": "services/worker/test/session-completion-cleanup.integration.test.ts",
+      "gate": "postgres-integration",
+      "kind": "service-integration"
+    },
+    {
       "path": "tests/e2e/api-permission-matrix.spec.ts",
       "gate": "web-core-journey",
       "kind": "browser-e2e"
     },
     {
       "path": "tests/e2e/core-journey.spec.ts",
+      "gate": "web-core-journey",
+      "kind": "browser-e2e"
+    },
+    {
+      "path": "tests/e2e/session-refresh-coordination.spec.ts",
       "gate": "web-core-journey",
       "kind": "browser-e2e"
     },

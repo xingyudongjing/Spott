@@ -79,7 +79,7 @@ describe("parseSessionServerConfig", () => {
     expect(() => parseSessionServerConfig(environment({ API_INTERNAL_URL: value }))).toThrow();
   });
 
-  test.each(["0", "-1", "1.5", "901", "not-a-number"])(
+  test.each(["0", "-1", "1.5", "121", "901", "not-a-number"])(
     "rejects an unsafe recovery window %s",
     (value) => {
       expect(() => parseSessionServerConfig(environment({ WEB_SESSION_RECOVERY_SECONDS: value }))).toThrow();

@@ -28,18 +28,21 @@ const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const migrationsDirectory = join(repoRoot, 'database', 'migrations');
 const apiDirectory = join(repoRoot, 'services', 'api');
 const apiSourceDirectory = join(apiDirectory, 'src');
+const workerDirectory = join(repoRoot, 'services', 'worker');
+const workerCleanupSpecification = 'test/session-completion-cleanup.integration.test.ts';
 const requestedSpecifications = process.argv.slice(2);
 if (requestedSpecifications.includes('--all') && requestedSpecifications.length !== 1) {
   throw new Error('--all cannot be combined with explicit integration spec paths');
 }
-const specifications =
-  requestedSpecifications[0] === '--all'
+const runAll = requestedSpecifications[0] === '--all';
+const apiSpecifications =
+  runAll
     ? (await readdir(apiSourceDirectory, { recursive: true }))
         .filter((name) => name.endsWith('.integration.spec.ts'))
         .map((name) => join('src', name))
         .toSorted()
     : requestedSpecifications;
-if (specifications.length === 0) throw new Error('At least one integration spec path is required');
+if (apiSpecifications.length === 0) throw new Error('At least one integration spec path is required');
 
 const client = new Client({
   connectionString: testDatabaseURL,
@@ -124,31 +127,43 @@ try {
   }
 }
 
-const exitCode = await new Promise<number>((resolve, reject) => {
-  const childEnvironment: NodeJS.ProcessEnv = {};
-  for (const key of ['CI', 'FORCE_COLOR', 'HOME', 'NO_COLOR', 'PATH', 'TERM', 'TMPDIR']) {
-    const value = process.env[key];
-    if (value !== undefined) childEnvironment[key] = value;
-  }
-  const child = spawn(
-    'pnpm',
-    ['exec', 'vitest', 'run', '--config', 'vitest.integration.config.ts', ...specifications],
-    {
-      cwd: apiDirectory,
-      env: {
-        ...childEnvironment,
-        NODE_ENV: 'test',
-        DATABASE_URL: testDatabaseURL,
-        SPOTT_TEST_DATABASE_URL: testDatabaseURL,
-      },
-      stdio: 'inherit',
-    },
-  );
-  child.once('error', reject);
-  child.once('exit', (code, signal) => {
-    if (signal) reject(new Error(`Vitest terminated by ${signal}`));
-    else resolve(code ?? 1);
-  });
-});
+const childEnvironment: NodeJS.ProcessEnv = {};
+for (const key of ['CI', 'FORCE_COLOR', 'HOME', 'NO_COLOR', 'PATH', 'TERM', 'TMPDIR']) {
+  const value = process.env[key];
+  if (value !== undefined) childEnvironment[key] = value;
+}
 
-process.exitCode = exitCode;
+function runVitest(directory: string, arguments_: readonly string[]): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const child = spawn(
+      'pnpm',
+      ['exec', 'vitest', 'run', ...arguments_],
+      {
+        cwd: directory,
+        env: {
+          ...childEnvironment,
+          NODE_ENV: 'test',
+          DATABASE_URL: testDatabaseURL,
+          SPOTT_TEST_DATABASE_URL: testDatabaseURL,
+        },
+        stdio: 'inherit',
+      },
+    );
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (signal) reject(new Error(`Vitest terminated by ${signal}`));
+      else resolve(code ?? 1);
+    });
+  });
+}
+
+const apiExitCode = await runVitest(apiDirectory, [
+  '--config',
+  'vitest.integration.config.ts',
+  ...apiSpecifications,
+]);
+const workerExitCode = runAll
+  ? await runVitest(workerDirectory, [workerCleanupSpecification])
+  : 0;
+
+process.exitCode = apiExitCode !== 0 ? apiExitCode : workerExitCode;

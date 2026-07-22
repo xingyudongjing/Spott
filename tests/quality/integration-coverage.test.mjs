@@ -60,6 +60,7 @@ function classify(path) {
   }
   if (
     /\.integration\.spec\.[cm]?[jt]sx?$/u.test(path) ||
+    /^services\/worker\/test\/.*\.integration\.test\.[cm]?[jt]sx?$/u.test(path) ||
     /^tests\/integration\/.*\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(path) ||
     /^services\/worker\/.*\.(?:real-service|real_service)\.spec\.[cm]?[jt]sx?$/u.test(path)
   ) {
@@ -69,11 +70,18 @@ function classify(path) {
 }
 
 function discoverCoverage(root) {
+  const resolvedRoot = resolve(root);
   const discovered = new Map();
-  const stack = [root];
+  const stack = [resolvedRoot];
   while (stack.length > 0) {
     const directory = stack.pop();
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const entries = readdirSync(directory, { withFileTypes: true });
+    if (
+      directory !== resolvedRoot
+      && entries.some((entry) => entry.name === '.git')
+    ) continue;
+
+    for (const entry of entries) {
       if (entry.isDirectory() && ignoredDirectories.has(entry.name)) continue;
       const absolute = join(directory, entry.name);
       if (entry.isDirectory()) {
@@ -81,13 +89,13 @@ function discoverCoverage(root) {
         continue;
       }
       if (!entry.isFile()) continue;
-      const path = toRepositoryPath(root, absolute);
+      const path = toRepositoryPath(resolvedRoot, absolute);
       const classification = classify(path);
       if (classification) discovered.set(path, classification);
     }
   }
   for (const [path, classification] of requiredInfrastructure) {
-    const absolute = join(root, path);
+    const absolute = join(resolvedRoot, path);
     if (lstatSync(absolute).isFile()) discovered.set(path, classification);
   }
   return discovered;
@@ -140,6 +148,43 @@ test('orphan discovery detects a newly added integration test', () => {
   ]);
 });
 
+test('coverage discovery stops at nested Git repository and worktree boundaries', () => {
+  const root = mkdtempSync(join(tmpdir(), 'spott-integration-boundary-'));
+  for (const path of requiredInfrastructure.keys()) {
+    const target = join(root, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, 'fixture\n');
+  }
+
+  const owned = join(root, 'services/api/src/owned.integration.spec.ts');
+  mkdirSync(dirname(owned), { recursive: true });
+  writeFileSync(owned, 'fixture\n');
+
+  const nestedWorktree = join(root, '.claude/worktrees/task-1');
+  mkdirSync(join(nestedWorktree, 'services/api/src'), { recursive: true });
+  writeFileSync(join(nestedWorktree, '.git'), 'gitdir: /tmp/spott-task-1.git\n');
+  writeFileSync(
+    join(nestedWorktree, 'services/api/src/leaked.integration.spec.ts'),
+    'fixture\n',
+  );
+
+  const nestedRepository = join(root, 'vendor/embedded-repository');
+  mkdirSync(join(nestedRepository, '.git'), { recursive: true });
+  mkdirSync(join(nestedRepository, 'services/api/src'), { recursive: true });
+  writeFileSync(
+    join(nestedRepository, 'services/api/src/leaked.integration.spec.ts'),
+    'fixture\n',
+  );
+
+  assert.deepEqual([...discoverCoverage(root).keys()].toSorted(), [
+    'scripts/ci/run-postgres-integration.ts',
+    'scripts/ci/run-verified-playwright.mjs',
+    'scripts/run-core-journey-e2e.ts',
+    'scripts/test-postgis.ts',
+    'services/api/src/owned.integration.spec.ts',
+  ]);
+});
+
 test('coverage discovery includes every configured Web Playwright and database harness test class', () => {
   const discovered = discoverCoverage(repositoryRoot);
   assert.deepEqual(discovered.get('apps/web/tests/discovery-rendered.spec.ts'), [
@@ -150,4 +195,8 @@ test('coverage discovery includes every configured Web Playwright and database h
     'postgres-integration',
     'database-ownership-integration',
   ]);
+  assert.deepEqual(
+    discovered.get('services/worker/test/session-completion-cleanup.integration.test.ts'),
+    ['postgres-integration', 'service-integration'],
+  );
 });

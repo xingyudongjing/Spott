@@ -146,6 +146,21 @@
       "sequence": 29,
       "filename": "0029_event_contact_channels.sql",
       "sha256": "4894428662b180d32d878070f1048161ddda0a38490dee94d47395e4d7778c49"
+    },
+    {
+      "sequence": 30,
+      "filename": "0030_web_session_completion_outcomes.sql",
+      "sha256": "04164678e453597af429ca5975f7df2e3704a6000a5761850509e6c4aa1c5627"
+    },
+    {
+      "sequence": 31,
+      "filename": "0031_web_session_completion_dispositions.sql",
+      "sha256": "3932bc7f581c36d9390dd8d49a70743885c33968d67612dc41bc0031f4e37b39"
+    },
+    {
+      "sequence": 32,
+      "filename": "0032_web_session_completion_revoke_retention.sql",
+      "sha256": "170e0be1702f24c2e3865095b2c3761419689fd2af1eaaf14f643835d9dd810c"
     }
   ]
 }

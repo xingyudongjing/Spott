@@ -27,13 +27,18 @@ const CATEGORY_MESSAGE_KEYS = {
   networking: "filter.categoryNetworking",
 } as const satisfies Record<string, MessageKey>;
 
-export function GroupsDirectory() {
+type GroupsDirectoryProps = {
+  /** Frozen, public-only records used by deterministic product-evidence capture. */
+  readonly initialItems?: readonly GroupView[];
+};
+
+export function GroupsDirectory({ initialItems }: GroupsDirectoryProps = {}) {
   const { locale, t } = useI18n();
   const isReadOnly = usePreviewMode() === "read-only";
-  const [publicItems, setPublicItems] = useState<GroupView[]>([]);
+  const [publicItems, setPublicItems] = useState<GroupView[]>(() => initialItems ? [...initialItems] : []);
   const [myItems, setMyItems] = useState<GroupView[]>([]);
   const [signedIn, setSignedIn] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(initialItems === undefined);
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("all");
@@ -56,7 +61,11 @@ export function GroupsDirectory() {
     } finally { setLoading(false); }
   }, [isReadOnly]);
 
-  useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer); }, [load]);
+  useEffect(() => {
+    if (initialItems !== undefined) return;
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [initialItems, load]);
 
   const allItems = useMemo(() => [...myItems, ...publicItems], [myItems, publicItems]);
   const categories = useMemo(

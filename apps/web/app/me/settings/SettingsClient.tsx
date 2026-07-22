@@ -6,7 +6,7 @@ import { useAppDialog } from "../../components/AppDialog";
 import { useI18n } from "../../components/I18nProvider";
 import { localeNames, type Locale } from "../../i18n/messages";
 import { analyticsConsent, setAnalyticsConsent, trackProductEvent } from "../../lib/analytics";
-import { apiRequest, clearSession, errorMessage, readSession } from "../../lib/client-api";
+import { apiRequest, errorMessage, logoutCurrentSession, readSession } from "../../lib/client-api";
 import { uploadProcessedImage } from "../../lib/media-upload";
 import { DashboardNav } from "../DashboardNav";
 
@@ -159,6 +159,7 @@ export function SettingsClient() {
           unlocked: "獲得済み",
           locked: "進行中",
           logout: "ログアウト",
+          logoutFailed: "ログアウトを完了できませんでした。もう一度お試しください。",
           logoutAll: "すべての端末からログアウト",
           logoutAllBody: "iOS と Web のすべてのセッションを取り消します",
           logoutAllConfirm: "すべての端末からログアウトしますか？もう一度ログインが必要です。",
@@ -212,6 +213,7 @@ export function SettingsClient() {
             unlocked: "Unlocked",
             locked: "In progress",
             logout: "Log out",
+            logoutFailed: "We could not finish signing you out. Please try again.",
             logoutAll: "Log out everywhere",
             logoutAllBody: "Revoke every iOS and Web session",
             logoutAllConfirm: "Log out on every device? You will need to sign in again.",
@@ -264,6 +266,7 @@ export function SettingsClient() {
             unlocked: "已获得",
             locked: "进行中",
             logout: "退出登录",
+            logoutFailed: "暂时无法完成退出，请重试。",
             logoutAll: "退出所有设备",
             logoutAllBody: "撤销全部 iOS 与 Web 登录会话",
             logoutAllConfirm: "确定退出所有设备吗？之后需要重新登录。",
@@ -345,19 +348,12 @@ export function SettingsClient() {
   }
 
   async function logout() {
-    const session = readSession();
-    if (session) {
-      try {
-        await apiRequest(`/sessions/${session.sessionId}`, {
-          method: "DELETE",
-          authenticated: true,
-          idempotent: true,
-        });
-      } catch {
-        // Local logout still proceeds when the network is unavailable.
-      }
+    setMessage("");
+    const completed = await logoutCurrentSession("current");
+    if (!completed) {
+      setMessage(copy.logoutFailed);
+      return;
     }
-    clearSession();
     window.location.assign("/");
   }
 
@@ -368,16 +364,13 @@ export function SettingsClient() {
       confirmLabel: copy.logoutAll,
       destructive: true,
       onConfirm: async () => {
-        try {
-          await apiRequest("/sessions", {
-            method: "DELETE",
-            authenticated: true,
-          });
-        } catch (error) {
-          setMessage(errorMessage(error));
+        setMessage("");
+        const completed = await logoutCurrentSession("all");
+        if (!completed) {
+          const error = new Error(copy.logoutFailed);
+          setMessage(error.message);
           throw error;
         }
-        clearSession();
         window.location.assign("/");
       },
     });

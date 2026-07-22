@@ -18,7 +18,10 @@ export interface RegistrationDraft {
 }
 
 type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+type DraftNamespaceStorage = Pick<Storage, "key" | "length" | "removeItem">;
 type GateSession = { user: { phoneVerified: boolean } } | null;
+
+const REGISTRATION_DRAFT_KEY_PREFIX = "spott.web.registration-draft.";
 
 export function registrationDraftKey(eventId: string, eventVersion: number) {
   return `spott.web.registration-draft.v${REGISTRATION_DRAFT_SCHEMA_VERSION}.${eventId}.v${eventVersion}`;
@@ -71,6 +74,17 @@ export function clearRegistrationDraft(
     storage.removeItem(registrationDraftKey(eventId, eventVersion));
   } catch {
     // The successful server result remains authoritative even if cleanup is blocked.
+  }
+}
+
+export function clearAllRegistrationDrafts(storage: DraftNamespaceStorage) {
+  try {
+    const keys = Array.from({ length: storage.length }, (_, index) => storage.key(index));
+    for (const key of keys) {
+      if (key?.startsWith(REGISTRATION_DRAFT_KEY_PREFIX)) storage.removeItem(key);
+    }
+  } catch {
+    // Logout and account switching remain usable when browser storage is blocked.
   }
 }
 

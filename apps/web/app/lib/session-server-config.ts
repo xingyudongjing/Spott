@@ -1,8 +1,10 @@
 import { Buffer } from "node:buffer";
 
+import { parseWebCanonicalOrigin } from "./canonical-origin";
+
 const keyIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 const canonicalBase64URLPattern = /^[A-Za-z0-9_-]+$/u;
-const maximumRecoverySeconds = 900;
+const maximumRecoverySeconds = 120;
 
 export interface WebBFFKeyring extends Iterable<readonly [string, Buffer]> {
   readonly currentKid: string;
@@ -95,30 +97,6 @@ function parseKeyring(value: string, currentKid: string): WebBFFKeyring {
   return immutableKeyring(keys, currentKid);
 }
 
-function parseCanonicalOrigin(value: string, production: boolean): string {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw configurationError("SPOTT_WEB_CANONICAL_ORIGIN", "must be one canonical HTTP(S) origin");
-  }
-  if (
-    (url.protocol !== "http:" && url.protocol !== "https:")
-    || url.username !== ""
-    || url.password !== ""
-    || url.origin !== value
-    || url.pathname !== "/"
-    || url.search !== ""
-    || url.hash !== ""
-  ) {
-    throw configurationError("SPOTT_WEB_CANONICAL_ORIGIN", "must be one canonical HTTP(S) origin");
-  }
-  if (production && url.protocol !== "https:") {
-    throw configurationError("SPOTT_WEB_CANONICAL_ORIGIN", "must use HTTPS in production");
-  }
-  return value;
-}
-
 function parseInternalAPIURL(value: string): string {
   const normalized = value.endsWith("/") ? value.slice(0, -1) : value;
   let url: URL;
@@ -147,7 +125,7 @@ function parseRecoverySeconds(value: string): number {
   }
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed > maximumRecoverySeconds) {
-    throw configurationError("WEB_SESSION_RECOVERY_SECONDS", "must be between 1 and 900 seconds");
+    throw configurationError("WEB_SESSION_RECOVERY_SECONDS", "must be between 1 and 120 seconds");
   }
   return parsed;
 }
@@ -161,8 +139,8 @@ export function parseSessionServerConfig(environment: SessionServerEnvironment):
   const config: SessionServerConfig = {
     nodeEnvironment,
     bffKeys: parseKeyring(required(environment, "SPOTT_WEB_BFF_KEYS"), currentKid),
-    canonicalOrigin: parseCanonicalOrigin(
-      required(environment, "SPOTT_WEB_CANONICAL_ORIGIN"),
+    canonicalOrigin: parseWebCanonicalOrigin(
+      environment.SPOTT_WEB_CANONICAL_ORIGIN,
       nodeEnvironment === "production",
     ),
     apiInternalURL: parseInternalAPIURL(required(environment, "API_INTERNAL_URL")),

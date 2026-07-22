@@ -216,7 +216,7 @@ describe("URL-authoritative discovery", () => {
     readSessionMock.mockReturnValue({
       accessToken: "viewer-access-token",
       accessTokenExpiresAt: "2026-07-16T01:00:00.000Z",
-      refreshToken: "viewer-refresh-token",
+      refreshGeneration: 0,
       sessionId: "019b0000-0000-7000-8100-000000000091",
       user: {
         id: "019b0000-0000-7000-8100-000000000092",

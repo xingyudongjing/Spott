@@ -29,6 +29,36 @@ interface DeliveryRow {
   resource_public_id: string | null;
 }
 
+interface WebSessionCompletionDispositionCleanupClaim {
+  attempt_hash: Buffer;
+  challenge_id: string;
+  device_id: string;
+  binding_id: string;
+  session_id: string | null;
+  state: 'pending' | 'accepted' | 'discarded';
+  cleanup_kind: 'pending' | 'terminal';
+  due_at: Date;
+}
+
+interface StandaloneEmailChallengeCleanupClaim {
+  id: string;
+  due_at: Date;
+}
+
+interface WebSessionCompletionOutcomeAuthority {
+  challenge_id: string;
+  device_id: string;
+  binding_id: string;
+  session_id: string;
+}
+
+interface WebSessionCompletionCleanupDelta extends Record<string, unknown> {
+  pendingDiscarded: number;
+  terminalPurged: number;
+  outcomes: number;
+  challenges: number;
+}
+
 type NotificationChannel = 'in_app' | 'push' | 'email';
 
 /**
@@ -704,6 +734,431 @@ export class WorkerJobs {
     );
     const expired = result.rowCount ?? 0;
     return { processed: expired, metadata: { expired } };
+  }
+
+  async cleanupWebSessionCompletionRecords(): Promise<JobResult> {
+    const totals: WebSessionCompletionCleanupDelta = {
+      pendingDiscarded: 0,
+      terminalPurged: 0,
+      outcomes: 0,
+      challenges: 0,
+    };
+    let processed = 0;
+
+    for (let index = 0; index < this.config.WORKER_BATCH_SIZE; index += 1) {
+      const delta = await this.database.transaction(async (client) => {
+        // Lock one candidate from each independent queue in the same global order.
+        // This keeps batch-size-one and multi-worker polling fair without taking a
+        // challenge-before-disposition lock that could deadlock API completion.
+        const disposition = await this.claimDueWebSessionCompletionDisposition(client);
+        const challenge = await this.claimStandaloneEmailChallenge(client);
+        const dispositionIsOldest = disposition !== null && (
+          challenge === null || disposition.due_at.getTime() <= challenge.due_at.getTime()
+        );
+        if (dispositionIsOldest && disposition) {
+          return this.cleanupClaimedWebSessionCompletion(client, disposition);
+        }
+        if (challenge) {
+          const removed = await this.cleanupClaimedStandaloneEmailChallenge(client, challenge);
+          if (removed) return removed;
+        }
+        if (disposition) return this.cleanupClaimedWebSessionCompletion(client, disposition);
+        return null;
+      });
+      if (!delta) break;
+      processed += 1;
+      totals.pendingDiscarded += delta.pendingDiscarded;
+      totals.terminalPurged += delta.terminalPurged;
+      totals.outcomes += delta.outcomes;
+      totals.challenges += delta.challenges;
+    }
+
+    return { processed, metadata: totals };
+  }
+
+  private async claimDueWebSessionCompletionDisposition(
+    client: PoolClient,
+  ): Promise<WebSessionCompletionDispositionCleanupClaim | null> {
+    const pending = await client.query<WebSessionCompletionDispositionCleanupClaim>(
+      `SELECT disposition.attempt_hash,
+              disposition.challenge_id,
+              disposition.device_id,
+              disposition.binding_id,
+              disposition.session_id,
+              'pending'::text AS state,
+              'pending'::text AS cleanup_kind,
+              disposition.decision_expires_at AS due_at
+       FROM identity.web_session_completion_dispositions AS disposition
+       WHERE disposition.state = 'pending'
+         AND disposition.decision_expires_at <= CURRENT_TIMESTAMP
+       ORDER BY disposition.decision_expires_at, disposition.attempt_hash
+       FOR UPDATE SKIP LOCKED
+       LIMIT 1`,
+    );
+    const terminal = await client.query<WebSessionCompletionDispositionCleanupClaim>(
+      `SELECT disposition.attempt_hash,
+              disposition.challenge_id,
+              disposition.device_id,
+              disposition.binding_id,
+              disposition.session_id,
+              disposition.state,
+              'terminal'::text AS cleanup_kind,
+              disposition.retained_until AS due_at
+       FROM identity.web_session_completion_dispositions AS disposition
+       WHERE disposition.state IN ('accepted','discarded')
+         AND disposition.retained_until <= CURRENT_TIMESTAMP
+         AND (
+           disposition.session_id IS NULL
+           OR NOT EXISTS (
+             SELECT 1
+             FROM identity.sessions AS active_session
+             WHERE active_session.id = disposition.session_id
+               AND active_session.revoked_at IS NULL
+               AND active_session.expires_at > CURRENT_TIMESTAMP
+           )
+         )
+       ORDER BY disposition.retained_until, disposition.attempt_hash
+       FOR UPDATE SKIP LOCKED
+       LIMIT 1`,
+    );
+    const candidates = [pending.rows[0], terminal.rows[0]]
+      .filter((candidate): candidate is WebSessionCompletionDispositionCleanupClaim => (
+        candidate !== undefined
+      ));
+    candidates.sort((left, right) => left.due_at.getTime() - right.due_at.getTime());
+    return candidates[0] ?? null;
+  }
+
+  private async cleanupClaimedWebSessionCompletion(
+    client: PoolClient,
+    disposition: WebSessionCompletionDispositionCleanupClaim,
+  ): Promise<WebSessionCompletionCleanupDelta> {
+    if (disposition.cleanup_kind === 'pending') {
+      await this.discardExpiredPendingWebSessionCompletion(client, disposition);
+      return {
+        pendingDiscarded: 1,
+        terminalPurged: 0,
+        outcomes: 0,
+        challenges: 0,
+      };
+    }
+    return this.purgeRetainedWebSessionCompletion(client, disposition);
+  }
+
+  private async lockWebSessionCompletionOutcomeAuthority(
+    client: PoolClient,
+    disposition: WebSessionCompletionDispositionCleanupClaim,
+  ): Promise<WebSessionCompletionOutcomeAuthority | null> {
+    const outcome = await client.query<WebSessionCompletionOutcomeAuthority>(
+      `SELECT outcome.challenge_id,
+              outcome.device_id,
+              outcome.binding_id,
+              outcome.session_id
+       FROM identity.web_session_completion_outcomes AS outcome
+       WHERE outcome.attempt_hash = $1
+       FOR UPDATE`,
+      [disposition.attempt_hash],
+    );
+    const authority = outcome.rows[0] ?? null;
+    if (outcome.rowCount !== 1 || !authority) return null;
+    if (
+      authority.challenge_id !== disposition.challenge_id
+      || authority.device_id !== disposition.device_id
+      || authority.binding_id !== disposition.binding_id
+      || authority.session_id !== disposition.session_id
+    ) {
+      throw new Error('Web completion disposition and outcome authority diverged');
+    }
+    return authority;
+  }
+
+  private async discardExpiredPendingWebSessionCompletion(
+    client: PoolClient,
+    disposition: WebSessionCompletionDispositionCleanupClaim,
+  ): Promise<void> {
+    if (disposition.state !== 'pending' || !disposition.session_id) {
+      throw new Error('Pending Web completion disposition is malformed');
+    }
+    const outcome = await this.lockWebSessionCompletionOutcomeAuthority(client, disposition);
+    if (!outcome) throw new Error('Pending Web completion outcome authority diverged');
+
+    const exact = await client.query<{ session_id: string }>(
+      `SELECT session.id AS session_id
+       FROM identity.sessions AS session
+       JOIN identity.session_refresh_history AS history
+         ON history.session_id = session.id
+        AND history.generation = 0
+        AND history.binding_id = $2
+        AND history.binding_generation = 0
+       JOIN identity.device_bindings AS binding
+         ON binding.id = $2
+        AND binding.session_id = session.id
+        AND binding.device_id = $3
+        AND binding.generation = 0
+       WHERE session.id = $1
+         AND session.device_id = $3
+         AND session.current_binding_id = $2
+         AND session.current_binding_generation = 0
+       FOR UPDATE OF session, history, binding`,
+      [disposition.session_id, disposition.binding_id, disposition.device_id],
+    );
+    if (exact.rowCount !== 1) {
+      throw new Error('Pending Web completion authority rows diverged');
+    }
+
+    const history = await client.query<{ session_id: string }>(
+      `UPDATE identity.session_refresh_history
+       SET state = 'revoked',
+           consumed_reason = CASE
+             WHEN state = 'current' THEN 'completion_discarded'
+             ELSE consumed_reason
+           END,
+           consumed_at = COALESCE(consumed_at, clock_timestamp()),
+           rotation_key_hash = NULL,
+           successor_generation = NULL,
+           successor_hash = NULL,
+           successor_derivation_kid = NULL,
+           recovery_expires_at = NULL
+       WHERE session_id = $1 AND generation = 0
+         AND binding_id = $2 AND binding_generation = 0
+       RETURNING session_id`,
+      [disposition.session_id, disposition.binding_id],
+    );
+    const binding = await client.query<{ id: string }>(
+      `UPDATE identity.device_bindings
+       SET revoked_at = COALESCE(revoked_at, clock_timestamp())
+       WHERE id = $1 AND session_id = $2 AND device_id = $3 AND generation = 0
+       RETURNING id`,
+      [disposition.binding_id, disposition.session_id, disposition.device_id],
+    );
+    const session = await client.query<{ id: string }>(
+      `UPDATE identity.sessions
+       SET revoked_at = COALESCE(revoked_at, clock_timestamp())
+       WHERE id = $1 AND device_id = $2
+         AND current_binding_id = $3 AND current_binding_generation = 0
+       RETURNING id`,
+      [disposition.session_id, disposition.device_id, disposition.binding_id],
+    );
+    const terminal = await client.query<{ attempt_hash: Buffer }>(
+      `UPDATE identity.web_session_completion_dispositions
+       SET state = 'discarded', discarded_at = clock_timestamp()
+       WHERE attempt_hash = $1 AND state = 'pending'
+         AND session_id = $2 AND challenge_id = $3
+         AND device_id = $4 AND binding_id = $5
+         AND decision_expires_at <= clock_timestamp()
+       RETURNING attempt_hash`,
+      [
+        disposition.attempt_hash,
+        disposition.session_id,
+        disposition.challenge_id,
+        disposition.device_id,
+        disposition.binding_id,
+      ],
+    );
+    if (
+      history.rowCount !== 1
+      || binding.rowCount !== 1
+      || session.rowCount !== 1
+      || terminal.rowCount !== 1
+    ) {
+      throw new Error('Pending Web completion discard lost exact authority rows');
+    }
+  }
+
+  private async purgeRetainedWebSessionCompletion(
+    client: PoolClient,
+    disposition: WebSessionCompletionDispositionCleanupClaim,
+  ): Promise<WebSessionCompletionCleanupDelta> {
+    if (disposition.state === 'pending' || disposition.cleanup_kind !== 'terminal') {
+      throw new Error('Non-terminal Web completion was selected for retention cleanup');
+    }
+    const outcome = await this.lockWebSessionCompletionOutcomeAuthority(client, disposition);
+    if (disposition.session_id === null && outcome) {
+      throw new Error('Sessionless Web completion unexpectedly owns an outcome');
+    }
+
+    let sessionExists = false;
+    if (disposition.session_id !== null) {
+      const session = await client.query<{ id: string; inactive: boolean }>(
+        `SELECT session.id,
+                (session.revoked_at IS NOT NULL
+                  OR session.expires_at <= clock_timestamp()) AS inactive
+         FROM identity.sessions AS session
+         WHERE session.id = $1
+         FOR UPDATE`,
+        [disposition.session_id],
+      );
+      const status = session.rows[0];
+      sessionExists = status !== undefined;
+      if (status && !status.inactive) {
+        throw new Error('Active Web session cannot lose its completion disposition');
+      }
+      if (sessionExists !== (outcome !== null)) {
+        throw new Error('Retained Web completion outcome authority diverged');
+      }
+    }
+
+    const challenge = await client.query<{ id: string }>(
+      `SELECT challenge.id
+       FROM identity.email_challenges AS challenge
+       WHERE challenge.id = $1
+       FOR UPDATE`,
+      [disposition.challenge_id],
+    );
+    if (outcome && challenge.rowCount !== 1) {
+      throw new Error('Retained Web completion challenge authority diverged');
+    }
+
+    const removedDisposition = await client.query<{ attempt_hash: Buffer }>(
+      `DELETE FROM identity.web_session_completion_dispositions AS disposition
+       WHERE disposition.attempt_hash = $1
+         AND disposition.state IN ('accepted','discarded')
+         AND disposition.retained_until <= clock_timestamp()
+         AND (
+           disposition.session_id IS NULL
+           OR NOT EXISTS (
+             SELECT 1
+             FROM identity.sessions AS active_session
+             WHERE active_session.id = disposition.session_id
+               AND active_session.revoked_at IS NULL
+               AND active_session.expires_at > clock_timestamp()
+           )
+         )
+       RETURNING disposition.attempt_hash`,
+      [disposition.attempt_hash],
+    );
+    if (removedDisposition.rowCount !== 1) {
+      throw new Error('Web completion retention cleanup lost its disposition lock');
+    }
+
+    let outcomes = 0;
+    if (outcome) {
+      const removedOutcome = await client.query<{ challenge_id: string }>(
+        `DELETE FROM identity.web_session_completion_outcomes AS outcome
+         WHERE outcome.attempt_hash = $1
+           AND outcome.challenge_id = $2
+           AND outcome.session_id = $3
+           AND outcome.device_id = $4
+           AND outcome.binding_id = $5
+         RETURNING outcome.challenge_id`,
+        [
+          disposition.attempt_hash,
+          disposition.challenge_id,
+          disposition.session_id,
+          disposition.device_id,
+          disposition.binding_id,
+        ],
+      );
+      if (removedOutcome.rowCount !== 1) {
+        throw new Error('Web completion retention cleanup lost its outcome authority');
+      }
+      outcomes = 1;
+    }
+
+    let challenges = 0;
+    if (challenge.rowCount === 1) {
+      const removedChallenge = await client.query<{ id: string }>(
+        `DELETE FROM identity.email_challenges AS challenge
+         WHERE challenge.id = $1
+           AND NOT EXISTS (
+             SELECT 1 FROM identity.web_session_completion_outcomes AS outcome
+             WHERE outcome.challenge_id = challenge.id
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM identity.web_session_completion_dispositions AS disposition
+             WHERE disposition.challenge_id = challenge.id
+           )
+         RETURNING challenge.id`,
+        [disposition.challenge_id],
+      );
+      challenges = removedChallenge.rowCount === 1 ? 1 : 0;
+    }
+    return {
+      pendingDiscarded: 0,
+      terminalPurged: 1,
+      outcomes,
+      challenges,
+    };
+  }
+
+  private async claimStandaloneEmailChallenge(
+    client: PoolClient,
+  ): Promise<StandaloneEmailChallengeCleanupClaim | null> {
+    const verified = await client.query<StandaloneEmailChallengeCleanupClaim>(
+      `SELECT challenge.id,
+              challenge.verified_at AS due_at
+       FROM identity.email_challenges AS challenge
+       WHERE challenge.verified_at IS NOT NULL
+         AND NOT EXISTS (
+         SELECT 1 FROM identity.web_session_completion_outcomes AS outcome
+         WHERE outcome.challenge_id = challenge.id
+       )
+         AND NOT EXISTS (
+           SELECT 1 FROM identity.web_session_completion_dispositions AS disposition
+           WHERE disposition.challenge_id = challenge.id
+         )
+       ORDER BY challenge.verified_at, challenge.id
+       FOR UPDATE SKIP LOCKED
+       LIMIT 1`,
+    );
+    const expired = await client.query<StandaloneEmailChallengeCleanupClaim>(
+      `SELECT challenge.id,
+              challenge.expires_at AS due_at
+       FROM identity.email_challenges AS challenge
+       WHERE challenge.verified_at IS NULL
+         AND challenge.expires_at <= CURRENT_TIMESTAMP
+         AND NOT EXISTS (
+           SELECT 1 FROM identity.web_session_completion_outcomes AS outcome
+           WHERE outcome.challenge_id = challenge.id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM identity.web_session_completion_dispositions AS disposition
+           WHERE disposition.challenge_id = challenge.id
+         )
+       ORDER BY challenge.expires_at, challenge.id
+       FOR UPDATE SKIP LOCKED
+       LIMIT 1`,
+    );
+    const candidates = [verified.rows[0], expired.rows[0]]
+      .filter((candidate): candidate is StandaloneEmailChallengeCleanupClaim => (
+        candidate !== undefined
+      ));
+    candidates.sort((left, right) => left.due_at.getTime() - right.due_at.getTime());
+    return candidates[0] ?? null;
+  }
+
+  private async cleanupClaimedStandaloneEmailChallenge(
+    client: PoolClient,
+    challenge: StandaloneEmailChallengeCleanupClaim,
+  ): Promise<WebSessionCompletionCleanupDelta | null> {
+    const removed = await client.query<{ id: string }>(
+      `DELETE FROM identity.email_challenges AS challenge
+       WHERE challenge.id = $1
+         AND NOT EXISTS (
+           SELECT 1 FROM identity.web_session_completion_outcomes AS outcome
+           WHERE outcome.challenge_id = challenge.id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM identity.web_session_completion_dispositions AS disposition
+           WHERE disposition.challenge_id = challenge.id
+         )
+         AND (
+           challenge.verified_at IS NOT NULL
+           OR (
+             challenge.verified_at IS NULL
+             AND challenge.expires_at <= clock_timestamp()
+           )
+         )
+       RETURNING challenge.id`,
+      [challenge.id],
+    );
+    if (removed.rowCount !== 1) return null;
+    return {
+      pendingDiscarded: 0,
+      terminalPurged: 0,
+      outcomes: 0,
+      challenges: 1,
+    };
   }
 
   async activateConfiguration(): Promise<JobResult> {
@@ -1413,6 +1868,7 @@ export const jobNames = [
   'expireHoldsAndQuotes',
   'expireFreePointLots',
   'expireEventPromotions',
+  'cleanupWebSessionCompletionRecords',
   'activateConfiguration',
   'anonymizeDeletedAccounts',
   'reconcileLedger',

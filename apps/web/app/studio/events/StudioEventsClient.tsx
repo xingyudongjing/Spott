@@ -21,11 +21,16 @@ interface PosterJob {
   locale: string;
 }
 
-export function StudioEventsClient() {
+type StudioEventsClientProps = {
+  /** Frozen, source-recorded data used only by deterministic product-evidence capture. */
+  readonly initialItems?: readonly EventView[];
+};
+
+export function StudioEventsClient({ initialItems }: StudioEventsClientProps = {}) {
   const { locale, t } = useI18n();
   const appDialog = useAppDialog();
-  const [items, setItems] = useState<EventView[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<EventView[]>(() => initialItems ? [...initialItems] : []);
+  const [loading, setLoading] = useState(initialItems === undefined);
   const [message, setMessage] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
@@ -56,9 +61,10 @@ export function StudioEventsClient() {
     }
   }, []);
   useEffect(() => {
+    if (initialItems !== undefined) return;
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
-  }, [load]);
+  }, [initialItems, load]);
   const counts = useMemo(
     () => ({
       all: items.length,
@@ -230,6 +236,9 @@ export function StudioEventsClient() {
           drafts: '下書き・審査',
           search: 'イベントを検索',
           empty: '該当するイベントはありません',
+          publishedSummary: (count: number) => `${count}件公開`,
+          confirmedSummary: '確定済み',
+          reviewSummary: (count: number) => `審査中 ${count}件`,
         }
       : locale === 'en'
         ? {
@@ -240,6 +249,9 @@ export function StudioEventsClient() {
             drafts: 'Drafts & review',
             search: 'Search events',
             empty: 'No events match this view',
+            publishedSummary: (count: number) => `${count} published`,
+            confirmedSummary: 'confirmed',
+            reviewSummary: (count: number) => `${count} in review`,
           }
         : {
             title: '活动管理',
@@ -249,6 +261,9 @@ export function StudioEventsClient() {
             drafts: '草稿与审核',
             search: '搜索活动',
             empty: '当前筛选没有活动',
+            publishedSummary: (count: number) => `${count} 已发布`,
+            confirmedSummary: '已确认',
+            reviewSummary: (count: number) => `${count} 待审核`,
           };
   return (
     <main className="studio-shell">
@@ -268,17 +283,17 @@ export function StudioEventsClient() {
           <div>
             <span>{copy.upcoming}</span>
             <strong>{counts.live}</strong>
-            <small>{items.filter((item) => item.status === 'published').length} published</small>
+            <small>{copy.publishedSummary(items.filter((item) => item.status === 'published').length)}</small>
           </div>
           <div>
             <span>{copy.attendees}</span>
             <strong>{items.reduce((sum, item) => sum + item.confirmedCount, 0)}</strong>
-            <small>{locale === 'ja' ? '確定済み' : locale === 'en' ? 'confirmed' : '已确认'}</small>
+            <small>{copy.confirmedSummary}</small>
           </div>
           <div>
             <span>{copy.drafts}</span>
             <strong>{counts.draft + counts.review}</strong>
-            <small>{counts.review} review</small>
+            <small>{copy.reviewSummary(counts.review)}</small>
           </div>
         </div>
         <div className="studio-toolbar">

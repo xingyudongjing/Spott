@@ -10,7 +10,7 @@ import {
 const session: WebSession = {
   accessToken: "access-token",
   accessTokenExpiresAt: new Date(Date.now() + 60_000).toISOString(),
-  refreshToken: "refresh-token",
+  refreshGeneration: 0,
   sessionId: "019b0000-0000-7000-8000-000000000001",
   user: {
     id: "019b0000-0000-7000-8000-000000000002",

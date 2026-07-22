@@ -918,6 +918,20 @@ describe('SessionTokenService stable rotation and exact recovery', () => {
     expect(new Set(memory.histories.keys()).size).toBe(memory.histories.size);
   });
 
+  it('makes refresh and verified logout authority unavailable while completion is not accepted', async () => {
+    const { memory, rotate } = serviceHarness();
+    await rotate();
+    const lock = memory.queries.find(({ sql }) => (
+      sql.includes('FROM identity.sessions AS session') && sql.includes('FOR UPDATE OF session')
+    ));
+
+    expect(lock?.sql).toContain('identity.web_session_completion_dispositions');
+    expect(lock?.sql).toContain('identity.web_session_completion_outcomes');
+    expect(lock?.sql).toContain('completion_disposition.session_id = session.id');
+    expect(lock?.sql).toContain("completion_disposition.state = 'accepted'");
+    expect(lock?.sql).toContain('AND NOT EXISTS');
+  });
+
   it('never sends plaintext predecessor successor attempt or binding secrets to PostgreSQL', async () => {
     const { memory, rotate } = serviceHarness();
     const outcome = await rotate();

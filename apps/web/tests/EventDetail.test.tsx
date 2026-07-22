@@ -13,6 +13,7 @@ import {
 import { apiRequest } from "../app/lib/client-api";
 import { publicSafeEventDetail } from "../app/lib/event-contract";
 import { fetchEvent } from "../app/lib/events-api";
+import { eventDate } from "../app/lib/format";
 import { makeDetail, renderWithI18n } from "./event-fixtures";
 
 const actionMocks = vi.hoisted(() => ({
@@ -415,9 +416,10 @@ describe("premium event detail", () => {
   });
 
   test("answers the seven decision facts in the first viewport without fabricated claims", () => {
+    const event = makeDetail();
     renderWithI18n(
       <EventDetailView
-        event={makeDetail()}
+        event={event}
         locale="zh-Hans"
         actions={<button type="button">报名参加</button>}
       />,
@@ -425,7 +427,7 @@ describe("premium event detail", () => {
 
     const firstViewport = screen.getByTestId("event-first-viewport");
     expect(within(firstViewport).getByRole("heading", { level: 1 })).toHaveTextContent("东京余光");
-    expect(firstViewport).toHaveTextContent("7月18日周六");
+    expect(firstViewport).toHaveTextContent(eventDate(event.startsAt, "zh-Hans", event.displayTimeZone));
     expect(firstViewport).toHaveTextContent("清澄白河站附近");
     expect(firstViewport).toHaveTextContent("免费");
     expect(firstViewport).toHaveTextContent("周末开局");

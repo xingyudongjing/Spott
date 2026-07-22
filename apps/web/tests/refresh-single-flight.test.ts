@@ -5,7 +5,7 @@ import { apiRequest, saveSession, clearSession, type WebSession } from "../app/l
 const session: WebSession = {
   accessToken: "expired-access",
   accessTokenExpiresAt: new Date(Date.now() - 1000).toISOString(),
-  refreshToken: "refresh-token",
+  refreshGeneration: 0,
   sessionId: "019b0000-0000-7000-8000-000000000001",
   user: {
     id: "019b0000-0000-7000-8000-000000000002",
@@ -34,12 +34,26 @@ describe("refresh concurrency and retry bounds", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url.includes("/auth/refresh")) {
+        if (url === "/api/session/bootstrap") {
+          return new Response(JSON.stringify({
+            state: "authenticated",
+            ...session,
+            accessToken: "bootstrap-access",
+            accessTokenExpiresAt: new Date(Date.now() + 900_000).toISOString(),
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url.includes("/api/session/refresh")) {
           refreshCalls += 1;
           // Hold the refresh open so every caller must queue behind it.
           await new Promise((resolve) => setTimeout(resolve, 20));
           return new Response(
-            JSON.stringify({ ...session, accessToken: "fresh-access", refreshToken: "next-refresh" }),
+            JSON.stringify({
+              state: "authenticated",
+              ...session,
+              accessToken: "fresh-access",
+              accessTokenExpiresAt: new Date(Date.now() + 900_000).toISOString(),
+              refreshGeneration: 1,
+            }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           );
         }
@@ -72,12 +86,26 @@ describe("refresh concurrency and retry bounds", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url.includes("/auth/refresh")) {
+        if (url === "/api/session/bootstrap") {
+          return new Response(JSON.stringify({
+            state: "authenticated",
+            ...session,
+            accessToken: "bootstrap-access",
+            accessTokenExpiresAt: new Date(Date.now() + 900_000).toISOString(),
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (url.includes("/api/session/refresh")) {
           refreshCalls += 1;
           // Refresh "succeeds" but the protected route still 401s, which is the
           // shape that would drive an unbounded recursive retry loop.
           return new Response(
-            JSON.stringify({ ...session, accessToken: `rotated-${refreshCalls}` }),
+            JSON.stringify({
+              state: "authenticated",
+              ...session,
+              accessToken: `rotated-${refreshCalls}`,
+              accessTokenExpiresAt: new Date(Date.now() + 900_000).toISOString(),
+              refreshGeneration: 1,
+            }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           );
         }

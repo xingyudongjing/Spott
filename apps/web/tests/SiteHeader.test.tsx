@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { SiteHeader } from "../app/components/SiteHeader";
 import { PreviewModeProvider } from "../app/components/PreviewModeProvider";
 import { renderWithI18n } from "./event-fixtures";
+import { clearSession, saveSession, type WebSession } from "../app/lib/client-api";
 
 const navigation = vi.hoisted(() => ({ pathname: "/discover" }));
 vi.mock("next/navigation", () => ({ usePathname: () => navigation.pathname }));
@@ -28,9 +29,11 @@ beforeEach(() => {
       setItem: vi.fn(),
     } satisfies Storage,
   });
+  clearSession();
 });
 
 afterEach(() => {
+  clearSession();
   Reflect.deleteProperty(window, "localStorage");
   vi.unstubAllGlobals();
 });
@@ -50,10 +53,10 @@ describe("responsive site navigation", () => {
   });
 
   test("shows the notification dot only after the signed-in API reports unread items", async () => {
-    const session = {
+    const session: WebSession = {
       accessToken: "access-token",
       accessTokenExpiresAt: "2099-01-01T00:00:00.000Z",
-      refreshToken: "refresh-token",
+      refreshGeneration: 0,
       sessionId: "019b0000-0000-7000-8100-000000000091",
       user: {
         id: "019b0000-0000-7000-8100-000000000092",
@@ -62,9 +65,7 @@ describe("responsive site navigation", () => {
         restrictions: [],
       },
     };
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) =>
-      key === "spott.web.session.v1" ? JSON.stringify(session) : null,
-    );
+    saveSession(session);
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       items: [{
         id: "notification-1",

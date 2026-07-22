@@ -1,6 +1,6 @@
 # Phase 1: Luma-Level Event Operations, With Spott Trust Guarantees
 
-> **Execution discipline:** Use test-driven development for every numbered task, run real PostgreSQL concurrency tests for every ownership or capacity mutation, and obtain a fresh independent review before advancing. Do not start this plan until migrations `0022_media_upload_attempts.sql` and `0023_live_activity_tokens.sql` exist and replay cleanly. This plan owns migration `0024_event_operations.sql`.
+> **Execution discipline:** Use test-driven development for every numbered task, run real PostgreSQL concurrency tests for every ownership or capacity mutation, and obtain a fresh independent review before advancing. Do not start this plan until the current immutable migration manifest through `0030_web_session_completion_outcomes.sql` exists and replays cleanly. This plan owns the next additive migration, `0031_event_operations.sql`.
 
 **Goal:** Deliver recurring, online/hybrid, team-operated events plus guest operations, compliant outreach, calendars, staff check-in, and organizer analytics on native iOS and responsive Web in Simplified Chinese, Japanese, and English.
 
@@ -42,11 +42,11 @@
 - [ ] Define three-language UX for broad-edit consequences, online-access privacy, role invitations, dry-run imports, suppression, offline staff mode, and partial job failure.
 - [ ] Bundle/regenerate and prove zero drift before implementation.
 
-## Task 1: Add the additive `0024_event_operations` schema
+## Task 1: Add the additive `0031_event_operations` schema
 
 **Files:**
 
-- Create: `database/migrations/0024_event_operations.sql`
+- Create: `database/migrations/0031_event_operations.sql`
 - Create: `services/api/src/modules/events/events.operations-migration.spec.ts`
 - Create: `services/api/src/modules/events/events.operations-migration.integration.spec.ts`
 - Modify: `scripts/test-postgis.ts`
@@ -58,7 +58,7 @@
 - [ ] Add encrypted `events.event_online_access`, join-window policy, provider reference hash, and disclosure audit; no plaintext URL/passcode appears in indexes or audit payloads.
 - [ ] Add immutable guest-selection snapshots, bulk-operation receipts, CSV import/export jobs, audience/campaign/recipient/suppression rows, calendar-feed secrets, staff-device assignments, and delivery receipts with owner/event scope.
 - [ ] Add least-privilege RLS/policies and constraints for last-owner protection, one active role per user/event, role enums, generation bounds, campaign state transitions, and job retention.
-- [ ] Replay 0001–0024 twice from empty and upgrade a legacy fixture. Compare every pre-existing event/registration byte-relevant field before/after; pass two applies zero migrations.
+- [ ] Replay 0001–0031 twice from empty and upgrade a legacy fixture. Compare every pre-existing event/registration byte-relevant field before/after; pass two applies zero migrations.
 
 ## Task 2: Centralize event capabilities and team lifecycle
 

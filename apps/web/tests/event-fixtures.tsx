@@ -5,6 +5,20 @@ import { I18nProvider } from "../app/components/I18nProvider";
 import type { Locale } from "../app/i18n/messages";
 import type { EventDetail, EventPage, EventSummary } from "../app/lib/event-contract";
 
+const HOUR_MS = 60 * 60 * 1_000;
+
+function eventTimesFrom(baseline: Date) {
+  const baselineTime = baseline.getTime();
+
+  return {
+    deadlineAt: new Date(baselineTime + HOUR_MS).toISOString(),
+    startsAt: new Date(baselineTime + 2 * HOUR_MS).toISOString(),
+    endsAt: new Date(baselineTime + 4.5 * HOUR_MS).toISOString(),
+  };
+}
+
+const defaultEventTimes = eventTimesFrom(new Date());
+
 export const eventFixture: EventSummary = {
   id: "019b0000-0000-7000-8100-000000000001",
   publicSlug: "tokyo-afterglow-walk",
@@ -13,9 +27,9 @@ export const eventFixture: EventSummary = {
   title: "东京余光 · 隅田川蓝调散步",
   description: "沿着河岸慢慢散步。",
   category: "walk",
-  startsAt: "2499-07-18T08:30:00.000Z",
-  endsAt: "2499-07-18T11:00:00.000Z",
-  deadlineAt: "2499-07-18T07:30:00.000Z",
+  startsAt: defaultEventTimes.startsAt,
+  endsAt: defaultEventTimes.endsAt,
+  deadlineAt: defaultEventTimes.deadlineAt,
   displayTimeZone: "Asia/Tokyo",
   region: "tokyo",
   publicArea: "清澄白河站附近",
@@ -59,8 +73,15 @@ export const eventFixture: EventSummary = {
   coordinate: { latitude: 35.68, longitude: 139.79, precision: "approximate" },
 };
 
-export function makeEvent(overrides: Partial<EventSummary> = {}): EventSummary {
-  return { ...eventFixture, ...overrides };
+export function makeEvent(
+  overrides: Partial<EventSummary> = {},
+  baseline?: Date,
+): EventSummary {
+  return {
+    ...eventFixture,
+    ...(baseline ? eventTimesFrom(baseline) : {}),
+    ...overrides,
+  };
 }
 
 export function makeDetail(overrides: Partial<EventDetail> = {}): EventDetail {

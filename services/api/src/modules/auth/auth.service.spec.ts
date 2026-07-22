@@ -16,6 +16,10 @@ import {
   persistentDeviceBindingHash,
   type DeviceBindingProof,
 } from './session-token.service.js';
+import {
+  completionAttemptHash,
+  completionDispositionAuthorityDigest,
+} from './web-session-completion-kdf.js';
 
 Object.assign(process.env, {
   NODE_ENV: 'test',
@@ -1790,5 +1794,621 @@ describe('AuthService phone verification reward farming', () => {
     await harness.verify(currentUserId, 0x55);
 
     expect(harness.freeBalance(currentUserId)).toBe(500);
+  });
+});
+
+describe('AuthService atomic Web completion identifier boundary', () => {
+  const baseInput = {
+    credential: {
+      provider: 'email' as const,
+      challengeId: '019b0000-0000-7000-8000-000000000031',
+      code: '123456',
+    },
+    deviceId: '019b0000-0000-7000-8000-000000000032',
+    attemptId: '019b0000-0000-7000-8000-000000000033',
+    newBinding: {
+      bindingId: '019b0000-0000-7000-8000-000000000034',
+      generation: 0 as const,
+      proof: Buffer.alloc(32, 6).toString('base64url'),
+      proofClass: 'persistent' as const,
+    },
+  };
+
+  it.each([
+    ['uppercase challenge ID', { ...baseInput, credential: { ...baseInput.credential, challengeId: baseInput.credential.challengeId.toUpperCase() } }],
+    ['nil challenge ID', { ...baseInput, credential: { ...baseInput.credential, challengeId: '00000000-0000-0000-0000-000000000000' } }],
+    ['uppercase device ID', { ...baseInput, deviceId: baseInput.deviceId.toUpperCase() }],
+    ['nil device ID', { ...baseInput, deviceId: '00000000-0000-0000-0000-000000000000' }],
+    ['uppercase attempt ID', { ...baseInput, attemptId: baseInput.attemptId.toUpperCase() }],
+    ['nil attempt ID', { ...baseInput, attemptId: '00000000-0000-0000-0000-000000000000' }],
+    ['uppercase binding ID', { ...baseInput, newBinding: { ...baseInput.newBinding, bindingId: baseInput.newBinding.bindingId.toUpperCase() } }],
+    ['nil binding ID', { ...baseInput, newBinding: { ...baseInput.newBinding, bindingId: '00000000-0000-0000-0000-000000000000' } }],
+  ])('rejects %s before opening a database transaction', async (_label, input) => {
+    const database = {
+      transaction: vi.fn().mockRejectedValue(new Error('database must not be touched')),
+      query: vi.fn().mockRejectedValue(new Error('database must not be touched')),
+    };
+    const service = new AuthService(database as never, {} as never, {} as never, {} as never);
+
+    await expect(service.completeWebEmailSession(
+      input,
+      bootstrapAuthority,
+      'verified_bff',
+    )).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_UNAVAILABLE', status: 401 });
+    expect(database.transaction).not.toHaveBeenCalled();
+    expect(database.query).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuthService Web completion disposition authority boundary', () => {
+  const attemptId = '019b0000-0000-7000-8000-000000000033';
+  const input = {
+    challengeId: '019b0000-0000-7000-8000-000000000031',
+    deviceId: '019b0000-0000-7000-8000-000000000032',
+    binding: {
+      bindingId: '019b0000-0000-7000-8000-000000000034',
+      generation: 0 as const,
+      proof: Buffer.alloc(32, 6).toString('base64url'),
+      proofClass: 'persistent' as const,
+    },
+  };
+
+  it.each([
+    ['accept', 'acceptWebSessionCompletionAttempt'],
+    ['discard', 'discardWebSessionCompletionAttempt'],
+    ['revoke', 'revokeWebSessionCompletionAttempt'],
+  ] as const)('rejects missing BFF authority before a %s transaction', async (_label, method) => {
+    const database = { transaction: vi.fn() };
+    const service = new AuthService(database as never, {} as never, {} as never, {} as never);
+
+    await expect(service[method](
+      attemptId,
+      input,
+      undefined,
+      'verified_bff',
+    )).rejects.toMatchObject({ code: 'WEB_BFF_AUTHORITY_REQUIRED', status: 403 });
+    expect(database.transaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['uppercase attempt ID', attemptId.toUpperCase(), input],
+    ['nil attempt ID', '00000000-0000-0000-0000-000000000000', input],
+    ['changed generation', attemptId, {
+      ...input,
+      binding: { ...input.binding, generation: 1 },
+    }],
+  ])('rejects %s before opening a transaction', async (_label, malformedAttempt, malformedInput) => {
+    const database = { transaction: vi.fn() };
+    const service = new AuthService(database as never, {} as never, {} as never, {} as never);
+
+    for (const method of [
+      'acceptWebSessionCompletionAttempt',
+      'discardWebSessionCompletionAttempt',
+      'revokeWebSessionCompletionAttempt',
+    ] as const) {
+      await expect(service[method](
+        malformedAttempt,
+        malformedInput as never,
+        bootstrapAuthority,
+        'verified_bff',
+      )).rejects.toMatchObject({ code: 'WEB_SESSION_COMPLETION_AUTHORITY_INVALID', status: 401 });
+    }
+    expect(database.transaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['direct consumer Web channel', 'consumer_web'],
+    ['headerless native channel', 'headerless_native'],
+    ['Ops channel', 'ops'],
+  ] as const)('rejects revoke from the %s before opening a transaction', async (_label, channel) => {
+    const database = { transaction: vi.fn() };
+    const service = new AuthService(database as never, {} as never, {} as never, {} as never);
+
+    await expect(service.revokeWebSessionCompletionAttempt(
+      attemptId,
+      input,
+      bootstrapAuthority,
+      channel,
+    )).rejects.toMatchObject({ code: 'SESSION_TRANSPORT_MISMATCH', status: 403 });
+    expect(database.transaction).not.toHaveBeenCalled();
+  });
+
+  it('locks retained authority, then owner, user, exact session, ordered history, and ordered bindings', async () => {
+    const bindingId = input.binding.bindingId;
+    const key = Buffer.from('fedcba9876543210fedcba9876543210');
+    const queries: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        queries.push(sql);
+        if (sql.includes('731647302894611011')) return { rows: [], rowCount: 1 };
+        if (sql.includes('FROM identity.web_session_completion_dispositions')) {
+          return {
+            rows: [{
+              attempt_hash: completionAttemptHash(attemptId),
+              challenge_id: input.challengeId,
+              device_id: input.deviceId,
+              binding_id: bindingId,
+              binding_generation: '0',
+              authority_digest: completionDispositionAuthorityDigest({
+                key,
+                kid: 'refresh-2026-07',
+                attemptId,
+                challengeId: input.challengeId,
+                deviceId: input.deviceId,
+                bindingId,
+                bindingGeneration: 0,
+                proof: input.binding.proof,
+              }),
+              authority_version: 'v1',
+              authority_kid: 'refresh-2026-07',
+              state: 'accepted',
+              session_id: currentSessionId,
+              decision_expires_at: new Date('2026-08-01T00:00:00.000Z'),
+              retained_until: new Date('2026-08-31T00:00:00.000Z'),
+              decision_open: false,
+              retention_open: true,
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes('FROM identity.web_session_completion_outcomes')) {
+          return {
+            rows: [{
+              challenge_id: input.challengeId,
+              attempt_hash: completionAttemptHash(attemptId),
+              request_digest: Buffer.alloc(32, 4),
+              user_id: currentUserId,
+              device_id: input.deviceId,
+              session_id: currentSessionId,
+              family_id: secondUserId,
+              binding_id: bindingId,
+              refresh_generation: '0',
+              binding_generation: '0',
+              derivation_version: 'v1',
+              derivation_kid: 'refresh-2026-07',
+              recovery_expires_at: new Date('2026-07-01T00:00:00.000Z'),
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes('session-mutation-user')) return { rows: [], rowCount: 1 };
+        if (sql.includes('SELECT user_id') && sql.includes('FROM identity.sessions')) {
+          return { rows: [{ user_id: currentUserId }], rowCount: 1 };
+        }
+        if (sql.includes('FROM identity.sessions') && sql.includes('FOR UPDATE')) {
+          return {
+            rows: [{
+              id: currentSessionId,
+              user_id: currentUserId,
+              device_id: input.deviceId,
+              refresh_family_id: secondUserId,
+              refresh_generation: '0',
+              current_binding_id: bindingId,
+              current_binding_generation: '0',
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes('FROM identity.session_refresh_history') && sql.includes('FOR UPDATE')) {
+          return {
+            rows: [{
+              family_id: secondUserId,
+              generation: '0',
+              binding_id: bindingId,
+              binding_generation: '0',
+              state: 'current',
+              consumed_reason: null,
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes('FROM identity.device_bindings') && sql.includes('FOR UPDATE')) {
+          return {
+            rows: [{
+              id: bindingId,
+              user_id: currentUserId,
+              device_id: input.deviceId,
+              session_id: currentSessionId,
+              generation: '0',
+              proof_class: 'persistent',
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes('UPDATE identity.session_refresh_history')) {
+          return { rows: [], rowCount: 1 };
+        }
+        if (sql.includes('UPDATE identity.device_bindings')) return { rows: [], rowCount: 1 };
+        if (sql.includes('UPDATE identity.sessions')) return { rows: [], rowCount: 1 };
+        throw new Error(`Unexpected accepted-completion revoke query: ${sql}`);
+      }),
+    };
+    const database = {
+      transaction: vi.fn(async (work: (value: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const service = new AuthService(database as never, {} as never, {} as never, {} as never);
+
+    await expect(service.revokeWebSessionCompletionAttempt(
+      attemptId,
+      input,
+      bootstrapAuthority,
+      'verified_bff',
+    )).resolves.toEqual({
+      state: 'revoked',
+      sessionId: currentSessionId,
+      bindingId,
+      deviceId: input.deviceId,
+    });
+
+    const index = (pattern: RegExp) => queries.findIndex((sql) => pattern.test(sql));
+    const lockOrder = [
+      index(/731647302894611011/u),
+      index(/web_session_completion_dispositions[\s\S]*FOR UPDATE/iu),
+      index(/web_session_completion_outcomes[\s\S]*FOR UPDATE/iu),
+      index(/SELECT user_id[\s\S]*FROM identity\.sessions/iu),
+      index(/session-mutation-user/u),
+      index(/FROM identity\.sessions[\s\S]*FOR UPDATE/iu),
+      index(/FROM identity\.session_refresh_history[\s\S]*ORDER BY generation[\s\S]*FOR UPDATE/iu),
+      index(/FROM identity\.device_bindings[\s\S]*ORDER BY id[\s\S]*FOR UPDATE/iu),
+    ];
+    expect(lockOrder.every((position) => position >= 0)).toBe(true);
+    expect(lockOrder).toEqual([...lockOrder].sort((left, right) => left - right));
+  });
+
+  it.each([
+    ['outcome/session family divergence', 'session_family'],
+    ['history family divergence', 'history_family'],
+    ['missing session-current history generation', 'missing_current'],
+    ['session current binding divergence', 'current_binding'],
+    ['generation-zero history points at the wrong locked binding', 'wrong_generation_zero'],
+    ['generation-zero history points at a dangling binding', 'dangling_generation_zero'],
+    ['intermediate history has the wrong locked binding generation', 'wrong_intermediate'],
+    ['intermediate history points at a dangling binding', 'dangling_intermediate'],
+  ] as const)('fails closed before writes for %s', async (_label, divergence) => {
+    const bindingId = input.binding.bindingId;
+    const familyId = secondUserId;
+    const alternateBindingId = phoneChallengeId;
+    const danglingBindingId = '019b0000-0000-7000-8000-000000000041';
+    const key = Buffer.from('fedcba9876543210fedcba9876543210');
+    const updates: string[] = [];
+    const historyRows = (() => {
+      if (divergence === 'wrong_generation_zero') {
+        return [{
+          family_id: familyId,
+          generation: '0',
+          binding_id: alternateBindingId,
+          binding_generation: '0',
+          state: 'current',
+          consumed_reason: null,
+        }];
+      }
+      if (divergence === 'dangling_generation_zero') {
+        return [
+          {
+            family_id: familyId,
+            generation: '0',
+            binding_id: danglingBindingId,
+            binding_generation: '0',
+            state: 'consumed',
+            consumed_reason: 'rotated',
+          },
+          {
+            family_id: familyId,
+            generation: '1',
+            binding_id: bindingId,
+            binding_generation: '0',
+            state: 'current',
+            consumed_reason: null,
+          },
+        ];
+      }
+      if (divergence === 'wrong_intermediate' || divergence === 'dangling_intermediate') {
+        return [
+          {
+            family_id: familyId,
+            generation: '0',
+            binding_id: bindingId,
+            binding_generation: '0',
+            state: 'consumed',
+            consumed_reason: 'rotated',
+          },
+          {
+            family_id: familyId,
+            generation: '1',
+            binding_id: divergence === 'dangling_intermediate'
+              ? danglingBindingId
+              : bindingId,
+            binding_generation: '1',
+            state: 'consumed',
+            consumed_reason: 'rotated',
+          },
+          {
+            family_id: familyId,
+            generation: '2',
+            binding_id: alternateBindingId,
+            binding_generation: '1',
+            state: 'current',
+            consumed_reason: null,
+          },
+        ];
+      }
+      return [{
+        family_id: divergence === 'history_family' ? currentUserId : familyId,
+        generation: '0',
+        binding_id: bindingId,
+        binding_generation: '0',
+        state: 'current',
+        consumed_reason: null,
+      }];
+    })();
+    const bindingRows = [
+      {
+        id: bindingId,
+        user_id: currentUserId,
+        device_id: input.deviceId,
+        session_id: currentSessionId,
+        generation: '0',
+        proof_class: 'persistent',
+      },
+      ...(
+        divergence === 'wrong_generation_zero'
+        || divergence === 'wrong_intermediate'
+        || divergence === 'dangling_intermediate'
+          ? [{
+              id: alternateBindingId,
+              user_id: currentUserId,
+              device_id: input.deviceId,
+              session_id: currentSessionId,
+              generation: divergence === 'wrong_generation_zero' ? '0' : '1',
+              proof_class: 'persistent',
+            }]
+          : []
+      ),
+    ];
+    const sessionGeneration = divergence === 'missing_current'
+      || divergence === 'dangling_generation_zero'
+      ? '1'
+      : divergence === 'wrong_intermediate' || divergence === 'dangling_intermediate'
+        ? '2'
+        : '0';
+    const sessionBindingId = divergence === 'current_binding'
+      || divergence === 'wrong_generation_zero'
+      || divergence === 'wrong_intermediate'
+      || divergence === 'dangling_intermediate'
+      ? alternateBindingId
+      : bindingId;
+    const sessionBindingGeneration = divergence === 'current_binding'
+      || divergence === 'wrong_intermediate'
+      || divergence === 'dangling_intermediate'
+      ? '1'
+      : '0';
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('731647302894611011')) return { rows: [], rowCount: 1 };
+        if (sql.includes('FROM identity.web_session_completion_dispositions')) {
+          return {
+            rows: [{
+              attempt_hash: completionAttemptHash(attemptId),
+              challenge_id: input.challengeId,
+              device_id: input.deviceId,
+              binding_id: bindingId,
+              binding_generation: '0',
+              authority_digest: completionDispositionAuthorityDigest({
+                key,
+                kid: 'refresh-2026-07',
+                attemptId,
+                challengeId: input.challengeId,
+                deviceId: input.deviceId,
+                bindingId,
+                bindingGeneration: 0,
+                proof: input.binding.proof,
+              }),
+              authority_version: 'v1',
+              authority_kid: 'refresh-2026-07',
+              state: 'accepted',
+              session_id: currentSessionId,
+              decision_expires_at: new Date('2026-08-01T00:00:00.000Z'),
+              retained_until: new Date('2026-09-01T00:00:00.000Z'),
+              decision_open: false,
+              retention_open: true,
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes('FROM identity.web_session_completion_outcomes')) {
+          return {
+            rows: [{
+              challenge_id: input.challengeId,
+              attempt_hash: completionAttemptHash(attemptId),
+              request_digest: Buffer.alloc(32, 4),
+              user_id: currentUserId,
+              device_id: input.deviceId,
+              session_id: currentSessionId,
+              family_id: familyId,
+              binding_id: bindingId,
+              refresh_generation: '0',
+              binding_generation: '0',
+              derivation_version: 'v1',
+              derivation_kid: 'refresh-2026-07',
+              recovery_expires_at: new Date('2026-07-01T00:00:00.000Z'),
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes('SELECT user_id') && sql.includes('FROM identity.sessions')) {
+          return { rows: [{ user_id: currentUserId }], rowCount: 1 };
+        }
+        if (sql.includes('session-mutation-user')) return { rows: [], rowCount: 1 };
+        if (sql.includes('FROM identity.sessions') && sql.includes('FOR UPDATE')) {
+          return {
+            rows: [{
+              id: currentSessionId,
+              user_id: currentUserId,
+              device_id: input.deviceId,
+              refresh_family_id: divergence === 'session_family' ? currentUserId : familyId,
+              refresh_generation: sessionGeneration,
+              current_binding_id: sessionBindingId,
+              current_binding_generation: sessionBindingGeneration,
+            }],
+            rowCount: 1,
+          };
+        }
+        if (sql.includes('FROM identity.session_refresh_history') && sql.includes('FOR UPDATE')) {
+          return {
+            rows: historyRows,
+            rowCount: historyRows.length,
+          };
+        }
+        if (sql.includes('FROM identity.device_bindings') && sql.includes('FOR UPDATE')) {
+          return {
+            rows: bindingRows,
+            rowCount: bindingRows.length,
+          };
+        }
+        if (sql.includes('UPDATE identity.session_refresh_history')) {
+          updates.push(sql);
+          return { rows: [], rowCount: historyRows.length };
+        }
+        if (sql.includes('UPDATE identity.device_bindings')) {
+          updates.push(sql);
+          return { rows: [], rowCount: bindingRows.length };
+        }
+        if (sql.includes('UPDATE identity.sessions')) {
+          updates.push(sql);
+          return { rows: [], rowCount: 1 };
+        }
+        throw new Error(`Unexpected divergent accepted-completion query: ${sql}`);
+      }),
+    };
+    const database = {
+      transaction: vi.fn(async (work: (value: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const service = new AuthService(database as never, {} as never, {} as never, {} as never);
+
+    await expect(service.revokeWebSessionCompletionAttempt(
+      attemptId,
+      input,
+      bootstrapAuthority,
+      'verified_bff',
+    )).rejects.toMatchObject({
+      code: 'WEB_SESSION_COMPLETION_AUTHORITY_INVALID',
+      status: 401,
+    });
+    expect(updates).toEqual([]);
+  });
+});
+
+describe('AuthService verified Web logout orchestration', () => {
+  const input = {
+    refreshToken: `s2.${currentSessionId}.3.${bootstrapSecret}`,
+    deviceId: bootstrapDeviceId,
+    deviceBindingProof: bootstrapProof,
+    refreshEnvelopeClaims: bootstrapEnvelopeClaims,
+  };
+
+  function logoutHarness(outcome: unknown = { kind: 'revoked', userId: currentUserId, revokedCount: 1 }) {
+    const client = { query: vi.fn() };
+    const database = {
+      transaction: vi.fn(async (work: (value: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const sessionTokens = { revokeWebSessions: vi.fn().mockResolvedValue(outcome) };
+    const service = new AuthService(
+      database as never,
+      {} as never,
+      {} as never,
+      sessionTokens as never,
+    );
+    return { database, sessionTokens, service };
+  }
+
+  it.each([
+    ['current', 'logoutWebSession', { revokedCount: 1 }],
+    ['all', 'logoutAllWebSessions', { revokedCount: 4 }],
+  ] as const)('opens one transaction for verified %s logout', async (scope, method, expected) => {
+    const harness = logoutHarness({
+      kind: 'revoked',
+      userId: currentUserId,
+      revokedCount: expected.revokedCount,
+    });
+
+    await expect(harness.service[method](
+      input,
+      bootstrapAuthority,
+      'verified_bff',
+    )).resolves.toEqual(expected);
+    expect(harness.database.transaction).toHaveBeenCalledOnce();
+    expect(harness.sessionTokens.revokeWebSessions).toHaveBeenCalledWith(
+      expect.anything(),
+      input,
+      scope,
+    );
+  });
+
+  it.each([
+    ['missing BFF authority', undefined, 'verified_bff', 'WEB_BFF_AUTHORITY_REQUIRED'],
+    ['direct consumer Web channel', bootstrapAuthority, 'consumer_web', 'SESSION_TRANSPORT_MISMATCH'],
+    ['headerless native channel', bootstrapAuthority, 'headerless_native', 'SESSION_TRANSPORT_MISMATCH'],
+  ] as const)('rejects %s before a transaction', async (_label, authority, channel, code) => {
+    const harness = logoutHarness();
+
+    await expect(harness.service.logoutWebSession(
+      input,
+      authority,
+      channel,
+    )).rejects.toMatchObject({ code, status: 403 });
+    expect(harness.database.transaction).not.toHaveBeenCalled();
+    expect(harness.sessionTokens.revokeWebSessions).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['reauthentication', { kind: 'reauth_required' }],
+    ['wrong stored transport', { kind: 'transport_mismatch' }],
+  ] as const)('maps %s without exposing an owner', async (_label, outcome) => {
+    const harness = logoutHarness(outcome);
+
+    await expect(harness.service.logoutAllWebSessions(
+      input,
+      bootstrapAuthority,
+      'verified_bff',
+    )).rejects.toMatchObject({
+      code: outcome.kind === 'transport_mismatch' ? 'SESSION_TRANSPORT_MISMATCH' : 'TOKEN_EXPIRED',
+      status: outcome.kind === 'transport_mismatch' ? 403 : 401,
+    });
+  });
+});
+
+describe('AuthService native revoke-all lock ordering', () => {
+  it('takes the shared per-user transaction lock before ordered session row locks', async () => {
+    const queries: string[] = [];
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        queries.push(sql);
+        if (sql.includes('pg_advisory_xact_lock')) return { rows: [], rowCount: 1 };
+        if (sql.includes('SELECT id FROM identity.sessions')) {
+          return { rows: [{ id: currentSessionId }, { id: secondUserId }], rowCount: 2 };
+        }
+        if (sql.includes('UPDATE identity.sessions')) return { rows: [], rowCount: 2 };
+        throw new Error(`Unexpected native revoke-all query: ${sql}`);
+      }),
+    };
+    const database = {
+      query: vi.fn().mockResolvedValue({ rows: [], rowCount: 2 }),
+      transaction: vi.fn(async (work: (value: typeof client) => Promise<unknown>) => work(client)),
+    };
+    const service = new AuthService(
+      database as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(service.revokeAllSessions(currentUserId)).resolves.toEqual({ revokedCount: 2 });
+    expect(database.transaction).toHaveBeenCalledOnce();
+    expect(database.query).not.toHaveBeenCalled();
+    expect(queries[0]).toMatch(/pg_advisory_xact_lock[\s\S]*session-mutation-user/iu);
+    expect(queries[1]).toMatch(
+      /SELECT\s+id\s+FROM\s+identity\.sessions[\s\S]*ORDER\s+BY\s+id[\s\S]*FOR\s+UPDATE/iu,
+    );
+    expect(queries[2]).toMatch(/UPDATE\s+identity\.sessions/iu);
   });
 });

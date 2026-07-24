@@ -42,6 +42,35 @@
 .changed p { margin: 7px 0 0; color: var(--spott-muted); line-height: 1.6; }
 .questions { display: grid; gap: 22px; margin: 0; padding: 26px 0 0; border: 0; border-top: 1px solid var(--spott-divider); }
 .questions legend { margin-bottom: 2px; font-size: 18px; font-weight: 800; }
+.ticketSection { display: grid; gap: 12px; margin: 0; padding: 26px 0 0; border: 0; border-top: 1px solid var(--spott-divider); }
+.ticketLegend { margin: 0 0 2px; padding: 0; font-size: 18px; font-weight: 800; }
+.ticketStatus { margin: 0; color: var(--spott-muted); font-size: 14px; }
+.ticketStatus[role="alert"] { color: var(--spott-coral); }
+.ticketRetry { justify-self: start; min-height: 44px; padding: 0 16px; border: 1px solid var(--spott-divider); border-radius: 13px; background: var(--spott-surface); color: var(--spott-ink); font-weight: 700; }
+.ticketList { display: grid; gap: 10px; }
+.ticketRow { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: start; gap: 14px; padding: 18px; border: 1px solid var(--spott-divider); border-radius: 16px; background: color-mix(in srgb, var(--spott-canvas) 55%, var(--spott-surface)); cursor: pointer; }
+.ticketRow[data-selected="true"] { border-color: color-mix(in srgb, var(--spott-ink) 40%, var(--spott-divider)); background: var(--spott-surface); }
+.ticketRow input { width: 22px; height: 22px; margin: 2px 0 0; accent-color: var(--spott-twilight); }
+.ticketRowSoldOut { cursor: not-allowed; opacity: .55; }
+.ticketBody { display: grid; gap: 5px; min-width: 0; }
+.ticketBody strong { font-size: 15px; font-weight: 700; }
+.ticketDescription,
+.ticketTerms { color: var(--spott-muted); font-size: 13px; font-weight: 500; line-height: 1.55; }
+.ticketTerms { font-size: 12px; }
+.ticketAvailability { color: var(--spott-muted); font-size: 12px; font-weight: 700; }
+.ticketSoldOut { color: var(--spott-coral); font-size: 12px; font-weight: 700; }
+.ticketPrice { display: grid; justify-items: end; gap: 3px; text-align: right; }
+.ticketPrice strong { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ticketPrice small { color: var(--spott-muted); font-size: 11px; font-weight: 500; }
+.ticketBoundary { color: var(--spott-muted); font-size: 12px; font-weight: 500; line-height: 1.6; }
+
+.paymentReport { display: grid; gap: 10px; padding: 18px; border: 1px solid var(--spott-divider); border-radius: 16px; background: color-mix(in srgb, var(--spott-canvas) 55%, var(--spott-surface)); text-align: left; }
+.paymentReport button { display: inline-flex; min-height: 46px; align-items: center; justify-content: center; border: 1px solid var(--spott-divider); border-radius: 13px; background: var(--spott-surface); color: var(--spott-ink); font-weight: 700; }
+.paymentReport button:disabled { opacity: .55; }
+.paymentReport small { color: var(--spott-muted); font-size: 12px; line-height: 1.6; }
+.paymentReported { display: inline-flex; min-height: 34px; align-items: center; padding-inline: 14px; border: 1px solid color-mix(in srgb, var(--spott-amber) 40%, var(--spott-divider)); border-radius: 999px; background: color-mix(in srgb, var(--spott-amber) 9%, var(--spott-surface)); font-size: 13px; font-weight: 700; }
+.paymentError { margin: 0; color: var(--spott-danger); font-size: 13px; font-weight: 700; }
+
 .terms,
 .reconfirm { display: flex; align-items: flex-start; gap: 13px; padding: 18px; border: 1px solid var(--spott-divider); border-radius: 16px; background: color-mix(in srgb, var(--spott-canvas) 55%, var(--spott-surface)); cursor: pointer; }
 .terms input,
@@ -128,6 +157,8 @@
   .changed,
   .terms,
   .reconfirm,
+  .ticketRow,
+  .paymentReport,
   .unavailable,
   .confirmation { border-color: var(--spott-ink); }
 }

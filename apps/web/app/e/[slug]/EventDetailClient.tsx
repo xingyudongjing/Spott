@@ -17,6 +17,7 @@ import { fetchViewerEvent } from "../../lib/events-client";
 import { EventActions } from "./EventActions";
 import { EventComments } from "./EventComments";
 import { EventFeedbackSummary } from "./EventFeedbackSummary";
+import { EventGoingPreview } from "./EventGoingPreview";
 
 export function EventDetailClient({
   event,
@@ -103,6 +104,7 @@ export function EventDetailClient({
       )}
       supplementary={(
         <>
+          <EventGoingPreview eventId={liveEvent.id} locale={locale} />
           <EventFeedbackSummary eventId={liveEvent.id} locale={locale} />
           <EventComments
             key={viewerSession?.user.id ?? "anonymous"}

@@ -319,7 +319,7 @@ test("generates a stable valid public slug for CJK-only group names", async () =
 });
 
 test("covers canonical notification, post-event, feedback, and safety contracts", async () => {
-  const [notifications, itineraryClient, itineraryCard, safety, eventPage, eventClient, studio, profile, settings, report, attendees] = await Promise.all([
+  const [notifications, itineraryClient, itineraryCard, safety, eventPage, eventClient, studio, profile, settings, achievements, report, attendees] = await Promise.all([
     readFile(new URL("../app/notifications/NotificationsClient.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/me/events/MyEventsClient.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/me/events/ItineraryCard.tsx", import.meta.url), "utf8"),
@@ -329,6 +329,7 @@ test("covers canonical notification, post-event, feedback, and safety contracts"
     readFile(new URL("../app/studio/events/StudioEventsClient.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/u/[handle]/HostProfile.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/me/settings/SettingsClient.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/me/achievements/AchievementsClient.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/reports/new/ReportForm.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/studio/events/[id]/attendees/AttendeeManager.tsx", import.meta.url), "utf8"),
   ]);
@@ -341,8 +342,9 @@ test("covers canonical notification, post-event, feedback, and safety contracts"
   assert.match(`${eventPage}\n${eventClient}`, /EventFeedbackSummary/);
   assert.match(studio, /\/feedback/);
   assert.match(profile, /\/users\/\$\{profile\.userId\}\/block/);
-  assert.match(settings, /\/me\/achievements\/evaluate/);
   assert.match(settings, /\/me\/achievements/);
+  assert.match(achievements, /\/me\/achievements\/evaluate/);
+  assert.match(achievements, /\/me\/achievements\/\$\{award\.id\}\/share-card/);
   assert.match(report, /purpose:\s*["']report_evidence["']/);
   assert.match(report, /evidenceAssetIds/);
   assert.match(report, /idempotencyKey/);

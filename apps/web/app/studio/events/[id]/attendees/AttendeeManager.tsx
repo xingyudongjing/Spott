@@ -7,6 +7,7 @@ import { useI18n } from "../../../../components/I18nProvider";
 import { apiRequest, errorMessage } from "../../../../lib/client-api";
 import type { EventView } from "../../../../lib/demo-data";
 import { StudioNav } from "../../../StudioNav";
+import { EventStudioTabs } from "../EventStudioHeader";
 
 type Status =
   | "pending"
@@ -25,9 +26,16 @@ interface AttendeeRegistration {
   partySize: number;
   waitlistPosition?: number | null;
   attendeeNote?: string | null;
+  ticketTypeId?: string | null;
   answers: Record<string, unknown>;
   attendee: { id: string; nickname: string; publicHandle: string };
   createdAt?: string;
+}
+
+interface TicketTypeSummary {
+  id: string;
+  name: string;
+  isFree: boolean;
 }
 
 interface AttendeePage {
@@ -75,6 +83,10 @@ export function AttendeeManager({ eventId }: { eventId: string }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [busyId, setBusyId] = useState("");
   const [message, setMessage] = useState("");
+  const [ticketTypes, setTicketTypes] = useState<TicketTypeSummary[]>([]);
+  // The attendee list does not expose stored payment state, so a confirmation is
+  // only reflected for the rest of this session — never claimed as a saved flag.
+  const [paymentConfirmed, setPaymentConfirmed] = useState<string[]>([]);
 
   const load = useCallback(
     async (selected: Status, cursor?: string) => {
@@ -113,6 +125,20 @@ export function AttendeeManager({ eventId }: { eventId: string }) {
     const timer = window.setTimeout(() => void load(status), 0);
     return () => window.clearTimeout(timer);
   }, [load, status]);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiRequest<{ items: TicketTypeSummary[] }>(`/events/${eventId}/ticket-types`, {
+      authenticated: true,
+    })
+      .then((payload) => {
+        if (!cancelled) setTicketTypes(payload.items);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [eventId]);
 
   const questionLabels = useMemo(
     () =>
@@ -185,6 +211,47 @@ export function AttendeeManager({ eventId }: { eventId: string }) {
             }),
           });
           await load(status);
+        } catch (error) {
+          setMessage(errorMessage(error));
+          throw error;
+        } finally {
+          setBusyId("");
+        }
+      },
+    });
+  }
+
+  function ticketFor(registration: AttendeeRegistration): TicketTypeSummary | null {
+    if (!registration.ticketTypeId) return null;
+    return ticketTypes.find((ticket) => ticket.id === registration.ticketTypeId) ?? null;
+  }
+
+  /** True when this registration has something to pay the host outside Spott. */
+  function owesOfflinePayment(registration: AttendeeRegistration): boolean {
+    const ticket = ticketFor(registration);
+    if (ticket) return !ticket.isFree;
+    return Boolean(event?.fee && event.fee.isFree === false);
+  }
+
+  async function confirmPayment(registration: AttendeeRegistration) {
+    await appDialog.run({
+      title: t("studio.attendees.confirmPaymentTitle"),
+      message: t("studio.attendees.confirmPaymentBody", {
+        name: registration.attendee.nickname,
+      }),
+      confirmLabel: t("studio.attendees.confirmPayment"),
+      onConfirm: async () => {
+        setBusyId(registration.id);
+        setMessage("");
+        try {
+          await apiRequest(`/registrations/${registration.id}/payment-confirmation`, {
+            method: "POST",
+            authenticated: true,
+            idempotent: true,
+          });
+          setPaymentConfirmed((current) =>
+            current.includes(registration.id) ? current : [...current, registration.id],
+          );
         } catch (error) {
           setMessage(errorMessage(error));
           throw error;
@@ -316,6 +383,7 @@ export function AttendeeManager({ eventId }: { eventId: string }) {
             <p>{event ? `${event.title} · ${copy.body}` : copy.body}</p>
           </div>
         </div>
+        <EventStudioTabs eventId={eventId} event={event} current="attendees" />
         <section className="correction-queue" aria-labelledby="correction-queue-title">
           <div className="correction-heading">
             <div>
@@ -399,6 +467,7 @@ export function AttendeeManager({ eventId }: { eventId: string }) {
                     <h2>{item.attendee.nickname}</h2>
                     <p>
                       {copy.party}: {item.partySize}
+                      {ticketFor(item) && ` · ${t("studio.attendees.ticketLabel")}: ${ticketFor(item)!.name}`}
                     </p>
                     {item.attendeeNote && (
                       <aside>
@@ -447,6 +516,20 @@ export function AttendeeManager({ eventId }: { eventId: string }) {
                         {copy.checkin}
                       </button>
                     )}
+                    {["pending", "confirmed", "checked_in"].includes(item.status)
+                      && owesOfflinePayment(item)
+                      && (paymentConfirmed.includes(item.id) ? (
+                        <span className="payment-recorded-chip">
+                          ✓ {t("studio.attendees.paymentRecorded")}
+                        </span>
+                      ) : (
+                        <button
+                          disabled={busyId === item.id}
+                          onClick={() => void confirmPayment(item)}
+                        >
+                          {t("studio.attendees.confirmPayment")}
+                        </button>
+                      ))}
                   </div>
                 </article>
               ))}

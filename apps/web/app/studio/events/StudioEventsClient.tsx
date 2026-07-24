@@ -268,7 +268,13 @@ export function StudioEventsClient() {
           <div>
             <span>{copy.upcoming}</span>
             <strong>{counts.live}</strong>
-            <small>{items.filter((item) => item.status === 'published').length} published</small>
+            <small>
+              {locale === 'ja'
+                ? `公開中 ${items.filter((item) => item.status === 'published').length}`
+                : locale === 'en'
+                  ? `${items.filter((item) => item.status === 'published').length} published`
+                  : `已发布 ${items.filter((item) => item.status === 'published').length}`}
+            </small>
           </div>
           <div>
             <span>{copy.attendees}</span>
@@ -278,7 +284,13 @@ export function StudioEventsClient() {
           <div>
             <span>{copy.drafts}</span>
             <strong>{counts.draft + counts.review}</strong>
-            <small>{counts.review} review</small>
+            <small>
+              {locale === 'ja'
+                ? `審査中 ${counts.review}`
+                : locale === 'en'
+                  ? `${counts.review} in review`
+                  : `审核中 ${counts.review}`}
+            </small>
           </div>
         </div>
         <div className="studio-toolbar">
@@ -348,6 +360,11 @@ export function StudioEventsClient() {
                 </dl>
                 <div className="row-actions">
                   <Link href={`/e/${event.publicSlug}`}>{t('common.open')}</Link>
+                  {['draft', 'needs_changes', 'published'].includes(event.status) && (
+                    <Link href={`/studio/events/${event.id}/edit`}>
+                      {t('studio.events.actionEdit')}
+                    </Link>
+                  )}
                   {['published', 'registration_closed', 'in_progress'].includes(event.status) && (
                     <Link href={`/studio/events/${event.id}/attendees`}>
                       {locale === 'ja'
@@ -355,6 +372,23 @@ export function StudioEventsClient() {
                         : locale === 'en'
                           ? 'Manage attendees'
                           : '管理报名与签到'}
+                    </Link>
+                  )}
+                  {['draft', 'needs_changes', 'published', 'registration_closed', 'in_progress'].includes(
+                    event.status,
+                  ) && (
+                    <Link href={`/studio/events/${event.id}/tickets`}>
+                      {t('studio.events.actionTickets')}
+                    </Link>
+                  )}
+                  {['published', 'registration_closed', 'in_progress'].includes(event.status) && (
+                    <Link href={`/studio/events/${event.id}/announcements`}>
+                      {t('studio.events.actionAnnouncements')}
+                    </Link>
+                  )}
+                  {event.status === 'published' && (
+                    <Link href={`/studio/events/${event.id}/promotion`}>
+                      {t('studio.events.actionPromotion')}
                     </Link>
                   )}
                   {(event.status === 'ended' || new Date(event.endsAt) < new Date()) && (

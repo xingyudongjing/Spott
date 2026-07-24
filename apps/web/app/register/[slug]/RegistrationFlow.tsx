@@ -29,9 +29,12 @@ import { DetailsForm, RegistrationUnavailable, ReviewForm } from "./Registration
 import { RegistrationHeader } from "./RegistrationHeader";
 import styles from "./RegistrationFlow.module.css";
 import {
+  parseTicketTypes,
   registrationPartyLimit,
+  type EventTicketType,
   type RegistrationFieldErrors,
   type RegistrationQuote,
+  type TicketTypesState,
 } from "./registration-model";
 
 export { RegistrationConfirmation, registrationPartyLimit };
@@ -54,6 +57,9 @@ export function RegistrationFlow({
   const [answers, setAnswers] = useState<Record<string, RegistrationAnswer>>({});
   const [attendeeNote, setAttendeeNote] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(event.fee?.isFree ?? true);
+  const [ticketTypes, setTicketTypes] = useState<TicketTypesState>({ kind: "idle" });
+  const [ticketTypeId, setTicketTypeId] = useState<string | null>(null);
+  const [ticketAttempt, setTicketAttempt] = useState(0);
   const [idempotencyKey, setIdempotencyKey] = useState("");
   const [quote, setQuote] = useState<RegistrationQuote | null>(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
@@ -75,6 +81,9 @@ export function RegistrationFlow({
     authenticated: ownerUserId !== null,
     phoneVerified: ownerUserId !== null,
   });
+  const selectedTicketType = ticketTypes.kind === "ready"
+    ? ticketTypes.items.find((ticket) => ticket.id === ticketTypeId) ?? null
+    : null;
 
   const invalidateForOwnerChange = useCallback(() => {
     const nextOwnerUserId = readSession()?.user.id ?? null;
@@ -93,6 +102,8 @@ export function RegistrationFlow({
     setAnswers({});
     setAttendeeNote("");
     setAcceptedTerms(event.fee?.isFree ?? true);
+    setTicketTypes({ kind: "idle" });
+    setTicketTypeId(null);
     setIdempotencyKey("");
     setQuote(null);
     setQuoteLoading(false);
@@ -159,6 +170,7 @@ export function RegistrationFlow({
           setAttendeeNote(stored.attendeeNote);
           setAcceptedTerms(stored.acceptedTerms);
           setStep(stored.step);
+          setTicketTypeId(stored.ticketTypeId ?? null);
         }
         setIdempotencyKey(key);
         const returnTo = `${window.location.pathname}${window.location.search}`;
@@ -169,6 +181,7 @@ export function RegistrationFlow({
             attendeeNote: "",
             acceptedTerms: event.fee?.isFree ?? true,
             step: "details",
+            ticketTypeId: null,
             updatedAt: new Date().toISOString(),
           }),
           schemaVersion: REGISTRATION_DRAFT_SCHEMA_VERSION,
@@ -229,6 +242,28 @@ export function RegistrationFlow({
 
   useEffect(() => subscribeSessionChanges(invalidateForOwnerChange), [invalidateForOwnerChange]);
 
+  // Ticket tiers are public and optional: an event without tiers keeps the
+  // single-fee flow untouched, so a failure here never blocks the gate.
+  useEffect(() => {
+    if (!gateReady) return;
+    let active = true;
+    void apiRequest<unknown>(`/events/${liveEvent.id}/ticket-types`)
+      .then((payload) => {
+        if (!active) return;
+        const items = parseTicketTypes(payload);
+        setTicketTypes({ kind: "ready", items });
+        setTicketTypeId((current) => (
+          current && items.some((ticket) => ticket.id === current && !ticket.soldOut) ? current : null
+        ));
+      })
+      .catch(() => {
+        if (active) setTicketTypes({ kind: "error" });
+      });
+    return () => {
+      active = false;
+    };
+  }, [gateReady, liveEvent.id, liveEvent.version, ticketAttempt]);
+
   useEffect(() => {
     if (!gateReady || !idempotencyKey || result) return;
     saveRegistrationDraft(window.sessionStorage, {
@@ -241,10 +276,11 @@ export function RegistrationFlow({
       attendeeNote,
       acceptedTerms,
       step,
+      ticketTypeId,
       idempotencyKey,
       updatedAt: new Date().toISOString(),
     });
-  }, [acceptedTerms, answers, attendeeNote, gateReady, idempotencyKey, liveEvent.id, liveEvent.version, ownerUserId, partySize, result, step]);
+  }, [acceptedTerms, answers, attendeeNote, gateReady, idempotencyKey, liveEvent.id, liveEvent.version, ownerUserId, partySize, result, step, ticketTypeId]);
 
   useEffect(() => {
     const viewport = window.visualViewport;
@@ -295,8 +331,18 @@ export function RegistrationFlow({
     candidatePartySize: number,
     candidateAcceptedTerms: boolean,
     candidateAnswers: Record<string, RegistrationAnswer>,
+    candidateTicketTypeId: string | null = ticketTypeId,
+    candidateTicketTypes: EventTicketType[] = ticketTypes.kind === "ready" ? ticketTypes.items : [],
   ) {
     const errors: RegistrationFieldErrors = {};
+    if (
+      candidateTicketTypes.length
+      && !candidateTicketTypes.some(
+        (ticket) => ticket.id === candidateTicketTypeId && !ticket.soldOut,
+      )
+    ) {
+      errors.ticketTypeId = t("ticket.required");
+    }
     const candidatePartyLimit = registrationPartyLimit(candidateEvent);
     if (
       !Number.isInteger(candidatePartySize)
@@ -378,6 +424,7 @@ export function RegistrationFlow({
           joinWaitlistIfFull: full,
           attendeeNote: attendeeNote.trim() || undefined,
           answers,
+          ...(ticketTypeId ? { ticketTypeId } : {}),
         }),
       });
       if (!isOwnerOperationCurrent(operation)) return;
@@ -462,6 +509,7 @@ export function RegistrationFlow({
     setAnswers({});
     setAttendeeNote("");
     setAcceptedTerms(liveEvent.fee?.isFree ?? true);
+    setTicketTypeId(null);
     setStep("details");
     setIdempotencyKey(window.crypto.randomUUID());
     setQuote(null);
@@ -512,7 +560,15 @@ export function RegistrationFlow({
       </main>
     );
   }
-  if (result) return <RegistrationConfirmation event={liveEvent} registration={result} />;
+  if (result) {
+    return (
+      <RegistrationConfirmation
+        event={liveEvent}
+        registration={result}
+        ticketType={selectedTicketType}
+      />
+    );
+  }
   if (registrationCTA.intent !== "register") return <RegistrationUnavailable event={liveEvent} />;
 
   return (
@@ -540,6 +596,13 @@ export function RegistrationFlow({
             acceptedTerms={acceptedTerms}
             fieldErrors={fieldErrors}
             message={message}
+            ticketTypes={ticketTypes}
+            ticketTypeId={ticketTypeId}
+            onTicketType={(value) => updateInput(() => setTicketTypeId(value))}
+            onRetryTicketTypes={() => {
+              setTicketTypes({ kind: "loading" });
+              setTicketAttempt((current) => current + 1);
+            }}
             onPartySize={(value) => updateInput(() => setPartySize(value))}
             onAnswer={(id, value) => updateInput(() => setAnswers((current) => ({ ...current, [id]: value })))}
             onNote={(value) => updateInput(() => setAttendeeNote(value))}
@@ -552,6 +615,7 @@ export function RegistrationFlow({
             partySize={partySize}
             answers={answers}
             attendeeNote={attendeeNote}
+            ticketType={selectedTicketType}
             quote={quote}
             quoteLoading={quoteLoading}
             busy={busy}

@@ -12,6 +12,7 @@ import {
 import { trackProductEvent } from "../../lib/analytics";
 import { DashboardNav } from "../DashboardNav";
 import { DailyCheckinCard } from "./DailyCheckinCard";
+import { PointsRules } from "./PointsRules";
 
 export function WalletClient() {
   const { locale } = useI18n();
@@ -130,6 +131,7 @@ export function WalletClient() {
           </p>
         )}
         <DailyCheckinCard locale={locale} onWalletUpdate={setWallet} />
+        <PointsRules />
         {wallet ? (
           <>
             <div className="wallet-cards">

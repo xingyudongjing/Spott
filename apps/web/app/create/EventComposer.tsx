@@ -8,6 +8,7 @@ import { useI18n } from "../components/I18nProvider";
 import type { Locale } from "../i18n/messages";
 import { trackProductEvent } from "../lib/analytics";
 import {
+  APIError,
   apiRequest,
   errorMessage,
   readSession,
@@ -144,7 +145,14 @@ const risks = [
   ["gender_limited", "性别限定", "性別限定", "Gender-limited"],
 ] as const;
 
-export function EventComposer() {
+const EDITABLE_STATUSES = ["draft", "needs_changes", "published"];
+
+/**
+ * The composer doubles as the host-studio editor. With `editEventId` it hydrates
+ * from the server instead of the local create draft, keeps its own remote version
+ * for optimistic concurrency, and never touches the create draft in localStorage.
+ */
+export function EventComposer({ editEventId }: { editEventId?: string } = {}) {
   const { locale, t } = useI18n();
   const appDialog = useAppDialog();
   const [step, setStep] = useState(0);
@@ -160,10 +168,14 @@ export function EventComposer() {
   const [submitted, setSubmitted] = useState<RemoteEvent | null>(null);
   const [draftOwnerId, setDraftOwnerId] = useState<string | null>(null);
   const [draftHydrated, setDraftHydrated] = useState(false);
+  const [editState, setEditState] = useState<"loading" | "ready" | "locked" | "failed">(
+    editEventId ? "loading" : "ready",
+  );
   const uploadAttempts = useRef(new WeakMap<File, MediaUploadAttempt>());
 
   useEffect(() => {
     let activeOwnerId: string | null = null;
+    const returnTo = editEventId ? `/studio/events/${editEventId}/edit` : "/create";
 
     const clearPrivateComposerState = () => {
       setDraft(initialDraft);
@@ -189,7 +201,7 @@ export function EventComposer() {
         setDraftHydrated(false);
         setDraftOwnerId(null);
         clearPrivateComposerState();
-        window.location.replace(`/login?returnTo=${encodeURIComponent("/create")}`);
+        window.location.replace(`/login?returnTo=${encodeURIComponent(returnTo)}`);
         return;
       }
       if (!session.user.phoneVerified) {
@@ -197,7 +209,7 @@ export function EventComposer() {
         setDraftHydrated(false);
         setDraftOwnerId(null);
         clearPrivateComposerState();
-        window.location.replace(`/phone-verification?returnTo=${encodeURIComponent("/create")}`);
+        window.location.replace(`/phone-verification?returnTo=${encodeURIComponent(returnTo)}`);
         return;
       }
       if (activeOwnerId === session.user.id) return;
@@ -206,6 +218,39 @@ export function EventComposer() {
       setDraftHydrated(false);
       setDraftOwnerId(session.user.id);
       clearPrivateComposerState();
+
+      if (editEventId) {
+        setEditState("loading");
+        void apiRequest<EventView>(`/events/${editEventId}`, { authenticated: true })
+          .then((event) => {
+            if (readSession()?.user.id !== session.user.id) return;
+            const editable =
+              EDITABLE_STATUSES.includes(event.status)
+              && (event.availableActions ?? []).includes("edit");
+            setDraft(draftFromEvent(event));
+            setRemote({
+              id: event.id,
+              publicSlug: event.publicSlug,
+              version: event.version,
+              status: event.status,
+            });
+            setRemoteCoverURL(event.coverURL ?? "");
+            setUploadedNames((event.media ?? []).map((item) => `remote:${item.id}`));
+            setDraftHydrated(true);
+            setEditState(editable ? "ready" : "locked");
+          })
+          .catch((error) => {
+            if (readSession()?.user.id !== session.user.id) return;
+            setEditState("failed");
+            setMessage(errorMessage(error));
+          });
+        apiRequest<{ items: GroupOption[] }>("/me/groups", { authenticated: true })
+          .then((payload) => {
+            if (readSession()?.user.id === session.user.id) setGroups(payload.items);
+          })
+          .catch(() => undefined);
+        return;
+      }
 
       const storageKey = composerDraftStorageKey(session.user.id);
       const source = window.localStorage.getItem(storageKey);
@@ -242,15 +287,17 @@ export function EventComposer() {
 
     hydrateCurrentOwner();
     return subscribeSessionChanges(hydrateCurrentOwner);
-  }, []);
+  }, [editEventId]);
 
   useEffect(() => {
-    if (!draftHydrated || !draftOwnerId) return;
+    // Editing a published event is server-backed on every step, so it never
+    // writes into the create-flow draft slot.
+    if (!draftHydrated || !draftOwnerId || editEventId) return;
     window.localStorage.setItem(
       composerDraftStorageKey(draftOwnerId),
       JSON.stringify({ draft, remote, uploadedNames }),
     );
-  }, [draft, draftHydrated, draftOwnerId, remote, uploadedNames]);
+  }, [draft, draftHydrated, draftOwnerId, editEventId, remote, uploadedNames]);
 
   useEffect(
     () => () => coverPreviews.forEach((url) => URL.revokeObjectURL(url)),
@@ -310,13 +357,7 @@ export function EventComposer() {
   async function save(): Promise<RemoteEvent> {
     const body = eventPayload(draft);
     const saved = remote
-      ? await apiRequest<RemoteEvent>(`/events/${remote.id}`, {
-          method: "PATCH",
-          authenticated: true,
-          idempotent: true,
-          ifMatch: remote.version,
-          body: JSON.stringify(body),
-        })
+      ? await patchRemote(remote, body)
       : await apiRequest<RemoteEvent>("/events/drafts", {
           method: "POST",
           authenticated: true,
@@ -326,6 +367,51 @@ export function EventComposer() {
     setRemote(saved);
     await uploadPendingCovers(saved.id);
     return saved;
+  }
+
+  async function patchRemote(current: RemoteEvent, body: unknown): Promise<RemoteEvent> {
+    try {
+      return await apiRequest<RemoteEvent>(`/events/${current.id}`, {
+        method: "PATCH",
+        authenticated: true,
+        idempotent: true,
+        ifMatch: current.version,
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      // Someone (usually this host on iOS) saved a newer version. Refresh the
+      // base version and say so instead of silently discarding either side.
+      if (error instanceof APIError && error.status === 409) {
+        const latest = await apiRequest<EventView>(`/events/${current.id}`, { authenticated: true });
+        setRemote({
+          id: latest.id,
+          publicSlug: latest.publicSlug,
+          version: latest.version,
+          status: latest.status,
+        });
+        throw new Error(t("studio.edit.conflict"));
+      }
+      throw error;
+    }
+  }
+
+  async function saveEdits() {
+    if (missing.length) {
+      setMessage(
+        `${tr(locale, "保存前还需要补全", "保存前に入力してください", "Complete before saving")}: ${missing.join(tr(locale, "、", "、", ", "))}`,
+      );
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      await save();
+      setMessage(t("studio.edit.saved"));
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function uploadPendingCovers(eventId: string) {
@@ -432,7 +518,7 @@ export function EventComposer() {
             region: draft.regionId,
             status: result.status,
           });
-          if (draftOwnerId) {
+          if (draftOwnerId && !editEventId) {
             window.localStorage.removeItem(composerDraftStorageKey(draftOwnerId));
           }
         },
@@ -471,6 +557,41 @@ export function EventComposer() {
       </main>
     );
 
+  if (editEventId && editState !== "ready")
+    return (
+      <main className="flow-page">
+        <div className="flow-shell narrow">
+          <Link className="back-link" href="/studio/events">
+            ← {t("studio.backToEvents")}
+          </Link>
+          {editState === "loading" ? (
+            <div className="loading-state">
+              <span />
+              <p>{t("studio.edit.loading")}</p>
+            </div>
+          ) : (
+            <section className="flow-card">
+              <span className="section-number">{t("studio.eyebrow.edit")}</span>
+              <h1>
+                {editState === "locked" ? t("studio.edit.lockedTitle") : t("studio.event.notFound")}
+              </h1>
+              <p className="lead">
+                {editState === "locked" ? t("studio.edit.lockedBody") : t("studio.event.loadFailed")}
+              </p>
+              {message && editState === "failed" && (
+                <p className="form-message" role="alert">
+                  {message}
+                </p>
+              )}
+              <Link className="primary-action" href="/studio/events">
+                {t("studio.backToEvents")}
+              </Link>
+            </section>
+          )}
+        </div>
+      </main>
+    );
+
   return (
     <main className="studio-page">
       <aside className="composer-steps">
@@ -478,7 +599,9 @@ export function EventComposer() {
           SPOTT
         </Link>
         <span className="eyebrow-text">
-          {tr(locale, "活动发布", "イベント作成", "CREATE EVENT")}
+          {editEventId
+            ? t("studio.eyebrow.edit")
+            : tr(locale, "活动发布", "イベント作成", "CREATE EVENT")}
         </span>
         <ol>
           {stepNames.map((name, index) => (
@@ -502,6 +625,11 @@ export function EventComposer() {
       <section className="composer-main">
         <div className="composer-top">
           <div>
+            {editEventId && (
+              <Link className="back-link" href="/studio/events">
+                ← {t("studio.backToEvents")}
+              </Link>
+            )}
             <span className="section-number">
               STEP {String(step + 1).padStart(2, "0")} / 06
             </span>
@@ -517,6 +645,10 @@ export function EventComposer() {
             {tr(locale, "保存并退出", "保存して終了", "Save & exit")}
           </button>
         </div>
+
+        {editEventId && remote?.status === "published" && (
+          <p className="composer-edit-notice">{t("studio.edit.publishedNotice")}</p>
+        )}
 
         <div className="composer-form">
           {step === 0 && (
@@ -1221,6 +1353,15 @@ export function EventComposer() {
                   ? tr(locale, "正在保存…", "保存中…", "Saving…")
                   : tr(locale, "保存并继续 →", "保存して次へ →", "Save & continue →")}
               </button>
+            ) : editEventId && remote?.status === "published" ? (
+              <button
+                className="primary-action compact"
+                type="button"
+                onClick={() => void saveEdits()}
+                disabled={busy}
+              >
+                {busy ? t("studio.common.saving") : t("studio.edit.saveChanges")}
+              </button>
             ) : (
               <button
                 className="primary-action compact"
@@ -1530,4 +1671,60 @@ function tr(locale: Locale, zh: string, ja: string, en: string): string {
 
 function toISO(value: string): string | undefined {
   return value ? new Date(value).toISOString() : undefined;
+}
+
+function toLocalInput(value: string | null | undefined): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * Server event → composer draft. The API answers a published event with the
+ * category echoed into `tags` when the host set none, so that echo is dropped
+ * instead of being written back as a real tag.
+ */
+function draftFromEvent(event: EventView): DraftState {
+  const category = event.category ?? "";
+  const tags = (event.tags ?? []).filter((tag) => tag !== category || (event.tags ?? []).length > 1);
+  const riskDetails = Object.values(event.riskDetails ?? {}).find((value) => value?.trim()) ?? "";
+  return {
+    ...initialDraft,
+    title: event.title ?? "",
+    description: event.description ?? "",
+    categoryId: category,
+    tags: tags.join("、"),
+    startsAt: toLocalInput(event.startsAt),
+    endsAt: toLocalInput(event.endsAt),
+    deadlineAt: toLocalInput(event.deadlineAt),
+    regionId: event.region ?? initialDraft.regionId,
+    publicArea: event.publicArea ?? "",
+    exactAddress: event.exactAddress ?? "",
+    exactAddressVisibility: event.exactAddressVisibility ?? initialDraft.exactAddressVisibility,
+    capacity: event.capacity || initialDraft.capacity,
+    registrationMode: event.registrationMode ?? initialDraft.registrationMode,
+    waitlistEnabled: event.waitlistEnabled ?? initialDraft.waitlistEnabled,
+    attendeeRequirements: event.attendeeRequirements ?? "",
+    registrationQuestions: (event.registrationQuestions ?? []).map((question) => ({
+      key: question.id,
+      prompt: question.prompt,
+      kind: question.kind,
+      required: question.required,
+      options: question.options.join("、"),
+    })),
+    isFree: event.fee ? event.fee.isFree : initialDraft.isFree,
+    amountJPY: event.fee?.amountJPY ? String(event.fee.amountJPY) : "",
+    collectorName: event.fee?.collectorName ?? "",
+    paymentMethod: event.fee?.method ?? "",
+    paymentDeadlineText: event.fee?.paymentDeadlineText ?? "",
+    refundPolicy: event.fee?.refundPolicy ?? "",
+    riskFlags: [...(event.riskFlags ?? [])],
+    riskDetails,
+    groupId: event.groupId ?? "",
+    checkinMode: event.checkinMode ?? initialDraft.checkinMode,
+    commentPermission: event.commentPermission ?? initialDraft.commentPermission,
+    posterEnabled: event.posterEnabled ?? initialDraft.posterEnabled,
+  };
 }

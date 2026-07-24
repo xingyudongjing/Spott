@@ -170,6 +170,33 @@
 .requirements p,
 .safety p { margin-top: 8px; color: var(--spott-muted); line-height: 1.65; }
 
+.factAction { margin-top: 10px; }
+.factAction a {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  color: var(--spott-muted);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.factAction a:hover { color: var(--spott-ink); }
+
+.risks {
+  display: grid;
+  gap: 0;
+  margin: 22px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--spott-divider);
+  list-style: none;
+}
+.risks li { padding: 16px 0; border-bottom: 1px solid var(--spott-divider); }
+.risks strong { font-size: 15px; }
+.risks p { margin: 6px 0 0; color: var(--spott-muted); font-size: 14px; line-height: 1.65; }
+.riskNote { display: block; margin-top: 14px; color: var(--spott-muted); font-size: 12px; line-height: 1.6; }
+
 .detailList { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 24px; border-top: 1px solid var(--spott-divider); }
 .detailList div { padding: 18px 0; border-bottom: 1px solid var(--spott-divider); }
 .detailList dt { color: var(--spott-muted); font-size: 12px; }

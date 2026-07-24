@@ -9,7 +9,13 @@ import { eventDate, eventFeeLabel, eventTime } from "../../lib/format";
 import type { RegistrationAnswer } from "../../lib/registration-draft";
 import styles from "./RegistrationFlow.module.css";
 import { RegistrationHeader } from "./RegistrationHeader";
-import type { RegistrationFieldErrors, RegistrationQuote } from "./registration-model";
+import { RegistrationTicketTypes, ticketPriceLabel } from "./RegistrationTicketTypes";
+import type {
+  EventTicketType,
+  RegistrationFieldErrors,
+  RegistrationQuote,
+  TicketTypesState,
+} from "./registration-model";
 
 export function RegistrationUnavailable({ event }: { event: EventDetail }) {
   const { t } = useI18n();
@@ -36,6 +42,10 @@ export function DetailsForm({
   acceptedTerms,
   fieldErrors,
   message,
+  ticketTypes,
+  ticketTypeId,
+  onTicketType,
+  onRetryTicketTypes,
   onPartySize,
   onAnswer,
   onNote,
@@ -50,6 +60,10 @@ export function DetailsForm({
   acceptedTerms: boolean;
   fieldErrors: RegistrationFieldErrors;
   message: string;
+  ticketTypes: TicketTypesState;
+  ticketTypeId: string | null;
+  onTicketType: (value: string) => void;
+  onRetryTicketTypes: () => void;
   onPartySize: (value: number) => void;
   onAnswer: (id: string, value: RegistrationAnswer) => void;
   onNote: (value: string) => void;
@@ -63,6 +77,13 @@ export function DetailsForm({
         <p className={styles.eyebrow}>{t("registration.detailsStep")}</p>
         <h1>{t(event.availableCapacity === 0 ? "registration.waitlistTitle" : "registration.title")}</h1>
         <EventSummary event={event} />
+        <RegistrationTicketTypes
+          state={ticketTypes}
+          selectedTicketTypeId={ticketTypeId}
+          error={fieldErrors.ticketTypeId}
+          onSelect={onTicketType}
+          onRetry={onRetryTicketTypes}
+        />
         <label className={styles.field} htmlFor="registration-partySize">
           <span>{t("registration.partySize")}</span>
           <input
@@ -194,6 +215,7 @@ export function ReviewForm({
   partySize,
   answers,
   attendeeNote,
+  ticketType,
   quote,
   quoteLoading,
   busy,
@@ -210,6 +232,7 @@ export function ReviewForm({
   partySize: number;
   answers: Record<string, RegistrationAnswer>;
   attendeeNote: string;
+  ticketType: EventTicketType | null;
   quote: RegistrationQuote | null;
   quoteLoading: boolean;
   busy: boolean;
@@ -222,7 +245,7 @@ export function ReviewForm({
   onRetryQuote: () => void;
   onSubmit: (event: FormEvent) => void;
 }) {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   return (
     <form className={styles.form} onSubmit={onSubmit}>
       <section className={styles.formBody}>
@@ -236,6 +259,15 @@ export function ReviewForm({
           </aside>
         ) : null}
         <dl className={styles.reviewList}>
+          {ticketType ? (
+            <div>
+              <dt>{t("ticket.selection")}</dt>
+              <dd>
+                {ticketType.name} · {ticketPriceLabel(ticketType, locale)}
+                {!ticketType.isFree && ticketType.amountJPY !== null ? ` · ${t("ticket.payOnSite")}` : ""}
+              </dd>
+            </div>
+          ) : null}
           <div><dt>{t("registration.partySize")}</dt><dd>{t("registration.partySummary", { count: partySize })}</dd></div>
           {event.registrationQuestions.map((question) => answers[question.id] !== undefined ? (
             <div key={question.id}><dt>{question.prompt}</dt><dd>{String(answers[question.id])}</dd></div>

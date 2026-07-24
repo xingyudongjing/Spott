@@ -183,6 +183,10 @@ const registrationSchema = z.object({
   status: registrationStatus,
   partySize: z.number().int().min(1),
   attendeeNote: z.string().max(1000).nullable().optional(),
+  // Set when the host offers ticket tiers and the attendee picked one. The API
+  // returns it on every registration (null when the event has no tiers), so the
+  // strict schema has to know about it or the whole itinerary fails to parse.
+  ticketTypeId: uuid.nullable().optional(),
   offerExpiresAt: nullableDateTime.optional(),
   availableActions: z.array(availableAction),
   version: z.number().int().min(1),

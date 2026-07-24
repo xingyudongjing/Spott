@@ -109,10 +109,12 @@ describe("public read-only community surfaces", () => {
       throw new Error(`Unexpected request: ${path}`);
     });
 
+    const user = userEvent.setup();
     renderInMode(<GroupExperience slug={group.slug} />, "internal-test");
 
     expect(await screen.findByRole("button", { name: "加入群组" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "关注群组" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "公告" }));
     expect(screen.getByRole("button", { name: /发布公告/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /♡ 3/ })).toBeInTheDocument();
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
@@ -152,6 +154,8 @@ describe("public read-only community surfaces", () => {
     expect(screen.getByRole("note")).toHaveTextContent("创建、加入、关注、点赞、评论、举报和拉黑");
     expect(screen.queryByRole("button", { name: "加入群组" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "关注群组" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "公告" }));
     expect(screen.queryByRole("button", { name: /发布公告/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /♡/ })).not.toBeInTheDocument();
 

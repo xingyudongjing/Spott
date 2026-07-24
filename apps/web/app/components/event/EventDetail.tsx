@@ -32,6 +32,10 @@ export function EventDetailView({
     .map((value) => eventLanguageLabel(value, locale))
     .join(" · ");
   const trust = organizerTrustFacts(event, locale);
+  const routeURL = eventRouteURL(event);
+  const risks = event.riskFlags
+    .map((flag) => ({ flag, label: riskLabel(flag, locale), detail: event.riskDetails[flag] }))
+    .filter((risk, index, all) => all.findIndex((other) => other.label === risk.label) === index);
 
   return (
     <main className={styles.page}>
@@ -64,7 +68,22 @@ export function EventDetailView({
           <div className={styles.decisionLayout}>
             <section className={styles.facts} aria-label={t("detail.decisionFacts")}>
               <Fact label={t("detail.when")} value={eventDate(event.startsAt, locale, event.displayTimeZone)} detail={eventTime(event.startsAt, event.endsAt, locale, event.displayTimeZone)} />
-              <Fact label={t("detail.where")} value={location.primary} detail={location.detail} />
+              <Fact
+                label={t("detail.where")}
+                value={location.primary}
+                detail={location.detail}
+                action={routeURL ? (
+                  <a href={routeURL.href} target="_blank" rel="noopener noreferrer">
+                    {t("detail.route")}
+                    <span className="sr-only">
+                      {" "}({[
+                        routeURL.approximate ? t("detail.approximateArea") : null,
+                        t("detail.routeHint"),
+                      ].filter(Boolean).join(" · ")})
+                    </span>
+                  </a>
+                ) : undefined}
+              />
               <Fact label={t("detail.fee")} value={eventFeeLabel(event.fee, locale)} detail={event.fee && !event.fee.isFree ? t("detail.feeExternal") : undefined} />
               <Fact label={t("detail.availability")} value={availability.primary} detail={availability.detail} />
               <Fact label={t("detail.format")} value={eventFormatLabel(event.format, locale)} />
@@ -121,6 +140,22 @@ export function EventDetailView({
             </section>
           ) : null}
 
+          {risks.length ? (
+            <section className={styles.section} aria-label={t("risk.title")}>
+              <p className={styles.eyebrow}>{t("risk.eyebrow")}</p>
+              <h2>{t("risk.title")}</h2>
+              <ul className={styles.risks}>
+                {risks.map((risk) => (
+                  <li key={risk.flag}>
+                    <strong>{risk.label}</strong>
+                    {risk.detail ? <p>{risk.detail}</p> : null}
+                  </li>
+                ))}
+              </ul>
+              <small className={styles.riskNote}>{t("risk.note")}</small>
+            </section>
+          ) : null}
+
           <section className={styles.safety}>
             <strong>{t("detail.safety")}</strong>
             <p>{t("detail.safetyBody")}</p>
@@ -142,14 +177,67 @@ export function EventDetailView({
   );
 }
 
-function Fact({ label, value, detail }: { label: string; value: string; detail?: string }) {
+function Fact({
+  label,
+  value,
+  detail,
+  action,
+}: {
+  label: string;
+  value: string;
+  detail?: string;
+  action?: React.ReactNode;
+}) {
   return (
     <div className={styles.fact}>
       <span>{label}</span>
       <strong>{value}</strong>
       {detail ? <small>{detail}</small> : null}
+      {action ? <div className={styles.factAction}>{action}</div> : null}
     </div>
   );
+}
+
+const RISK_LABEL_KEYS: Record<string, MessageKey> = {
+  alcohol: "risk.alcohol",
+  late_night: "risk.lateNight",
+  minors: "risk.minors",
+  family: "risk.minors",
+  outdoor: "risk.outdoor",
+  mountain: "risk.mountain",
+  water: "risk.water",
+  high_fee: "risk.highFee",
+  career: "risk.career",
+  investment: "risk.career",
+  gender_limited: "risk.genderLimited",
+};
+
+function riskLabel(flag: string, locale: Locale): string {
+  const key = RISK_LABEL_KEYS[flag];
+  // An unrecognized flag still deserves disclosure: fall back to the raw key.
+  return key ? formatMessage(locale, key) : flag;
+}
+
+/**
+ * A route link only when the organizer disclosed an exact pin to this viewer.
+ * Approximate coordinates stay unlinked so an area is never presented as an
+ * address. Purely presentational — no network call, no third-party embed.
+ */
+function eventRouteURL(event: EventDetail): { href: string; approximate: boolean } | null {
+  if (event.format === "online") return null;
+  if (event.coordinate?.precision === "exact") {
+    const { latitude, longitude } = event.coordinate;
+    return {
+      href: `https://www.openstreetmap.org/?mlat=${latitude}&mlon=${longitude}#map=17/${latitude}/${longitude}`,
+      approximate: false,
+    };
+  }
+  const destination = event.exactAddress ?? event.publicArea;
+  if (!destination) return null;
+  return {
+    href: `https://www.openstreetmap.org/search?query=${encodeURIComponent(destination)}`,
+    approximate: true,
+  };
 }
 
 function Detail({ label, value }: { label: string; value: string }) {

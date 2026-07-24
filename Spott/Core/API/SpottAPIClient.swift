@@ -17,7 +17,11 @@ struct APIEnvironment: Sendable {
            let url = URL(string: stored), url.scheme != nil, url.host() != nil {
             return APIEnvironment(baseURL: url)
         }
-        return APIEnvironment(baseURL: URL(string: "http://127.0.0.1:4100/v1")!)
+        // TEST PERIOD: default the debug build at the shared IP-preview server so iOS and
+        // web read/write the same production database. Point back at http://127.0.0.1:4100/v1
+        // via the SPOTT_API_BASE_URL env var or the in-app developer server switch for local work.
+        // Revert to localhost (or the api.spott.jp domain) once the server is behind HTTPS.
+        return APIEnvironment(baseURL: URL(string: "http://18.178.203.117/v1")!)
 #else
         return APIEnvironment(baseURL: URL(string: "https://api.spott.jp/v1")!)
 #endif

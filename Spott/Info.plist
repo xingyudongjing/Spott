@@ -55,6 +55,19 @@
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<!-- TEST PERIOD: allow plain-HTTP to the shared IP-preview server so iOS shares the
+		     production database with web before a domain + TLS exist. Remove this exception
+		     once the server is reachable over HTTPS. -->
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>18.178.203.117</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<false/>
+			</dict>
+		</dict>
 	</dict>
 	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
 	<string>Spott adds events you choose to your calendar and cannot read your other events.</string>

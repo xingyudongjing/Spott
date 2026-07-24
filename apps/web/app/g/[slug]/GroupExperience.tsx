@@ -133,17 +133,15 @@ export function GroupExperience({ slug }: { slug: string }) {
     return (
       <main className="standard-shell">
         <div className="empty-state">
-          <h1>
-            {locale === 'ja'
-              ? 'グループが見つかりません'
-              : locale === 'en'
-                ? 'Group not found'
-                : '群组不存在'}
-          </h1>
-          <p>{message}</p>
+          <span className="spotlight-empty" />
+          <h1>{t('group.notFoundTitle')}</h1>
+          <p>{t('group.notFoundBody')}</p>
           <Link className="primary-action compact" href="/groups">
             {t('group.directory')}
           </Link>
+          <button type="button" onClick={() => void load()}>
+            {t('common.retry')}
+          </button>
         </div>
       </main>
     );

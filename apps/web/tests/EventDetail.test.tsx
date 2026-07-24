@@ -44,10 +44,18 @@ beforeEach(() => {
   actionMocks.trackProductEvent.mockReset();
 });
 
+// The CTA machine consults the real clock, so registration-window fixtures must
+// stay in the future to keep asserting the open-window branches.
+const openWindow = {
+  startsAt: "2100-07-18T08:30:00.000Z",
+  endsAt: "2100-07-18T11:00:00.000Z",
+  deadlineAt: "2100-07-18T07:30:00.000Z",
+} as const;
+
 describe("premium event detail", () => {
   test("hydrates anonymous SSR actions with the signed-in viewer event before choosing the CTA", async () => {
-    const anonymousEvent = makeDetail({ availableActions: [], registrationMode: "approval" });
-    const viewerEvent = makeDetail({ availableActions: ["register"], registrationMode: "approval" });
+    const anonymousEvent = makeDetail({ ...openWindow, availableActions: [], registrationMode: "approval" });
+    const viewerEvent = makeDetail({ ...openWindow, availableActions: ["register"], registrationMode: "approval" });
     actionMocks.session = {
       accessToken: "viewer-access-token",
       user: { id: "viewer-user", phoneVerified: true },
@@ -71,8 +79,8 @@ describe("premium event detail", () => {
   });
 
   test("loads viewer-authorized event state through the refresh-aware client API", async () => {
-    const anonymousEvent = makeDetail({ availableActions: [], registrationMode: "approval" });
-    const viewerEvent = makeDetail({ availableActions: ["register"], registrationMode: "approval" });
+    const anonymousEvent = makeDetail({ ...openWindow, availableActions: [], registrationMode: "approval" });
+    const viewerEvent = makeDetail({ ...openWindow, availableActions: ["register"], registrationMode: "approval" });
     actionMocks.session = {
       accessToken: "expired-access-token",
       user: { id: "viewer-user", phoneVerified: true },
@@ -91,8 +99,8 @@ describe("premium event detail", () => {
   });
 
   test("records one detail view while replacing public facts with viewer-authorized facts", async () => {
-    const anonymousEvent = makeDetail({ availableActions: [] });
-    const viewerEvent = makeDetail({ availableActions: ["register"] });
+    const anonymousEvent = makeDetail({ ...openWindow, availableActions: [] });
+    const viewerEvent = makeDetail({ ...openWindow, availableActions: ["register"] });
     actionMocks.session = {
       accessToken: "viewer-access-token",
       user: { id: "viewer-user", phoneVerified: true },
@@ -204,6 +212,34 @@ describe("premium event detail", () => {
     expect(firstViewport).toHaveTextContent("英语");
     expect(firstViewport).toHaveTextContent("语言已确认");
     expect(firstViewport).not.toHaveTextContent(/reliability|评分|星级|boundaryStatement/i);
+  });
+
+  test("keeps the server-resolved promotion badge after viewer facts replace public facts", async () => {
+    const promotedEvent = makeDetail({ ...openWindow, promoted: true, availableActions: [] });
+    const viewerEvent = makeDetail({ ...openWindow, promoted: false, availableActions: ["register"] });
+    actionMocks.session = {
+      accessToken: "viewer-access-token",
+      user: { id: "viewer-user", phoneVerified: true },
+    };
+    apiRequestMock.mockImplementation(async (path) => path === `/events/${promotedEvent.id}`
+      ? viewerEvent
+      : { published: false, tags: [] });
+
+    renderWithI18n(<EventDetailClient event={promotedEvent} locale="zh-Hans" />);
+
+    await screen.findByRole("link", { name: "报名参加" });
+    expect(screen.getByTestId("event-first-viewport")).toHaveTextContent("推广");
+  });
+
+  test("labels promoted events in the hero status line only when the server says so", () => {
+    const { unmount } = renderWithI18n(
+      <EventDetailView event={makeDetail({ promoted: true })} locale="zh-Hans" actions={null} />,
+    );
+    expect(screen.getByTestId("event-first-viewport")).toHaveTextContent("推广");
+    unmount();
+
+    renderWithI18n(<EventDetailView event={makeDetail()} locale="zh-Hans" actions={null} />);
+    expect(screen.getByTestId("event-first-viewport")).not.toHaveTextContent("推广");
   });
 
   test("renders public and authorized address facts without exposing coordinates", () => {

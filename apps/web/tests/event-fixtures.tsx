@@ -13,9 +13,11 @@ export const eventFixture: EventSummary = {
   title: "东京余光 · 隅田川蓝调散步",
   description: "沿着河岸慢慢散步。",
   category: "walk",
-  startsAt: "2026-07-18T08:30:00.000Z",
-  endsAt: "2026-07-18T11:00:00.000Z",
-  deadlineAt: "2026-07-18T07:30:00.000Z",
+  // Far-future Saturday (July 18, 2065) so clock-driven CTA/registration windows
+  // stay open; the rendered "7月18日周六 · 17:30–20:00" facts are unchanged.
+  startsAt: "2065-07-18T08:30:00.000Z",
+  endsAt: "2065-07-18T11:00:00.000Z",
+  deadlineAt: "2065-07-18T07:30:00.000Z",
   displayTimeZone: "Asia/Tokyo",
   region: "tokyo",
   publicArea: "清澄白河站附近",

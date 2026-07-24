@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DiscoveryShell } from "../app/components/discovery/DiscoveryShell";
 import { PreviewModeProvider } from "../app/components/PreviewModeProvider";
 import { apiRequest, readSession } from "../app/lib/client-api";
-import { parseDiscoveryQuery } from "../app/lib/discovery-query";
+import { boundsCenter, parseDiscoveryQuery } from "../app/lib/discovery-query";
 import { searchEvents } from "../app/lib/events-api";
 import { eventFixture, makeEvent, makePage, renderWithI18n } from "./event-fixtures";
 
@@ -332,6 +332,65 @@ describe("URL-authoritative discovery", () => {
     await waitFor(() =>
       expect(screen.getAllByRole("article", { name: eventFixture.title })).toHaveLength(2),
     );
+  });
+
+  test("serializes the sort choice into the URL and the real API query", async () => {
+    const user = userEvent.setup();
+    searchEventsMock.mockResolvedValue(makePage());
+    renderWithI18n(<DiscoveryShell initialQuery={{}} initialPage={makePage()} />);
+
+    const picker = screen.getByRole("combobox", { name: "排序" });
+    expect(picker).toHaveValue("time");
+
+    await user.selectOptions(picker, "newest");
+
+    await waitFor(() => expect(window.location.search).toContain("sort=newest"));
+    expect(searchEventsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sort: "newest" }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+
+    await user.selectOptions(picker, "time");
+    await waitFor(() => expect(window.location.search).not.toContain("sort="));
+  });
+
+  test("offers distance sort only with map bounds and derives its origin from them", async () => {
+    const user = userEvent.setup();
+    searchEventsMock.mockResolvedValue(makePage());
+    const bounds = { west: 139.6, south: 35.5, east: 139.9, north: 35.8 };
+
+    const withoutBounds = renderWithI18n(
+      <DiscoveryShell initialQuery={{}} initialPage={makePage()} />,
+    );
+    expect(screen.queryByRole("option", { name: "距离最近" })).not.toBeInTheDocument();
+    withoutBounds.unmount();
+
+    renderWithI18n(
+      <DiscoveryShell initialQuery={{ bounds }} initialPage={makePage()} />,
+    );
+    await user.selectOptions(screen.getByRole("combobox", { name: "排序" }), "distance");
+
+    await waitFor(() => expect(window.location.search).toContain("sort=distance"));
+    expect(window.location.search).toContain("near=");
+    expect(searchEventsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sort: "distance", near: boundsCenter(bounds) }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  test("restores a deep-linked sort from the URL on popstate", async () => {
+    searchEventsMock.mockResolvedValue(makePage());
+    renderWithI18n(<DiscoveryShell initialQuery={{}} initialPage={makePage()} />);
+
+    window.history.pushState(null, "", "/discover?sort=almost_full");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+
+    await waitFor(() => expect(searchEventsMock).toHaveBeenCalledTimes(1));
+    expect(searchEventsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sort: "almost_full" }),
+      expect.any(Object),
+    );
+    expect(screen.getByRole("combobox", { name: "排序" })).toHaveValue("almost_full");
   });
 
   test("hides map mode when no style URL is configured", () => {

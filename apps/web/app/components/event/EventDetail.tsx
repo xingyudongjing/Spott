@@ -48,6 +48,7 @@ export function EventDetailView({
             />
             <div className={styles.intro}>
               <div className={styles.statusLine}>
+                {event.promoted ? <span className={styles.promotedPill}>{t("event.promoted")}</span> : null}
                 <span>{eventFormatLabel(event.format, locale)}</span>
                 <i aria-hidden="true" />
                 <strong>{availability.primary}</strong>
@@ -121,11 +122,9 @@ export function EventDetailView({
           ) : null}
 
           <section className={styles.safety}>
-            <div>
-              <strong>{t("detail.safety")}</strong>
-              <p>{t("detail.safetyBody")}</p>
-              <small>{t("detail.locationPrivacy")}</small>
-            </div>
+            <strong>{t("detail.safety")}</strong>
+            <p>{t("detail.safetyBody")}</p>
+            <small>{t("detail.locationPrivacy")}</small>
             <Link href={`/reports/new?targetType=event&targetId=${event.id}`}>{t("detail.report")}</Link>
           </section>
         </div>

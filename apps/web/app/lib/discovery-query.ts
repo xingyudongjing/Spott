@@ -2,12 +2,20 @@ export type EventFormat = "in_person" | "online" | "hybrid";
 export type EventLocale = "zh-Hans" | "ja" | "en";
 export type EventPriceFilter = "free" | "paid";
 export type EventDateShortcut = "today" | "tomorrow" | "this_weekend";
+export type EventDiscoverySort = "recommended" | "distance" | "time" | "newest" | "almost_full";
+
+export const discoverySorts = ["recommended", "distance", "time", "newest", "almost_full"] as const;
 
 export interface MapBounds {
   west: number;
   south: number;
   east: number;
   north: number;
+}
+
+export interface GeoPoint {
+  latitude: number;
+  longitude: number;
 }
 
 export interface EventDiscoveryQuery {
@@ -21,6 +29,8 @@ export interface EventDiscoveryQuery {
   language?: EventLocale;
   price?: EventPriceFilter;
   bounds?: MapBounds;
+  near?: GeoPoint;
+  sort?: EventDiscoverySort;
   cursor?: string;
   limit?: number;
 }
@@ -43,6 +53,8 @@ const orderedKeys = [
   "language",
   "price",
   "bounds",
+  "near",
+  "sort",
   "cursor",
   "limit",
 ] as const;
@@ -60,6 +72,8 @@ export function serializeDiscoveryQuery(query: EventDiscoveryQuery): URLSearchPa
     language: query.language,
     price: query.price,
     bounds: query.bounds ? formatBounds(query.bounds) : undefined,
+    near: query.near ? formatNear(query.near) : undefined,
+    sort: query.sort,
     cursor: query.cursor,
     limit: query.limit === undefined ? undefined : String(query.limit),
   };
@@ -85,6 +99,8 @@ export function parseDiscoveryQuery(source: string | URLSearchParams): EventDisc
   const language = text("language");
   const price = text("price");
   const bounds = text("bounds");
+  const near = text("near");
+  const sort = text("sort");
   const cursor = text("cursor");
   const limit = text("limit");
 
@@ -103,6 +119,8 @@ export function parseDiscoveryQuery(source: string | URLSearchParams): EventDisc
   if (language) query.language = parseEnum(language, ["zh-Hans", "ja", "en"], "language");
   if (price) query.price = parseEnum(price, ["free", "paid"], "price");
   if (bounds) query.bounds = parseBounds(bounds);
+  if (near) query.near = parseNear(near);
+  if (sort) query.sort = parseEnum(sort, discoverySorts, "sort");
   if (cursor) query.cursor = cursor;
   if (limit) {
     const parsed = Number(limit);
@@ -148,9 +166,18 @@ export function validateDiscoveryQuery(query: EventDiscoveryQuery): void {
     throw new DiscoveryQueryError("startsBefore must not precede startsAfter");
   }
   if (query.bounds) validateBounds(query.bounds);
+  if (query.near) validateNear(query.near);
   if (query.limit !== undefined && (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 100)) {
     throw new DiscoveryQueryError("limit must be an integer between 1 and 100");
   }
+}
+
+/** Map-context origin for the distance sort: the center of the visible bounds. */
+export function boundsCenter(bounds: MapBounds): GeoPoint {
+  return {
+    latitude: (bounds.south + bounds.north) / 2,
+    longitude: (bounds.west + bounds.east) / 2,
+  };
 }
 
 function parseBounds(value: string): MapBounds {
@@ -173,6 +200,28 @@ function validateBounds({ west, south, east, north }: MapBounds): void {
 
 function formatBounds(bounds: MapBounds): string {
   return [bounds.west, bounds.south, bounds.east, bounds.north].map(String).join(",");
+}
+
+function parseNear(value: string): GeoPoint {
+  const segments = value.split(",");
+  const values = segments.map(Number);
+  if (segments.length !== 2 || segments.some((part) => part.trim() === "") || values.some((part) => !Number.isFinite(part))) {
+    throw new DiscoveryQueryError("near must contain lat,lng");
+  }
+  const [latitude, longitude] = values as [number, number];
+  const near = { latitude, longitude };
+  validateNear(near);
+  return near;
+}
+
+function validateNear({ latitude, longitude }: GeoPoint): void {
+  if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+    throw new DiscoveryQueryError("near coordinates are invalid");
+  }
+}
+
+function formatNear(near: GeoPoint): string {
+  return [near.latitude, near.longitude].map(String).join(",");
 }
 
 function parseEnum<const Value extends string>(value: string, allowed: readonly Value[], name: string): Value {

@@ -172,10 +172,11 @@ export function HostProfile({ handle }: { handle: string }) {
     return (
       <main className="standard-shell">
         <div className="empty-state">
+          <span className="spotlight-empty" />
           <h1>{loadFailure === "not-found" ? copy.notFound : copy.loadError}</h1>
-          <p>{loadFailure === "not-found" ? copy.notFoundBody : message || copy.loadErrorBody}</p>
+          <p>{loadFailure === "not-found" ? copy.notFoundBody : copy.loadErrorBody}</p>
           {loadFailure === "error" ? (
-            <button className="secondary-action compact" type="button" onClick={() => void load()}>
+            <button type="button" onClick={() => void load()}>
               {t("common.retry")}
             </button>
           ) : null}

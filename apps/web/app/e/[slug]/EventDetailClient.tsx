@@ -15,6 +15,7 @@ import {
 import type { EventDetail } from "../../lib/event-contract";
 import { fetchViewerEvent } from "../../lib/events-client";
 import { EventActions } from "./EventActions";
+import { EventComments } from "./EventComments";
 import { EventFeedbackSummary } from "./EventFeedbackSummary";
 
 export function EventDetailClient({
@@ -60,7 +61,11 @@ export function EventDetailClient({
           || generation !== requestGeneration.current
           || currentSession?.user.id !== requestedSession.user.id
         ) return;
-        setLiveEvent(authorizedEvent);
+        // The viewer-authorized detail view does not carry the promotion flag;
+        // keep the server-resolved badge instead of silently dropping it.
+        setLiveEvent(event.promoted && !authorizedEvent.promoted
+          ? { ...authorizedEvent, promoted: true }
+          : authorizedEvent);
         setViewerSession(currentSession);
       } catch (error) {
         if (!active || generation !== requestGeneration.current) return;
@@ -96,7 +101,17 @@ export function EventDetailClient({
           viewerMessage={viewerMessage}
         />
       )}
-      supplementary={<EventFeedbackSummary eventId={liveEvent.id} locale={locale} />}
+      supplementary={(
+        <>
+          <EventFeedbackSummary eventId={liveEvent.id} locale={locale} />
+          <EventComments
+            key={viewerSession?.user.id ?? "anonymous"}
+            event={liveEvent}
+            session={viewerSession}
+            locale={locale}
+          />
+        </>
+      )}
     />
   );
 }

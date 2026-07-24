@@ -28,6 +28,17 @@ describe("premium event result", () => {
     expect(within(card).getByTestId("event-cover-fallback")).toBeInTheDocument();
   });
 
+  test("marks commercially promoted results and never invents the badge otherwise", () => {
+    const { unmount } = renderWithI18n(
+      <EventResultCard event={{ ...eventFixture, promoted: true }} />,
+    );
+    expect(screen.getByRole("article", { name: eventFixture.title })).toHaveTextContent("推广");
+    unmount();
+
+    renderWithI18n(<EventResultCard event={eventFixture} />);
+    expect(screen.getByRole("article", { name: eventFixture.title })).not.toHaveTextContent("推广");
+  });
+
   test("treats zero capacity as unlimited instead of manufacturing a waitlist", () => {
     renderWithI18n(
       <EventResultCard

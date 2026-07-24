@@ -105,6 +105,7 @@ const eventSummaryBaseSchema = z.object({
   tags: z.array(z.string()).max(5),
   organizer: eventOrganizerSchema,
   favorited: z.boolean(),
+  promoted: z.boolean().optional(),
   registrationStatus: registrationStatus.nullable(),
   viewerRegistration: viewerRegistrationSchema.nullable(),
   registrationMode: z.enum(["automatic", "approval", "invite_only"]),

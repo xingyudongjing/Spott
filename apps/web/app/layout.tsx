@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import { headers } from "next/headers";
 import "./globals.css";
+import { CryptoPolyfill } from "./components/CryptoPolyfill";
 import { SiteHeader } from "./components/SiteHeader";
 import { AppDialogProvider } from "./components/AppDialog";
 import { I18nProvider } from "./components/I18nProvider";
@@ -70,6 +71,7 @@ export default async function RootLayout({
         <I18nProvider initialLocale={locale}>
           <PreviewModeProvider initialMode={previewMode}>
             <AppDialogProvider>
+              <CryptoPolyfill />
               <a className="skip-link" href="#spott-main-content">
                 {formatMessage(locale, "common.skipToContent")}
               </a>

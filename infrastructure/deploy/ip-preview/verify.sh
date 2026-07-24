@@ -69,25 +69,32 @@ if [[ -n $expected_release_id ]]; then
     <<< "$health"
 fi
 
-if [[ $mode == public ]]; then
-  expect_status 404 GET /v1/ops
-  expect_status 404 GET /v1/shares/nonexistent-preview-code
-  expect_status 404 GET /s/nonexistent-preview-code
-  expect_status 404 POST /v1/auth/email/challenges
-  expect_status 405 POST /v1/events
-  expect_status 405 POST /
-  expected_header=read-only
-else
-  expected_header=internal-test
-fi
-
 preview_header=$(curl --silent --show-error --connect-timeout 3 --max-time 15 \
   --head "${origin}/discover" \
   | tr -d '\r' \
   | grep -i '^X-Spott-Preview-Mode:' || true)
-if [[ $preview_header != *"$expected_header"* ]]; then
-  printf 'Missing expected %s preview response header\n' "$expected_header" >&2
-  exit 1
+
+if [[ $mode == public ]]; then
+  # Open full-app preview for the test period: the public HTTP edge no longer
+  # applies the read-only lockdown. Prove auth and writes are reachable (NOT
+  # blocked with a 404) and that the standard listener injects no preview banner.
+  auth_reachability=$(curl --silent --show-error --connect-timeout 3 --max-time 15 \
+    --output /dev/null --write-out '%{http_code}' \
+    --request POST --header 'Content-Type: application/json' --data '{}' \
+    "${origin}/v1/auth/email/challenges")
+  if [[ $auth_reachability == 404 ]]; then
+    printf 'Public auth endpoint is still blocked (read-only lockdown in effect), got 404\n' >&2
+    exit 1
+  fi
+  if [[ -n $preview_header ]]; then
+    printf 'Public listener unexpectedly set a preview-mode header: %s\n' "$preview_header" >&2
+    exit 1
+  fi
+else
+  if [[ $preview_header != *"internal-test"* ]]; then
+    printf 'Missing expected internal-test preview response header\n' >&2
+    exit 1
+  fi
 fi
 
 printf '%s checks passed for %s\n' "$mode" "$origin"

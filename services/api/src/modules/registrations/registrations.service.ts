@@ -71,6 +71,8 @@ interface RegistrationRow {
   waitlist_joined_at: Date | null;
   updated_at: Date;
   offer_expires_at: Date | null;
+  payment_self_reported_at: Date | null;
+  payment_confirmed_at: Date | null;
 }
 
 interface RegistrationItineraryRow extends RegistrationRow {
@@ -1350,6 +1352,8 @@ export class RegistrationsService {
       attendeeNote: row.attendee_note,
       ticketTypeId: row.ticket_type_id ?? null,
       offerExpiresAt: row.offer_expires_at?.toISOString() ?? null,
+      paymentSelfReportedAt: row.payment_self_reported_at?.toISOString() ?? null,
+      paymentConfirmedAt: row.payment_confirmed_at?.toISOString() ?? null,
       availableActions: actions,
       version: Number(row.version),
       updatedAt: row.updated_at.toISOString(),

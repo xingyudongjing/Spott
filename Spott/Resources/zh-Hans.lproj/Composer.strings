@@ -1,0 +1,216 @@
+"composer.step.content" = "内容";
+"composer.step.schedule" = "时间地点";
+"composer.step.registration" = "报名";
+"composer.step.fee_risk" = "费用风险";
+"composer.step.community" = "社群互动";
+"composer.step.preview" = "预览";
+"composer.step_progress" = "第 %1$d 步 / %2$d";
+
+"composer.category.family" = "亲子";
+"composer.category.outdoor" = "户外";
+"composer.category.sports" = "运动";
+"composer.category.city_walk" = "城市探索";
+"composer.category.food" = "美食";
+"composer.category.games" = "游戏";
+"composer.category.art" = "文化艺术";
+"composer.category.learning" = "技能学习";
+"composer.category.networking" = "职业交流";
+
+"composer.region.tokyo" = "东京";
+"composer.region.kanagawa" = "神奈川";
+"composer.region.osaka" = "大阪";
+"composer.region.kyoto" = "京都";
+
+"composer.gate.signed_out_title" = "登录后创建活动";
+"composer.gate.signed_out_message" = "草稿会自动保存，并可在 Web 工作台继续编辑。";
+"composer.gate.signed_out_action" = "登录";
+"composer.gate.phone_title" = "先完成手机号验证";
+"composer.gate.phone_message" = "发布活动属于高信任操作，验证后可获得首次奖励。";
+"composer.gate.phone_action" = "继续验证";
+
+"composer.submitted.review_title" = "已提交审核";
+"composer.submitted.review_message" = "审核结果、修改要求和发布状态会在 iOS 与 Web 同步。";
+"composer.submitted.published_title" = "已发布";
+"composer.submitted.published_message" = "活动已通过自动审核并发布，现在就可以分享给参与者。";
+"composer.submitted.view_event" = "查看活动";
+"composer.submitted.share" = "分享活动";
+"composer.submitted.share_after_review" = "审核通过后即可分享活动链接。";
+"composer.submitted.create_another" = "再创建一个";
+
+"composer.edit_saved.title" = "修改已保存";
+"composer.edit_saved.message" = "时间、地点或费用等关键信息的变更会通知已报名的参与者。";
+"composer.edit_saved.done" = "完成";
+
+"composer.header.create_title" = "创建活动";
+"composer.header.create_subtitle" = "六步完成，随时保存，Web 可以接着编辑。";
+"composer.header.edit_title" = "编辑活动";
+"composer.header.edit_subtitle" = "已发布活动的修改保存后立即生效；关键信息变更会通知参与者。";
+
+"composer.resume.title" = "继续上次草稿";
+"composer.resume.updated_at" = "上次编辑：%1$@";
+"composer.resume.continue" = "继续编辑";
+"composer.resume.dismiss" = "忽略";
+
+"composer.conflict.reloaded" = "云端已有新版本（可能来自 Web 端）。已同步最新版本号，本地填写内容保留，请确认后重新保存。";
+"composer.saved_status" = "云端草稿 v%1$d · %2$@ 已同步";
+
+"composer.photos.section_title" = "封面与相册";
+"composer.photos.section_subtitle" = "1–6 张图片，第一张作为封面，可拖动排序";
+"composer.photos.pick" = "选择图片";
+"composer.photos.add_more" = "添加图片（已选 %1$d / 6）";
+"composer.photos.cover_badge" = "封面";
+"composer.photos.remove" = "删除图片";
+"composer.photos.make_cover" = "设为封面";
+"composer.photos.move_forward" = "前移";
+"composer.photos.move_backward" = "后移";
+"composer.photos.reorder_hint" = "长按拖动可调整顺序；第一张为封面。";
+"composer.photos.uploaded_locked" = "图片已上传，顺序以保存时为准；如需调整请在 Web 工作台操作。";
+"composer.photos.published_locked" = "已发布活动的图片暂不支持在 App 内调整，请在 Web 工作台操作。";
+"composer.photos.accessibility_cover" = "封面图片，第 %1$d 张";
+"composer.photos.accessibility_item" = "第 %1$d 张图片，共 %2$d 张";
+
+"composer.basics.section_title" = "让人一眼看懂";
+"composer.basics.section_subtitle" = "标题 4–40 字，说明 50–3000 字";
+"composer.basics.title_placeholder" = "活动标题";
+"composer.basics.description_placeholder" = "活动说明";
+
+"composer.category.section_title" = "分类与标签";
+"composer.category.section_subtitle" = "一个主分类，最多 5 个标签";
+"composer.category.picker_label" = "主分类";
+
+"composer.tags.placeholder" = "添加标签";
+"composer.tags.add" = "添加";
+"composer.tags.remove" = "移除标签 %1$@";
+
+"composer.schedule.section_title" = "时间";
+"composer.schedule.section_subtitle" = "使用活动所在地时区展示";
+"composer.schedule.starts" = "开始";
+"composer.schedule.ends" = "结束";
+"composer.schedule.deadline" = "报名截止";
+
+"composer.place.section_title" = "地点";
+"composer.place.section_subtitle" = "公开范围与精确地址分开保存";
+"composer.place.region" = "地区";
+"composer.place.public_area_placeholder" = "公开集合范围，例如：代代木公园入口";
+"composer.place.exact_address_placeholder" = "精确地址";
+"composer.place.visibility" = "精确地址可见范围";
+"composer.place.visibility_confirmed" = "仅已确认参与者";
+"composer.place.visibility_public" = "公开显示";
+"composer.place.privacy_note" = "默认只向已确认参与者返回精确地址，公开页面、候补和缓存都不会包含它。";
+
+"composer.registration.section_title" = "报名规则";
+"composer.registration.section_subtitle" = "支持自动确认、审核制和邀请制";
+"composer.registration.capacity" = "人数上限：%1$d";
+"composer.registration.mode" = "确认方式";
+"composer.registration.mode_automatic" = "自动确认";
+"composer.registration.mode_approval" = "局头审核";
+"composer.registration.mode_invite" = "仅限邀请";
+"composer.registration.waitlist" = "满员后开启候补";
+"composer.registration.requirements_placeholder" = "参与要求（可选）";
+
+"composer.questions.section_title" = "报名问题";
+"composer.questions.section_subtitle" = "最多 10 个；可编辑、排序，必填问题会在提交前校验";
+"composer.questions.required_tag" = "必填";
+"composer.questions.option_count" = "%1$d 个选项";
+"composer.questions.move_up" = "上移";
+"composer.questions.move_down" = "下移";
+"composer.questions.edit" = "编辑问题";
+"composer.questions.delete" = "删除问题";
+"composer.questions.editing_notice" = "正在编辑已有问题";
+"composer.questions.prompt_placeholder" = "例如：为什么想参加？";
+"composer.questions.kind" = "回答方式";
+"composer.questions.kind_text" = "文字";
+"composer.questions.kind_single_choice" = "单选";
+"composer.questions.kind_boolean" = "是 / 否";
+"composer.questions.options_placeholder" = "选项，用换行或逗号分隔（2–12 个）";
+"composer.questions.required" = "参与者必须回答";
+"composer.questions.add" = "添加问题";
+"composer.questions.save_edit" = "保存修改";
+"composer.questions.cancel_edit" = "取消编辑";
+
+"composer.fee.section_title" = "活动费用";
+"composer.fee.section_subtitle" = "活动费由局头在 App 外自行收取，Spott 不经手";
+"composer.fee.free" = "免费活动";
+"composer.fee.amount_placeholder" = "金额（日元）";
+"composer.fee.collector_placeholder" = "收款主体";
+"composer.fee.method_placeholder" = "收款方式";
+"composer.fee.deadline_placeholder" = "付款期限";
+"composer.fee.refund_placeholder" = "退款规则";
+
+"composer.risk.section_title" = "风险披露";
+"composer.risk.section_subtitle" = "命中高风险项会进入人工审核，不代表一定拒绝";
+"composer.risk.note_placeholder" = "说明风险与对应保护措施";
+"composer.risk.alcohol" = "包含酒精";
+"composer.risk.late_night" = "深夜时段";
+"composer.risk.family" = "亲子活动";
+"composer.risk.minors" = "涉及未成年人";
+"composer.risk.outdoor" = "户外活动";
+"composer.risk.mountain" = "山地活动";
+"composer.risk.water" = "涉水活动";
+"composer.risk.high_fee" = "高额费用";
+"composer.risk.career" = "职业招募";
+"composer.risk.investment" = "投资相关";
+"composer.risk.gender_limited" = "性别限制";
+
+"composer.group.section_title" = "关联社群";
+"composer.group.section_subtitle" = "可选；活动会显示在社群主页";
+"composer.group.picker_label" = "社群";
+"composer.group.none" = "不关联社群";
+
+"composer.checkin.section_title" = "现场签到";
+"composer.checkin.section_subtitle" = "动态二维码最安全，也支持 6 位码与人工确认";
+"composer.checkin.mode" = "签到方式";
+"composer.checkin.dynamic_qr" = "动态二维码";
+"composer.checkin.six_digit" = "6 位签到码";
+"composer.checkin.manual" = "人工签到";
+
+"composer.interaction.section_title" = "活动互动";
+"composer.interaction.section_subtitle" = "评论只在有关系的范围开放";
+"composer.interaction.comments" = "评论权限";
+"composer.interaction.comments_disabled" = "关闭评论";
+"composer.interaction.comments_participants" = "仅参与者";
+"composer.interaction.comments_group" = "仅社群成员";
+"composer.interaction.poster" = "审核通过后生成分享海报";
+"composer.interaction.guest_list" = "显示参加者名单";
+
+"composer.preview.section_title" = "提交前预览";
+"composer.preview.create_subtitle" = "系统会再次检查完整性、风险词和积分余额";
+"composer.preview.edit_subtitle" = "确认修改内容后保存，关键变更会通知参与者";
+"composer.preview.event" = "活动";
+"composer.preview.photos" = "图片";
+"composer.preview.photo_count" = "%1$d 张";
+"composer.preview.photos_uploaded" = "已上传";
+"composer.preview.time" = "时间";
+"composer.preview.place" = "地点";
+"composer.preview.capacity" = "人数";
+"composer.preview.mode" = "确认";
+"composer.preview.fee" = "费用";
+"composer.preview.fee_free" = "免费";
+"composer.preview.fee_onsite" = "¥%1$@ 现场支付";
+"composer.preview.points" = "发布积分";
+"composer.preview.points_value" = "100（提交时冻结）";
+"composer.preview.missing" = "未填写";
+"composer.preview.submit_notice_title" = "提交后的处理";
+"composer.preview.submit_notice_body" = "普通活动自动审核并抽样复核；酒精、夜间、未成年人、投资等风险活动进入人工审核。拒绝或审核前撤回会释放冻结积分。";
+"composer.preview.edit_notice_title" = "已发布活动的修改规则";
+"composer.preview.edit_notice_body" = "修改会重新进行内容风控：安全的修改立即生效；需要人工复审的修改会被拒绝保存，原内容保持不变。时间、地点、费用变更会通知已报名参与者。";
+
+"composer.nav.back" = "上一步";
+"composer.nav.save_continue" = "保存并继续";
+"composer.nav.submit" = "确认并提交";
+"composer.nav.save_edit_continue" = "保存修改并继续";
+"composer.nav.save_finish" = "保存并完成";
+
+"composer.error.review_required" = "该修改会使已发布的活动需要重新人工审核，暂不能直接保存；原内容保持不变，请调整后再试。";
+"composer.error.risk_prohibited" = "内容命中平台禁止发布的规则，无法保存。请修改相关内容后再试。";
+
+"composer.validation.photos" = "请至少选择 1 张活动图片。";
+"composer.validation.title" = "活动标题需要 4–40 个字符。";
+"composer.validation.description" = "活动说明需要 50–3000 个字符。";
+"composer.validation.ends" = "结束时间必须晚于开始时间。";
+"composer.validation.deadline" = "报名截止时间不能晚于活动开始时间。";
+"composer.validation.place" = "请填写公开集合范围与精确地址。";
+"composer.validation.capacity" = "活动人数至少为 2 人。";
+"composer.validation.fee_amount" = "请填写有效的活动费用。";
+"composer.validation.fee_fields" = "收费活动必须填写收款主体与退款规则。";
+"composer.validation.risk_note" = "请说明风险与对应保护措施。";

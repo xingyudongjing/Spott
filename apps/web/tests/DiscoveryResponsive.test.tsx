@@ -22,40 +22,37 @@ describe("responsive discovery safeguards", () => {
     expect(globals).not.toMatch(/body\s*\{[\s\S]*?min-width:\s*320px/);
   });
 
-  test("uses actual mint and amber text mixes that exceed 4.5:1 on white", () => {
+  test("de-accented trust/capacity tones stay neutral and exceed 4.5:1 on white", () => {
     const styles = readFileSync(stylesPath, "utf8");
     const tokens = readFileSync(resolve(process.cwd(), "../../packages/design-tokens/src/tokens.css"), "utf8");
     const colors = Object.fromEntries(
       [...tokens.matchAll(/--([\w-]+):\s*(#[\da-f]{6})/gi)].map((match) => [match[1], match[2]]),
     );
 
-    const mixes = [
-      extractTextMix(styles, /\[data-tone="verified"\]\s*\{/),
-      extractTextMix(styles, /\[data-tone="pending"\]\s*\{/),
-      extractTextMix(styles, /\.capacity\s*\{/),
+    // The restraint pass retired the mint/amber accented trust chips in favour of
+    // a neutral canvas: verified/pending tones read as muted ink, and only the
+    // "almost full" capacity warning is allowed to reach for the single accent.
+    const toneTokens = [
+      extractToneToken(styles, /\.trustFacts \[data-tone="verified"\]\s*\{/),
+      extractToneToken(styles, /\.eventFacts \[data-tone="pending"\]\s*\{/),
+      extractToneToken(styles, /\.capacity\[data-tight="true"\]\s*\{/),
     ];
-    for (const { token, percentage } of mixes) {
-      const foreground = mixHex(colors[`spott-${token}`], colors["spott-ink"], percentage / 100);
-      expect(contrastRatio(foreground, colors["spott-surface"])).toBeGreaterThanOrEqual(4.5);
+    // No trust chip may reach for mint/amber accents any more.
+    expect(styles).not.toMatch(/color:\s*color-mix\(in srgb, var\(--spott-(mint|amber)\)/);
+    for (const token of toneTokens) {
+      expect(colors[token]).toBeDefined();
+      expect(contrastRatio(colors[token], colors["spott-surface"])).toBeGreaterThanOrEqual(4.5);
     }
   });
 });
 
-function extractTextMix(styles: string, selector: RegExp) {
+function extractToneToken(styles: string, selector: RegExp) {
   const start = styles.search(selector);
   expect(start).toBeGreaterThanOrEqual(0);
   const block = styles.slice(start, styles.indexOf("}", start) + 1);
-  const match = block.match(/color:\s*color-mix\(in srgb, var\(--spott-(mint|amber)\)\s+(\d+)%,\s*var\(--spott-ink\)\)/);
+  const match = block.match(/color:\s*var\(--(spott-[\w-]+)\)/);
   expect(match).not.toBeNull();
-  return { token: match?.[1] ?? "mint", percentage: Number(match?.[2] ?? 100) };
-}
-
-function mixHex(first: string, second: string, firstWeight: number) {
-  const channels = (hex: string) => [1, 3, 5].map((index) => Number.parseInt(hex.slice(index, index + 2), 16));
-  const a = channels(first);
-  const b = channels(second);
-  return `#${a.map((value, index) => Math.round(value * firstWeight + b[index] * (1 - firstWeight))
-    .toString(16).padStart(2, "0")).join("")}`;
+  return match?.[1] ?? "spott-ink";
 }
 
 function contrastRatio(first: string, second: string) {

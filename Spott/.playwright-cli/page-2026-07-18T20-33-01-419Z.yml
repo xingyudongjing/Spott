@@ -1,0 +1,129 @@
+- generic [active] [ref=f6e1]:
+  - link "Skip to main content" [ref=f6e2] [cursor=pointer]:
+    - /url: "#spott-main-content"
+  - banner [ref=f6e3]:
+    - generic [ref=f6e4]:
+      - link "Spott" [ref=f6e5] [cursor=pointer]:
+        - /url: /discover
+      - 'link "Region: Japan" [ref=f6e6] [cursor=pointer]':
+        - /url: /discover
+        - text: Japan
+    - generic [ref=f6e9]:
+      - generic [ref=f6e10]: Language
+      - combobox "Language" [ref=f6e11] [cursor=pointer]:
+        - option "简体中文"
+        - option "日本語"
+        - option "English" [selected]
+  - status [ref=f6e12]:
+    - strong [ref=f6e13]: Public read-only preview
+    - generic [ref=f6e14]: Browse, filters, details, sharing and calendar are available. Use the encrypted internal-test entry for sign-in, registration and publishing.
+  - navigation "Mobile navigation" [ref=f6e15]:
+    - link "Discover" [ref=f6e16] [cursor=pointer]:
+      - /url: /discover
+    - link "Groups" [ref=f6e21] [cursor=pointer]:
+      - /url: /groups
+  - main [ref=f6e27]:
+    - generic [ref=f6e28]:
+      - generic [ref=f6e29]:
+        - generic [ref=f6e30]:
+          - text: Tokyo · Interest communities
+          - heading "Interest groups" [level=1] [ref=f6e31]
+          - paragraph [ref=f6e32]: Join the same group on Web and iOS for announcements, discussions, and what’s next.
+        - generic "Live community snapshot" [ref=f6e34]:
+          - generic [ref=f6e35]:
+            - strong [ref=f6e36]: "2"
+            - generic [ref=f6e37]: Public communities
+          - generic [ref=f6e38]:
+            - strong [ref=f6e39]: "4"
+            - generic [ref=f6e40]: Community memberships
+          - generic [ref=f6e41]:
+            - strong [ref=f6e42]: "2"
+            - generic [ref=f6e43]: Recent updates
+      - region "Explore interest communities" [ref=f6e44]:
+        - generic [ref=f6e45]:
+          - generic [ref=f6e46]: Search interest communities
+          - searchbox "Search interest communities" [ref=f6e50]
+        - group "Filter by interest" [ref=f6e51]:
+          - button "All" [pressed] [ref=f6e52] [cursor=pointer]
+          - button "Music" [ref=f6e53] [cursor=pointer]
+          - button "City walks" [ref=f6e54] [cursor=pointer]
+      - region [ref=f6e55]:
+        - generic [ref=f6e57]:
+          - generic [ref=f6e58]: Public communities
+          - heading "Interest groups" [level=2] [ref=f6e59]
+        - generic [ref=f6e60]:
+          - article [ref=f6e61]:
+            - link [ref=f6e62] [cursor=pointer]:
+              - /url: /g/shimokita-one-record
+              - generic [ref=f6e63]:
+                - generic [ref=f6e64]:
+                  - generic [ref=f6e66]: Tokyo
+                  - strong [ref=f6e67]: 下北
+                - generic [ref=f6e68]: Approval required
+              - generic [ref=f6e69]:
+                - generic [ref=f6e70]:
+                  - generic [ref=f6e71]: Tokyo
+                  - generic [ref=f6e72]: Music
+                - heading "下北沢一枚聴く会" [level=2] [ref=f6e73]
+                - generic [ref=f6e74]: "Approval required. Tokyo. Music. Hosted by Shimokita Listening Table. Pinned update: 今月のテーマ：一曲目. 2 members. Capacity 100"
+                - paragraph [ref=f6e75]: 一度に数曲だけを、最後までゆっくり聴く会です。下北沢の小さなテーブルで、選んだ理由や最近見つけた音楽を持ち寄ります。
+                - generic [ref=f6e76]: Hosted by Shimokita Listening Table
+                - generic [ref=f6e77]:
+                  - generic [ref=f6e78]: 音楽
+                  - generic [ref=f6e79]: レコード
+                  - generic [ref=f6e80]: 少人数
+                - generic [ref=f6e81]:
+                  - generic [ref=f6e83]: Pinned update
+                  - strong [ref=f6e84]: 今月のテーマ：一曲目
+                - generic [ref=f6e85]:
+                  - generic [ref=f6e86]: 2 members
+                  - generic [ref=f6e90]: Capacity 100
+          - article [ref=f6e94]:
+            - link [ref=f6e95] [cursor=pointer]:
+              - /url: /g/tokyo-light-walks
+              - generic [ref=f6e96]:
+                - generic [ref=f6e97]:
+                  - generic [ref=f6e99]: Tokyo
+                  - strong [ref=f6e100]: 东京
+                - generic [ref=f6e101]: Open to join
+              - generic [ref=f6e102]:
+                - generic [ref=f6e103]:
+                  - generic [ref=f6e104]: Tokyo
+                  - generic [ref=f6e105]: City walks
+                - heading "东京慢走与光线观察" [level=2] [ref=f6e106]
+                - generic [ref=f6e107]: "Open to join. Tokyo. City walks. Hosted by 东京余光散步会. Pinned update: 第一次同行前，可以先知道这些. 2 members. Capacity 100"
+                - paragraph [ref=f6e108]: 不赶景点，也不比设备。每月选一段适合慢走的东京街区，边走边观察光线、建筑和日常生活。
+                - generic [ref=f6e109]: Hosted by 东京余光散步会
+                - generic [ref=f6e110]:
+                  - generic [ref=f6e111]: 城市散步
+                  - generic [ref=f6e112]: 摄影
+                  - generic [ref=f6e113]: 新手友好
+                - generic [ref=f6e114]:
+                  - generic [ref=f6e116]: Pinned update
+                  - strong [ref=f6e117]: 第一次同行前，可以先知道这些
+                - generic [ref=f6e118]:
+                  - generic [ref=f6e119]: 2 members
+                  - generic [ref=f6e123]: Capacity 100
+    - generic [ref=f6e127]:
+      - generic [ref=f6e128]:
+        - generic [ref=f6e129]: SPOTT
+        - paragraph [ref=f6e130]: Find events. Meet your people.
+      - generic [ref=f6e131]:
+        - link "Discover" [ref=f6e132] [cursor=pointer]:
+          - /url: /discover
+        - link "Groups" [ref=f6e133] [cursor=pointer]:
+          - /url: /groups
+        - link "Safety" [ref=f6e134] [cursor=pointer]:
+          - /url: /safety
+        - link "Privacy" [ref=f6e135] [cursor=pointer]:
+          - /url: /privacy
+        - link "Terms" [ref=f6e136] [cursor=pointer]:
+          - /url: /terms
+      - generic [ref=f6e137]:
+        - generic [ref=f6e138]:
+          - generic [ref=f6e139]: Language
+          - combobox "Language" [ref=f6e140] [cursor=pointer]:
+            - option "简体中文"
+            - option "日本語"
+            - option "English" [selected]
+        - paragraph [ref=f6e141]: Tokyo · 2026

@@ -1,0 +1,193 @@
+.section { max-width: 760px; }
+
+.eyebrow {
+  color: var(--spott-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.heading {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin: 10px 0 18px;
+}
+.heading h2 {
+  margin: 0;
+  font-size: clamp(28px, 3vw, 42px);
+  letter-spacing: -.02em;
+}
+.heading span {
+  color: var(--spott-muted);
+  font-size: 13px;
+}
+
+.quietNote {
+  margin: 0 0 14px;
+  color: var(--spott-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.quietNote a { color: var(--spott-twilight); font-weight: 700; }
+
+.errorNote {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--spott-divider);
+  border-radius: var(--spott-radius-control);
+  background: var(--spott-surface);
+  color: var(--spott-muted);
+  font-size: 13px;
+}
+.errorNote span { flex: 1; }
+.errorNote button {
+  flex: none;
+  min-height: 40px;
+  padding-inline: 14px;
+  border: 1px solid var(--spott-divider);
+  border-radius: var(--spott-radius-control);
+  background: var(--spott-canvas);
+  color: var(--spott-ink);
+  font-weight: 700;
+}
+.errorNote button:hover { border-color: color-mix(in srgb, var(--spott-ink) 30%, var(--spott-divider)); }
+
+.threadList,
+.replyList {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.threadList { border-top: 1px solid var(--spott-divider); }
+.thread { padding: 18px 0 14px; border-bottom: 1px solid var(--spott-divider); }
+
+.replyList {
+  margin-top: 12px;
+  padding-left: 18px;
+  border-left: 2px solid color-mix(in srgb, var(--spott-twilight) 24%, var(--spott-divider));
+}
+.replyList li + li { margin-top: 12px; }
+
+.comment header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+.comment strong { font-size: 14px; font-weight: 700; }
+.comment time { color: var(--spott-muted); font-size: 12px; }
+.comment p {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--spott-ink);
+  font-size: 15px;
+  line-height: 1.7;
+  white-space: pre-line;
+}
+
+.replyButton {
+  min-height: 32px;
+  margin-top: 6px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--spott-twilight);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.composer {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid var(--spott-divider);
+  border-radius: var(--spott-radius-panel);
+  background: var(--spott-surface);
+}
+.composer textarea {
+  width: 100%;
+  min-height: 88px;
+  padding: 12px;
+  border: 1px solid var(--spott-divider);
+  border-radius: var(--spott-radius-control);
+  background: var(--spott-canvas);
+  color: var(--spott-ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.composer textarea:focus-visible {
+  border-color: var(--spott-twilight);
+  outline: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--spott-twilight) 16%, transparent);
+}
+
+.replyContext {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  color: var(--spott-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.replyContext button {
+  min-height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--spott-twilight);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.composerFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.composerFooter small { color: var(--spott-muted); font-size: 11px; line-height: 1.5; }
+.composerFooter button {
+  min-height: 44px;
+  padding-inline: 20px;
+  border: 1px solid var(--spott-twilight);
+  border-radius: var(--spott-radius-control);
+  background: var(--spott-twilight);
+  color: white;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.composerFooter button:disabled {
+  border-color: var(--spott-divider);
+  background: color-mix(in srgb, var(--spott-muted) 12%, var(--spott-surface));
+  color: var(--spott-muted);
+}
+
+.submitError {
+  margin: 0;
+  color: var(--spott-danger);
+  font-size: 13px;
+}
+
+@media (max-width: 780px) {
+  .composerFooter { flex-direction: column-reverse; align-items: stretch; text-align: center; }
+}
+
+@media (prefers-contrast: more) {
+  .threadList,
+  .thread,
+  .composer,
+  .composer textarea,
+  .errorNote { border-color: var(--spott-ink); }
+}

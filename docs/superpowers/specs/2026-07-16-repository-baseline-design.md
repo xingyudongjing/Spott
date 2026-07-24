@@ -69,9 +69,9 @@ The final PDF/DOCX product documentation, source Markdown, diagram assets, and d
 
 The approved destination is `https://github.com/xingyudongjing/Spott.git`. GitHub reports that repository as empty, so the verified local `main` baseline will become its initial branch without rewriting remote history.
 
-The currently authenticated GitHub CLI account is `yaokai4`, and GitHub reports only `READ` permission for this destination. Local initialization and commit may proceed, but no alternate credentials or account will be assumed. Before pushing, `yaokai4` must receive write access or the CLI must be authenticated as an account with write access.
+Publication was completed with the repository owner's account, `xingyudongjing`. The baseline commit `58b19104533a5e0c766d2607478d8a125612150b` was pushed to `origin/main`, and the remote ref was verified to match local `HEAD`.
 
-Once write access is confirmed, add the destination as `origin`, push `main` with upstream tracking, and verify that the remote commit ID exactly matches local `HEAD`.
+`yaokai4` is a different account and must not be used for this repository. It may remain in the machine's credential list, but it is inactive; all future GitHub authorization checks, pushes, and pull requests for Spott must explicitly verify that `xingyudongjing` is the active account before making an external change.
 
 ## Verification
 

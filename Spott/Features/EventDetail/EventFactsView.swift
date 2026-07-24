@@ -246,7 +246,7 @@ struct EventFactsView: View {
             ForEach(Array(presentation.items.enumerated()), id: \.element.id) { index, item in
                 EventFactRow(item: item)
                 if index < presentation.items.count - 1 {
-                    Divider().padding(.leading, 54)
+                    Divider().padding(.leading, 61)
                 }
             }
         }
@@ -265,15 +265,24 @@ private struct EventFactRow: View {
     let item: EventFactPresentation
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: 13) {
             Image(systemName: item.systemImage)
-                .font(.body.weight(.semibold))
-                .foregroundStyle(SpottColor.twilight)
-                .frame(width: 28, height: 28)
+                .font(.subheadline.weight(.bold))
+                // Restraint: fact metadata is not the screen's accent. Icons read
+                // in muted ink inside a neutral chip so the eye lands on the values,
+                // not a wall of identical purple.
+                .foregroundStyle(SpottColor.muted)
+                .frame(width: 34, height: 34)
+                .background(
+                    SpottColor.muted.opacity(0.10),
+                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                )
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(item.title)
-                    .font(.caption.weight(.semibold))
+                    .font(.caption2.weight(.semibold))
+                    .textCase(.uppercase)
+                    .tracking(0.4)
                     .foregroundStyle(.secondary)
                 Text(item.value)
                     .font(.body.weight(.semibold))
@@ -284,6 +293,7 @@ private struct EventFactRow: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 1)
                 }
             }
             Spacer(minLength: 0)

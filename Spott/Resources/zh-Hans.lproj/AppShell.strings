@@ -1,0 +1,6 @@
+"appshell.create.accessibility_label" = "发布活动";
+"appshell.composer.close" = "关闭";
+"appshell.composer.discard_title" = "要放弃这次编辑吗？";
+"appshell.composer.discard_message" = "尚未保存的修改将丢失；已同步的云端草稿会保留。";
+"appshell.composer.discard_confirm" = "放弃并关闭";
+"appshell.composer.discard_cancel" = "继续编辑";

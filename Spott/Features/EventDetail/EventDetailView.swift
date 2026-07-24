@@ -1,123 +1,281 @@
-import EventKit
 import SwiftUI
 import UIKit
 
-private struct LegacyEventDetailView: View {
+struct EventDetailView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.locale) private var locale
+
+    private let event: EventSummary
     private let sourceTab: AppTab
     private let refreshOnAppear: Bool
-    @State private var detail: EventSummary
-    @State private var registrationPresented = false
-    @State private var registrationDraft = DeferredRegistrationDraft()
-    @State private var favorited: Bool
-    @State private var notice: String?
-    @State private var busy = false
-    @State private var reportTarget: SafetyReportTarget?
-    @State private var showBlockConfirmation = false
-    @State private var checkInRegistration: Registration?
-    @State private var feedbackSummary: FeedbackSummary?
-    @State private var shareItem: EventShareItem?
-    @State private var posterPresented = false
 
     init(event: EventSummary, sourceTab: AppTab, refreshOnAppear: Bool = true) {
+        self.event = event
         self.sourceTab = sourceTab
         self.refreshOnAppear = refreshOnAppear
-        _detail = State(initialValue: event)
-        _favorited = State(initialValue: event.favorited)
+    }
+
+    var body: some View {
+        EventDetailNativeScreen(
+            initialEvent: event,
+            service: model.api,
+            commentService: model.api,
+            session: ctaSession,
+            locale: locale,
+            sourceTab: sourceTab,
+            refreshOnAppear: refreshOnAppear,
+            initiallyPromoted: model.router.isKnownPromoted(event.id)
+        )
+        .id("\(model.session?.sessionId.uuidString ?? "guest")-\(locale.identifier)-\(event.id)")
+    }
+
+    private var ctaSession: EventCTASession {
+#if DEBUG
+        if let fixture = CoreJourneyUIFixtureState.resolve(),
+           [.registration, .confirmed, .pending, .waitlisted].contains(fixture) {
+            return .verified
+        }
+#endif
+        guard let session = model.session else { return .guest }
+        return session.user.phoneVerified ? .verified : .unverified
+    }
+}
+
+@MainActor
+private struct EventDetailNativeScreen: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openURL) private var openURL
+
+    @State private var store: EventDetailStore
+    @State private var commentsStore: EventCommentsStore
+    @State private var registrationPresented = false
+    @State private var registrationDraft = DeferredRegistrationDraft()
+    /// Optimistic favorite override (mirrors DiscoveryFavoriteLedger): while a
+    /// mutation is pending or unreconciled, this wins over the store snapshot so
+    /// a concurrent refresh whose GET predates the PUT cannot revert the heart.
+    @State private var favoriteOverride: Bool?
+    @State private var favoriteInFlight = false
+    @State private var isPrimaryActionBusy = false
+    @State private var isAddingToCalendar = false
+    @State private var didStart = false
+    @State private var notice: String?
+    @State private var reportTarget: SafetyReportTarget?
+    @State private var showBlockConfirmation = false
+    @State private var feedbackSummary: FeedbackSummary?
+    @State private var goingPreview: GoingPreview?
+    @State private var activePromotion: EventPromotion?
+    @State private var isPromoted: Bool
+    @State private var shareItem: EventShareItem?
+    @State private var isPreparingShare = false
+    @State private var posterPresented = false
+    @State private var commentsComposerFocused = false
+
+    private let sourceTab: AppTab
+    private let refreshOnAppear: Bool
+    private let locale: Locale
+
+    init(
+        initialEvent: EventSummary,
+        service: any EventDetailServing,
+        commentService: any EventCommentServing,
+        session: EventCTASession,
+        locale: Locale,
+        sourceTab: AppTab,
+        refreshOnAppear: Bool,
+        initiallyPromoted: Bool = false
+    ) {
+        _store = State(
+            initialValue: EventDetailStore(
+                initialEvent: initialEvent,
+                service: service,
+                session: session,
+                locale: locale
+            )
+        )
+        _commentsStore = State(
+            initialValue: EventCommentsStore(
+                eventID: initialEvent.id,
+                service: commentService,
+                locale: locale
+            )
+        )
+        // 推广透明: the badge is seeded from the originating feed item's boosted
+        // flag; the eventPromotion fetch refreshes it rather than being the sole
+        // source, so a slow/failed fetch cannot silently hide a promoted badge.
+        _isPromoted = State(initialValue: initiallyPromoted)
+        self.sourceTab = sourceTab
+        self.refreshOnAppear = refreshOnAppear
+        self.locale = locale
+    }
+
+    private var favorited: Bool {
+        favoriteOverride ?? store.event.favorited
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                EventHero(event: detail)
+            LazyVStack(alignment: .leading, spacing: 0) {
+                EventDetailHeroView(
+                    event: store.event,
+                    isPromoted: isPromoted,
+                    locale: locale
+                )
+
                 VStack(alignment: .leading, spacing: 24) {
-                    titleBlock
-                    essentialFacts
-                    quickActions
-                    if detail.fee?.isFree == false, let fee = detail.fee { FeeBoundaryCard(fee: fee) }
-                    aboutSection
-                    if let requirements = detail.attendeeRequirements, !requirements.isEmpty { requirementsSection(requirements) }
+                    titleSection
+
+                    if store.isRefreshing {
+                        Label(text("journey.detail.refreshing"), systemImage: "arrow.triangle.2.circlepath")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if store.error != nil {
+                        Label(
+                            text("journey.detail.refresh_failed"),
+                            systemImage: "wifi.exclamationmark"
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("event.detail.refresh_error")
+                    }
+
+                    EventFactsView(
+                        presentation: EventFactsPresentation(
+                            event: store.event,
+                            disclosure: store.locationDisclosure,
+                            locale: locale
+                        )
+                    )
+
+                    if let coordinate = store.event.coordinate, mapQuery != nil {
+                        EventLocationMapCard(
+                            coordinate: coordinate,
+                            isExact: hasExactDisclosedCoordinate,
+                            locale: locale,
+                            openRoute: openRoute
+                        )
+                    }
+
+                    EventSecondaryActions(
+                        canOpenRoute: mapQuery != nil,
+                        canAddCalendar: store.event.startsAt != nil,
+                        isAddingToCalendar: isAddingToCalendar,
+                        locale: locale,
+                        openRoute: openRoute,
+                        addToCalendar: addToCalendar
+                    )
+
                     NavigationLink {
-                        PublicProfileView(identifier: detail.organizerId.uuidString.lowercased())
+                        PublicProfileView(identifier: store.event.organizerId.uuidString.lowercased())
                     } label: {
-                        OrganizerCard(event: detail)
+                        OrganizerTrustView(organizer: store.event.organizer, locale: locale)
                     }
                     .buttonStyle(.plain)
-                    if let feedbackSummary { EventFeedbackSummaryCard(summary: feedbackSummary) }
-                    if !detail.riskFlags.orEmpty.isEmpty { RiskDisclosure(flags: detail.riskFlags.orEmpty) }
-                    SafetyNote()
+
+                    if let goingPreview,
+                       goingPreview.confirmedCount > 0,
+                       !goingPreview.previews.isEmpty {
+                        EventGoingPreviewView(preview: goingPreview, locale: locale)
+                    }
+
+                    EventTextSection(
+                        title: text("journey.detail.about"),
+                        content: store.event.description
+                    )
+
+                    if let requirements = store.event.attendeeRequirements?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                       !requirements.isEmpty {
+                        EventTextSection(
+                            title: text("journey.detail.requirements"),
+                            content: requirements
+                        )
+                    }
+
+                    if let questions = store.event.registrationQuestions,
+                       !questions.isEmpty {
+                        RegistrationQuestionPreviewView(
+                            questions: questions,
+                            locale: locale
+                        )
+                    }
+
+                    if let fee = store.event.fee, !fee.isFree {
+                        EventFeeDetailsView(fee: fee, locale: locale)
+                    }
+
+                    EventRiskDisclosureView(
+                        flags: store.event.riskFlags ?? [],
+                        details: store.event.riskDetails ?? [:],
+                        locale: locale
+                    )
+
+                    EventSafetyNoteView(locale: locale)
+
+                    if let feedbackSummary {
+                        EventFeedbackSummaryView(
+                            summary: feedbackSummary,
+                            locale: locale
+                        )
+                    }
+
+                    EventCommentsSection(
+                        store: commentsStore,
+                        event: store.event,
+                        viewerUser: model.session?.user,
+                        locale: locale,
+                        requestSignIn: requestCommentSignIn,
+                        onComposerFocusChange: { commentsComposerFocused = $0 }
+                    )
+
                     if let notice {
                         Label(notice, systemImage: "checkmark.circle.fill")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(SpottColor.mint)
+                            .accessibilityIdentifier("event.detail.notice")
                     }
                 }
-                .padding(.horizontal, SpottMetric.pageInset)
+                .padding(.horizontal, 20)
                 .padding(.top, 22)
-                .padding(.bottom, 116)
+                .padding(.bottom, 124)
             }
         }
-        .background(SpottColor.canvas.ignoresSafeArea())
-        .ignoresSafeArea(edges: .top)
-        .safeAreaInset(edge: .bottom, spacing: 0) { actionBar }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .refreshable {
+            await refresh()
+            if !model.usesNavigationUITestFixture {
+                await commentsStore.load()
+            }
+            // A failed gate-resume leaves the pending intent parked (its task id
+            // never changes), so pull-to-refresh doubles as the retry path.
+            await resumeDeferredRegistrationIfNeeded()
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            // While the comments composer has keyboard focus the CTA bar steps
+            // aside instead of riding up and crowding the field being typed in.
+            if !commentsComposerFocused {
+                EventActionBar(
+                    presentation: .init(state: store.ctaState, locale: locale),
+                    isBusy: isPrimaryActionBusy,
+                    action: performPrimaryAction
+                )
+            }
+        }
+        .navigationTitle(store.event.title)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
-        .toolbarBackground(.hidden, for: .navigationBar)
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button { prepareShare() } label: { Image(systemName: "square.and.arrow.up") }
-                    .accessibilityLabel("分享")
-                Button { toggleFavorite() } label: { Image(systemName: favorited ? "heart.fill" : "heart") }
-                    .accessibilityLabel("收藏")
-                Menu {
-                    if model.session?.user.id == detail.organizerId {
-                        Button {
-                            posterPresented = true
-                        } label: {
-                            Label("生成分享海报", systemImage: "rectangle.portrait.on.rectangle.portrait")
-                        }
-                        Divider()
-                    }
-                    Button {
-                        reportTarget = .init(type: .event, targetID: detail.id, displayName: detail.title)
-                    } label: {
-                        Label("举报活动", systemImage: "exclamationmark.bubble")
-                    }
-                    if model.session?.user.id != detail.organizerId {
-                        Button {
-                            reportTarget = .init(
-                                type: .user,
-                                targetID: detail.organizerId,
-                                displayName: detail.organizerName ?? "@\(detail.organizerHandle ?? String(detail.organizerId.uuidString.prefix(8)))"
-                            )
-                        } label: {
-                            Label("举报主办方", systemImage: "person.crop.circle.badge.exclamationmark")
-                        }
-                        Button(role: .destructive) { showBlockConfirmation = true } label: {
-                            Label("拉黑主办方", systemImage: "person.slash")
-                        }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                }
-                .accessibilityLabel("更多操作")
-            }
-        }
+        .toolbar { toolbarContent }
         .sheet(isPresented: $registrationPresented) {
-            RegistrationSheet(event: detail, draft: registrationDraft) { registration in
-                detail.registrationStatus = registration.status
-                detail.availableActions = registration.availableActions ?? [.cancelRegistration, .viewTicket]
-                notice = registration.status == "waitlisted" ? "已加入候补。" : "报名成功，已同步到你的行程。"
-            }
-        }
-        .sheet(item: $checkInRegistration) { registration in
-            NavigationStack {
-                ParticipantCheckInView(event: detail, registration: registration)
-            }
+            RegistrationFlowView(
+                event: store.event,
+                draft: registrationDraft,
+                onCompletion: registrationCompleted,
+                onDismissDraft: { registrationDraft = $0 }
+            )
         }
         .sheet(item: $reportTarget) { target in
-            NavigationStack {
-                SafetyReportView(target: target)
-            }
+            NavigationStack { SafetyReportView(target: target) }
         }
         .sheet(item: $shareItem) { item in
             ShareActivityView(items: [item.url])
@@ -125,856 +283,1117 @@ private struct LegacyEventDetailView: View {
         }
         .sheet(isPresented: $posterPresented) {
             NavigationStack {
-                PosterGeneratorView(resourceType: "event", resourceID: detail.id, title: detail.title)
+                PosterGeneratorView(
+                    resourceType: "event",
+                    resourceID: store.event.id,
+                    title: store.event.title
+                )
             }
         }
-        .alert("拉黑这位主办方？", isPresented: $showBlockConfirmation) {
-            Button("拉黑", role: .destructive) { blockOrganizer() }
-            Button("取消", role: .cancel) { }
+        .alert(
+            text("journey.detail.block_host"),
+            isPresented: $showBlockConfirmation
+        ) {
+            Button(text("journey.detail.block_host"), role: .destructive, action: blockOrganizer)
+            Button(text("journey.common.cancel"), role: .cancel) { }
         } message: {
-            Text("拉黑会取消互相关注，并限制你们进入同一受控互动空间。")
+            Text(text("journey.detail.block_message"))
         }
-        .task {
-            if model.usesNavigationUITestFixture { return }
-            model.trackAnalytics(.eventDetailViewed(
-                eventID: detail.id,
-                publicSlug: detail.publicSlug,
-                category: detail.tags.first
-            ))
-            async let feedbackRequest = try? model.api.feedbackSummary(eventID: detail.id)
-            if refreshOnAppear,
-               let current = try? await model.api.event(identifier: detail.publicSlug) {
-                detail = current
-                favorited = current.favorited
-            }
-            feedbackSummary = await feedbackRequest
+        .task { await startIfNeeded() }
+        .task(id: store.nextTemporalRefreshDate) {
+            await refreshAtNextTemporalBoundary()
         }
         .task(id: model.router.pendingRegistrationPresentation?.id) {
-            let reference = EventRouteReference(event: detail)
-            guard let intent = model.router.takeRegistrationPresentation(
-                for: reference,
-                in: sourceTab
-            ) else { return }
-            registrationDraft = intent.draft
-            registrationPresented = true
+            await resumeDeferredRegistrationIfNeeded()
+        }
+        .onChange(of: sessionFingerprint) { _, _ in
+            store.session = ctaSession
+            Task { await refresh() }
+            if !model.usesNavigationUITestFixture {
+                Task { await commentsStore.load() }
+            }
+        }
+        .onChange(of: store.event.favorited) { _, serverValue in
+            // Reconcile: once the server agrees with the optimistic override and
+            // no mutation is pending, drop the override.
+            if !favoriteInFlight, favoriteOverride == serverValue {
+                favoriteOverride = nil
+            }
         }
     }
 
-    private var titleBlock: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(statusTitle)
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .foregroundStyle(statusColor)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(statusColor.opacity(0.11), in: Capsule())
-                Spacer()
-                Text(detail.priceLabel)
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Button(action: shareEvent) {
+                if isPreparingShare {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "square.and.arrow.up")
+                }
             }
-            Text(detail.title)
-                .font(.system(size: 31, weight: .bold, design: .rounded))
-                .tracking(-1)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("event.detail.title")
-            if !detail.tags.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 7) {
-                        ForEach(detail.tags, id: \.self) { tag in
-                            Text(displayTag(tag))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(SpottColor.muted)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 7)
-                                .spottGlassPanel(shape: Capsule())
-                        }
+            .disabled(isPreparingShare)
+            .tint(SpottColor.ink)
+            .accessibilityLabel(text("journey.common.share"))
+
+            Button(action: toggleFavorite) {
+                Image(systemName: favorited ? "heart.fill" : "heart")
+            }
+            .tint(favorited ? SpottColor.coral : SpottColor.ink)
+            .accessibilityLabel(
+                text(favorited ? "journey.detail.unfavorite" : "journey.detail.favorite")
+            )
+
+            Menu {
+                if model.session?.user.id == store.event.organizerId,
+                   store.event.posterEnabled == true {
+                    Button {
+                        posterPresented = true
+                    } label: {
+                        Label(
+                            EventDetailExtrasLocalization.text(
+                                "eventdetail.poster.menu",
+                                locale: locale
+                            ),
+                            systemImage: "photo.artframe"
+                        )
                     }
                 }
-            }
-        }
-    }
 
-    private var essentialFacts: some View {
-        VStack(spacing: 0) {
-            DetailFact(icon: "calendar", title: "时间", value: detail.startsAt?.formatted(.dateTime.month(.wide).day().weekday().hour().minute()) ?? "时间待定")
-            Divider().padding(.leading, 47)
-            DetailFact(icon: "mappin.and.ellipse", title: "集合范围", value: detail.publicArea ?? "")
-            if let exact = detail.exactAddress, !exact.isEmpty {
-                Divider().padding(.leading, 47)
-                DetailFact(icon: "lock.open", title: "精确地址", value: exact)
-            }
-            Divider().padding(.leading, 47)
-            DetailFact(icon: "person.2", title: "名额", value: "\(detail.confirmedCount) / \(detail.capacity) · 余 \(detail.remaining)")
-            Divider().padding(.leading, 47)
-            DetailFact(icon: "yensign.circle", title: "费用", value: detail.priceLabel)
-        }
-        .padding(.horizontal, 14)
-        .background(SpottColor.surface, in: RoundedRectangle(cornerRadius: SpottMetric.cardRadius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: SpottMetric.cardRadius).stroke(SpottColor.divider))
-    }
-
-    private var quickActions: some View {
-        HStack(spacing: 10) {
-            DetailQuickAction(icon: "calendar.badge.plus", title: "加日历") { addToCalendar() }
-            DetailQuickAction(icon: "map", title: "路线") { openMaps() }
-            Button { prepareShare() } label: {
-                VStack(spacing: 7) {
-                    Image(systemName: "square.and.arrow.up").font(.system(size: 17, weight: .semibold))
-                    Text("分享").font(.caption.weight(.semibold))
-                }
-                .foregroundStyle(SpottColor.ink)
-                .frame(maxWidth: .infinity, minHeight: 68)
-                .spottGlassPanel(shape: RoundedRectangle(cornerRadius: 18))
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    private var aboutSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("关于这次活动").font(.system(size: 21, weight: .bold, design: .rounded))
-            Text(detail.description)
-                .font(.body)
-                .foregroundStyle(SpottColor.ink.opacity(0.88))
-                .lineSpacing(6)
-        }
-    }
-
-    private func requirementsSection(_ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("参与要求").font(.system(size: 19, weight: .bold, design: .rounded))
-            Text(value).font(.body).lineSpacing(5)
-        }
-        .padding(17)
-        .background(SpottColor.surface, in: RoundedRectangle(cornerRadius: SpottMetric.cardRadius))
-    }
-
-    private var actionBar: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(detail.priceLabel).font(.system(size: 15, weight: .bold, design: .rounded))
-                Text(detail.remaining > 0 ? "还剩 \(detail.remaining) 个名额" : "当前可加入候补")
-                    .font(.caption)
-                    .foregroundStyle(SpottColor.muted)
-            }
-            Spacer()
-            if let action = primaryAction {
-                Button(actionTitle(action)) { perform(action) }
-                    .font(.system(size: 14.5, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 20)
-                    .frame(minHeight: 48)
-                    .background(SpottColor.ink, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-                    .disabled(busy)
-            } else {
-                Text("当前不可操作").font(.subheadline).foregroundStyle(SpottColor.muted)
-            }
-        }
-        .padding(.horizontal, 17)
-        .padding(.vertical, 11)
-        .spottGlassPanel(shape: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .padding(.horizontal, 12)
-        .padding(.bottom, 5)
-    }
-
-    private var primaryAction: EventAction? {
-        let priority: [EventAction] = [.register, .joinWaitlist, .viewTicket, .checkIn, .cancelRegistration, .edit, .appeal]
-        return priority.first { detail.availableActions.contains($0) }
-    }
-
-    private var statusTitle: String {
-        switch detail.status {
-        case "published": "报名开放"
-        case "registration_closed": "报名已截止"
-        case "in_progress": "活动进行中"
-        case "ended": "活动已结束"
-        case "cancelled": "活动已取消"
-        case "under_review": "审核中"
-        default: detail.status
-        }
-    }
-    private var statusColor: Color { ["published", "in_progress"].contains(detail.status) ? SpottColor.mint : detail.status == "cancelled" ? SpottColor.danger : SpottColor.amber }
-
-    private func actionTitle(_ action: EventAction) -> String {
-        switch action {
-        case .register: "报名参加"
-        case .joinWaitlist: "加入候补"
-        case .cancelRegistration: "取消报名"
-        case .viewTicket: "查看票码"
-        case .checkIn: "现场签到"
-        case .edit: "编辑活动"
-        case .cancelEvent: "取消活动"
-        case .appeal: "提交申诉"
-        case .joinGroup: "加入社群"
-        case .submit: "提交审核"
-        }
-    }
-
-    private func perform(_ action: EventAction) {
-        model.requireTrust(for: action, event: detail) {
-            switch action {
-            case .register, .joinWaitlist:
-                registrationDraft = .init()
-                registrationPresented = true
-            case .viewTicket: model.router.selectedTab = .activities
-            case .checkIn: openCheckIn()
-            case .cancelRegistration: cancelRegistration()
-            case .joinGroup:
-                if let id = detail.groupId { model.router.push(.group(id)) }
-            default: notice = "操作入口已准备。"
-            }
-        }
-    }
-
-    private func openCheckIn() {
-        busy = true
-        Task { @MainActor in
-            defer { busy = false }
-            do {
-                let registrations = try await model.api.registrations().items
-                guard let registration = registrations.first(where: { $0.eventId == detail.id }) else {
-                    throw APIError(
-                        status: 404,
-                        code: "REGISTRATION_NOT_FOUND",
-                        message: "没有找到可签到的报名记录。",
-                        retryable: false
+                Button {
+                    reportTarget = .init(
+                        type: .event,
+                        targetID: store.event.id,
+                        displayName: store.event.title
                     )
+                } label: {
+                    Label(text("journey.detail.report_event"), systemImage: "exclamationmark.bubble")
                 }
-                checkInRegistration = registration
-            } catch {
-                model.banner = .init(title: AppModel.map(error).message, tone: .warning)
+
+                if model.session?.user.id != store.event.organizerId {
+                    Button {
+                        reportTarget = .init(
+                            type: .user,
+                            targetID: store.event.organizerId,
+                            displayName: store.event.organizer.name
+                        )
+                    } label: {
+                        Label(
+                            text("journey.detail.report_host"),
+                            systemImage: "person.crop.circle.badge.exclamationmark"
+                        )
+                    }
+
+                    Button(role: .destructive) {
+                        requestBlockOrganizer()
+                    } label: {
+                        Label(text("journey.detail.block_host"), systemImage: "person.slash")
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
             }
+            .tint(SpottColor.ink)
+            .accessibilityLabel(text("journey.detail.more"))
         }
     }
 
-    private func blockOrganizer() {
-        guard model.session != nil else { model.presentedGate = .login; return }
-        busy = true
-        Task { @MainActor in
-            defer { busy = false }
+    private var titleSection: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(store.event.title)
+                .font(.largeTitle.bold())
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("event.detail.title")
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    organizerName
+                    organizerHandle
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    organizerName
+                    organizerHandle
+                }
+            }
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private var organizerName: some View {
+        Text(store.event.organizer.name)
+            .font(.subheadline.weight(.semibold))
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var organizerHandle: some View {
+        Text("@\(store.event.organizer.handle)")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var shareURL: URL {
+        URL(string: "https://spott.jp/e/\(store.event.publicSlug)")
+            ?? URL(string: "https://spott.jp")!
+    }
+
+    private var sessionFingerprint: String {
+        "\(model.session?.sessionId.uuidString ?? "guest")-\(model.session?.user.phoneVerified == true)"
+    }
+
+    private var ctaSession: EventCTASession {
+#if DEBUG
+        if let fixture = CoreJourneyUIFixtureState.resolve(),
+           [.registration, .confirmed, .pending, .waitlisted].contains(fixture) {
+            return .verified
+        }
+#endif
+        guard let session = model.session else { return .guest }
+        return session.user.phoneVerified ? .verified : .unverified
+    }
+
+    private var mapQuery: String? {
+        switch store.locationDisclosure {
+        case .exact(_, let address, _): address
+        case .approximate(let publicArea): publicArea
+        case .unavailable: nil
+        }
+    }
+
+    private var hasExactDisclosedCoordinate: Bool {
+        if case .exact(_, _, let coordinate) = store.locationDisclosure {
+            return coordinate != nil
+        }
+        return false
+    }
+
+    private func startIfNeeded() async {
+        guard !didStart else { return }
+        didStart = true
+        model.trackAnalytics(
+            .eventDetailViewed(
+                eventID: store.event.id,
+                publicSlug: store.event.publicSlug,
+                category: store.event.category
+            )
+        )
+        if refreshOnAppear {
+            await refresh()
+        }
+        if !model.usesNavigationUITestFixture {
+            goingPreview = try? await model.api.goingPreview(eventID: store.event.id)
+            feedbackSummary = try? await model.api.feedbackSummary(eventID: store.event.id)
             do {
-                _ = try await model.api.setUserBlocked(detail.organizerId, blocked: true, reason: "event_safety")
-                notice = "已拉黑主办方。你们的关注关系和受控互动已断开。"
+                let promotion = try await model.api.eventPromotion(eventID: store.event.id)
+                activePromotion = promotion
+                isPromoted = promotion != nil
             } catch {
-                notice = AppModel.map(error).message
+                // Fetch failed: keep the seeded feed-item value instead of
+                // silently hiding a badge the discovery card already showed.
+            }
+            await commentsStore.load()
+        }
+        presentCoreJourneyFixtureIfNeeded()
+    }
+
+    private func presentCoreJourneyFixtureIfNeeded() {
+#if DEBUG
+        guard let fixture = CoreJourneyUIFixtureState.resolve(),
+              [.registration, .confirmed, .pending, .waitlisted].contains(fixture) else {
+            return
+        }
+        registrationPresented = true
+#endif
+    }
+
+    private func refresh() async {
+        await store.refresh()
+        // The heart reads `favorited` (override ?? store snapshot); no direct
+        // assignment here, so a stale refresh cannot clobber a pending toggle.
+    }
+
+    private func performPrimaryAction() {
+        let state = store.ctaState
+        guard !state.disabled else { return }
+        switch state.intent {
+        case .none:
+            return
+        case .itinerary:
+            model.router.showItinerary(
+                registrationID: state.registrationId.flatMap(UUID.init(uuidString:))
+            )
+        case .acceptWaitlist:
+            model.router.showItinerary(
+                registrationID: state.registrationId.flatMap(UUID.init(uuidString:))
+            )
+        case .login, .phoneVerification, .register:
+            let action: EventAction = state.kind == .joinWaitlist ? .joinWaitlist : .register
+            model.requireTrust(
+                for: action,
+                event: store.event,
+                draft: registrationDraft
+            ) {
+                registrationPresented = true
             }
         }
     }
 
-    private func prepareShare() {
+    private func registrationCompleted(_ registration: Registration) {
+        model.trackAnalytics(
+            .registrationCompleted(
+                eventID: store.event.id,
+                status: registration.status,
+                partySize: registration.partySize
+            )
+        )
+        Task { await refresh() }
+    }
+
+    private func resumeDeferredRegistrationIfNeeded() async {
+        let reference = EventRouteReference(event: store.event)
+        guard let pending = model.router.pendingRegistrationPresentation,
+              pending.event == reference,
+              pending.sourceTab == sourceTab else { return }
+
+        await refresh()
+        guard store.error == nil else {
+            model.banner = .init(
+                title: text("journey.registration.resume_refresh_failed"),
+                tone: .warning
+            )
+            return
+        }
+
+        guard let intent = model.router.takeRegistrationPresentation(
+            for: reference,
+            in: sourceTab
+        ) else { return }
+        guard store.ctaState.intent == .register else {
+            notice = text("journey.registration.no_longer_available")
+            return
+        }
+        registrationDraft = intent.draft
+        registrationPresented = true
+    }
+
+    private func shareEvent() {
+        guard !isPreparingShare else { return }
+        isPreparingShare = true
         Task { @MainActor in
+            defer { isPreparingShare = false }
+            var url = shareURL
             if model.session != nil,
                let receipt = try? await model.api.createShareLink(
                    resourceType: "event",
-                   resourceID: detail.id,
-                   campaign: "ios_event_detail"
+                   resourceID: store.event.id,
+                   campaign: nil,
+                   channel: "other",
+                   purpose: "share"
                ) {
-                shareItem = .init(url: receipt.url)
-            } else {
-                shareItem = .init(url: URL(string: "https://spott.jp/e/\(detail.publicSlug)")!)
+                url = receipt.url
             }
+            shareItem = EventShareItem(url: url)
         }
+    }
+
+    private func requestCommentSignIn() {
+        model.requireTrust(for: .submit) { }
     }
 
     private func toggleFavorite() {
-        guard model.session != nil else { model.presentedGate = .login; return }
+        guard model.session != nil else {
+            // Record the favorite intent so the gate shows event context and the
+            // heart is applied right after a successful login.
+            model.deferFavorite(event: store.event, desired: !favorited)
+            return
+        }
+        // Serialize: ignore taps while a mutation is pending so two rapid
+        // toggles cannot interleave their PUTs and end on a stale value.
+        guard !favoriteInFlight else { return }
         let target = !favorited
-        favorited = target
-        Task {
-            do { try await model.api.setFavorite(eventID: detail.id, enabled: target) }
-            catch { favorited.toggle(); model.banner = .init(title: AppModel.map(error).message, tone: .warning) }
+        favoriteOverride = target
+        favoriteInFlight = true
+        Task { @MainActor in
+            defer { favoriteInFlight = false }
+            do {
+                try await model.api.setFavorite(eventID: store.event.id, enabled: target)
+                if store.event.favorited == target {
+                    favoriteOverride = nil
+                }
+            } catch {
+                favoriteOverride = store.event.favorited == !target ? nil : !target
+                model.banner = .init(title: text("journey.error.action"), tone: .warning)
+            }
         }
     }
 
-    private func cancelRegistration() {
-        busy = true
-        Task {
-            do {
-                let registrations = try await model.api.registrations().items
-                guard let registration = registrations.first(where: { $0.eventId == detail.id }) else { throw APIError(status: 404, code: "REGISTRATION_NOT_FOUND", message: "没有找到报名记录。", retryable: false) }
-                _ = try await model.api.cancelRegistration(registrationID: registration.id)
-                detail.registrationStatus = "cancelled"
-                detail.availableActions = [.register]
-                notice = "报名已取消，积分处理结果已同步。"
-            } catch { model.banner = .init(title: AppModel.map(error).message, tone: .warning) }
-            busy = false
+    private func requestBlockOrganizer() {
+        guard model.session != nil else {
+            model.presentedGate = .login
+            return
         }
+        showBlockConfirmation = true
+    }
+
+    private func blockOrganizer() {
+        Task { @MainActor in
+            do {
+                _ = try await model.api.setUserBlocked(
+                    store.event.organizerId,
+                    blocked: true,
+                    reason: "event_safety"
+                )
+                notice = text("journey.detail.blocked")
+            } catch {
+                model.banner = .init(title: text("journey.error.action"), tone: .warning)
+            }
+        }
+    }
+
+    private func openRoute() {
+        guard let mapQuery,
+              let encoded = mapQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://maps.apple.com/?q=\(encoded)") else { return }
+        openURL(url)
     }
 
     private func addToCalendar() {
-        guard let start = detail.startsAt else { return }
-        let end = detail.endsAt ?? start.addingTimeInterval(7200)
-        Task {
-            try? await CalendarIntegration().add(
-                title: detail.title,
-                start: start,
-                end: end,
-                notes: "Spott · \(detail.publicArea ?? "")\nhttps://spott.jp/e/\(detail.publicSlug)"
-            )
-            notice = "已添加到系统日历。"
-        }
-    }
-
-    private func openMaps() {
-        let encoded = detail.publicArea?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        if let url = URL(string: "http://maps.apple.com/?q=\(encoded)") { model.openExternal(url: url) }
-    }
-
-    private func displayTag(_ tag: String) -> String {
-        ["city-walk": "城市探索", "family": "亲子", "outdoor": "户外", "sports": "运动", "food": "美食", "games": "游戏", "art": "文化艺术", "learning": "技能学习", "networking": "职业交流"][tag] ?? tag
-    }
-}
-
-private struct EventShareItem: Identifiable {
-    let id = UUID()
-    let url: URL
-}
-
-private struct ShareActivityView: UIViewControllerRepresentable {
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) { }
-}
-
-private struct PosterGeneratorView: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    let resourceType: String
-    let resourceID: UUID
-    let title: String
-    @State private var template = "tokyo_afterglow"
-    @State private var job: PosterJob?
-    @State private var busy = false
-    @State private var shareItem: EventShareItem?
-    @State private var error: UserFacingError?
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("为这次相遇留一张海报")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                    Text(title)
-                        .font(.subheadline)
-                        .foregroundStyle(SpottColor.muted)
-                }
-
-                if let url = job?.url, job?.state == "ready" {
-                    AsyncImage(url: url) { image in
-                        image.resizable().scaledToFit()
-                    } placeholder: {
-                        ProgressView().frame(maxWidth: .infinity, minHeight: 360)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 26).stroke(SpottColor.divider))
-
-                    Button {
-                        shareItem = .init(url: url)
-                    } label: {
-                        Label("分享海报", systemImage: "square.and.arrow.up")
-                    }
-                    .buttonStyle(PrimaryButtonStyle())
-                } else {
-                    Picker("海报风格", selection: $template) {
-                        Text("东京余光").tag("tokyo_afterglow")
-                        Text("夜间电车").tag("night_transit")
-                        Text("纸灯笼").tag("paper_lantern")
-                    }
-                    .pickerStyle(.segmented)
-
-                    VStack(spacing: 14) {
-                        Image(systemName: busy ? "wand.and.sparkles" : "rectangle.portrait.on.rectangle.portrait")
-                            .font(.system(size: 42, weight: .light))
-                            .foregroundStyle(SpottColor.twilight)
-                        Text(posterStatus)
-                            .font(.headline)
-                        if busy { ProgressView() }
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 260)
-                    .spottGlassPanel(shape: RoundedRectangle(cornerRadius: 26, style: .continuous), interactive: false)
-
-                    Button("生成品牌海报") { create() }
-                        .buttonStyle(PrimaryButtonStyle())
-                        .disabled(busy)
-                }
-
-                if let error {
-                    Label("\(error.message)（\(error.id)）", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(SpottColor.danger)
-                }
-                Text("海报只使用已获准公开的活动信息与图片，不会包含精确地址、手机号或报名答案。")
-                    .font(.caption)
-                    .foregroundStyle(SpottColor.muted)
-            }
-            .padding(SpottMetric.pageInset)
-        }
-        .background(SpottColor.canvas.ignoresSafeArea())
-        .navigationTitle("分享海报")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("关闭") { dismiss() }
-            }
-        }
-        .sheet(item: $shareItem) { item in
-            ShareActivityView(items: [item.url])
-                .presentationDetents([.medium])
-        }
-        .task(id: resourceID) {
-            await recoverApprovedPoster()
-        }
-    }
-
-    private var posterStatus: LocalizedStringKey {
-        switch job?.state {
-        case "queued": "海报已排队"
-        case "processing": "正在生成海报"
-        case "failed": "海报生成失败"
-        default: "选择一个品牌模板"
-        }
-    }
-
-    private var locale: String {
-        let language = Locale.preferredLanguages.first?.lowercased() ?? "en"
-        if language.hasPrefix("zh") { return "zh-Hans" }
-        if language.hasPrefix("ja") { return "ja" }
-        return "en"
-    }
-
-    private func create() {
-        busy = true
-        error = nil
+        guard let start = store.event.startsAt, !isAddingToCalendar else { return }
+        let event = store.event
+        isAddingToCalendar = true
+        notice = nil
         Task { @MainActor in
-            defer { busy = false }
+            defer { isAddingToCalendar = false }
+            let end = event.endsAt ?? start.addingTimeInterval(7_200)
             do {
-                let receipt = try await model.api.createPoster(
-                    resourceType: resourceType,
-                    resourceID: resourceID,
-                    template: template,
-                    locale: locale
+                try await CalendarIntegration().add(
+                    title: event.title,
+                    start: start,
+                    end: end,
+                    notes: "Spott · \(mapQuery ?? "")\nhttps://spott.jp/e/\(event.publicSlug)"
                 )
-                try await poll(jobID: receipt.id)
-            } catch is CancellationError {
-                return
+                notice = text("journey.detail.calendar_added")
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: text("journey.detail.calendar_added")
+                )
             } catch {
-                self.error = AppModel.map(error)
+                let message = (error as? CalendarIntegrationError)?.localizedMessage(locale: locale)
+                    ?? text("journey.calendar.write_failed")
+                model.banner = .init(title: message, tone: .warning)
+                UIAccessibility.post(notification: .announcement, argument: message)
             }
         }
     }
 
-    @MainActor
-    private func recoverApprovedPoster() async {
-        guard resourceType == "event", job == nil else { return }
+    private func text(_ key: String.LocalizationValue) -> String {
+        CoreJourneyLocalization.text(key, locale: locale)
+    }
+
+    private func refreshAtNextTemporalBoundary() async {
+        guard let delay = store.temporalRefreshDelay() else { return }
         do {
-            let current = try await model.api.eventPoster(eventID: resourceID)
-            job = current
-            if current.state == "queued" || current.state == "processing" {
-                busy = true
-                defer { busy = false }
-                try await poll(jobID: current.id)
-            }
-        } catch let apiError as APIError where apiError.status == 404 {
-            // An approved poster is optional until the event has passed moderation.
-        } catch is CancellationError {
-            return
+            try await Task.sleep(for: .seconds(max(0.01, delay)))
+            try Task.checkCancellation()
+            store.refreshTemporalState()
+            Task { await refresh() }
         } catch {
-            self.error = AppModel.map(error)
-        }
-    }
-
-    @MainActor
-    private func poll(jobID: UUID) async throws {
-        for attempt in 0..<20 {
-            let current = try await model.api.poster(jobID: jobID)
-            job = current
-            if current.state == "ready" || current.state == "failed" { return }
-            if attempt < 19 { try await Task.sleep(for: .seconds(1)) }
+            return
         }
     }
 }
 
-private struct EventFeedbackSummaryCard: View {
-    let summary: FeedbackSummary
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("参加者反馈", systemImage: "sparkles")
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
-                Spacer()
-                Text("\(summary.sampleSize) 份")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(SpottColor.muted)
-            }
-            if summary.published {
-                VStack(spacing: 10) {
-                    ForEach(summary.tags.prefix(4)) { item in
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack {
-                                Text(item.tag.feedbackTitle)
-                                Spacer()
-                                Text(item.rate, format: .percent.precision(.fractionLength(0)))
-                                    .foregroundStyle(SpottColor.muted)
-                            }
-                            .font(.subheadline.weight(.semibold))
-                            GeometryReader { proxy in
-                                ZStack(alignment: .leading) {
-                                    Capsule().fill(SpottColor.ink.opacity(0.07))
-                                    Capsule()
-                                        .fill(SpottColor.twilight)
-                                        .frame(width: proxy.size.width * min(max(item.rate, 0), 1))
-                                }
-                            }
-                            .frame(height: 6)
-                        }
-                    }
-                }
-                Text("只展示达到隐私样本门槛后的匿名聚合标签，不公开个人文字。")
-                    .font(.caption)
-                    .foregroundStyle(SpottColor.muted)
-            } else {
-                Text("已有 \(summary.sampleSize) 份反馈；达到 \(summary.minimumSampleSize) 份后才会展示匿名聚合结果。")
-                    .font(.subheadline)
-                    .foregroundStyle(SpottColor.muted)
-                    .lineSpacing(3)
-            }
-        }
-        .padding(17)
-        .spottGlassPanel(shape: RoundedRectangle(cornerRadius: SpottMetric.cardRadius, style: .continuous))
-    }
-}
-
-extension FeedbackTag {
-    var feedbackTitle: LocalizedStringKey {
-        switch self {
-        case .friendly: "氛围友好"
-        case .wellOrganized: "组织有序"
-        case .clearInformation: "信息清楚"
-        case .safe: "让人安心"
-        case .wouldJoinAgain: "愿意再参加"
-        }
-    }
-}
-
-private struct EventHero: View {
+private struct EventDetailHeroView: View {
     let event: EventSummary
+    let isPromoted: Bool
+    let locale: Locale
+
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            Group {
-                if let url = event.coverURL {
-                    AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: { fallback }
-                } else { fallback }
-            }
-            .frame(height: 338)
-            .clipped()
-            LinearGradient(colors: [.clear, .black.opacity(0.48)], startPoint: .center, endPoint: .bottom)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(event.startsAt?.formatted(.dateTime.month(.wide)) ?? "SPOTT")
-                    .font(.caption.monospaced().bold())
-                    .textCase(.uppercase)
-                Text(event.startsAt?.formatted(.dateTime.day()) ?? "·")
-                    .font(.system(size: 48, weight: .bold, design: .rounded))
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 22)
-            .padding(.bottom, 20)
-        }
-        .frame(height: 338)
-        .accessibilityLabel("\(event.title) 的活动封面")
-    }
+            EventCoverView(url: event.coverURL, category: event.category, cornerRadius: 0)
+                .frame(maxWidth: .infinity)
+                .frame(height: 246)
 
-    private var fallback: some View {
-        ZStack {
-            LinearGradient(colors: [Color(red: 0.08, green: 0.25, blue: 0.36), Color(red: 0.35, green: 0.30, blue: 0.72)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            Circle().fill(Color.white.opacity(0.12)).frame(width: 260, height: 260).offset(x: 160, y: -90)
-            Capsule().fill(Color.black.opacity(0.13)).frame(width: 350, height: 105).rotationEffect(.degrees(-30)).offset(x: -80, y: 100)
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.56)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+            .accessibilityHidden(true)
+
+            if let startsAt = event.startsAt {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(
+                        CoreJourneyLocalization.datePart(
+                            startsAt,
+                            template: "MMM",
+                            timeZoneIdentifier: event.displayTimeZone,
+                            locale: locale
+                        )
+                    )
+                        .font(.caption.monospaced().weight(.bold))
+                        .textCase(.uppercase)
+                    Text(
+                        CoreJourneyLocalization.datePart(
+                            startsAt,
+                            template: "d",
+                            timeZoneIdentifier: event.displayTimeZone,
+                            locale: locale
+                        )
+                    )
+                        .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                }
+                .foregroundStyle(.white)
+                .padding(20)
+                .accessibilityHidden(true)
+            }
+        }
+        .frame(height: 246)
+        .overlay(alignment: .topTrailing) {
+            if isPromoted {
+                PromotedBadge()
+                    .padding(12)
+                    .accessibilityIdentifier("event.detail.promoted_badge")
+            }
         }
     }
 }
 
-private struct DetailFact: View {
-    let icon: String
+private struct EventTextSection: View {
     let title: String
-    let value: String
+    let content: String
+
     var body: some View {
-        HStack(alignment: .top, spacing: 13) {
-            Image(systemName: icon)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(SpottColor.ink)
-                .frame(width: 32, height: 32)
-                .background(Color.black.opacity(0.045), in: Circle())
-            VStack(alignment: .leading, spacing: 3) {
-                Text(LocalizedStringKey(title)).font(.caption).foregroundStyle(SpottColor.muted)
-                Text(value).font(.system(size: 14.5, weight: .semibold, design: .rounded)).lineLimit(3)
-            }
-            Spacer()
+        VStack(alignment: .leading, spacing: 9) {
+            Text(title)
+                .font(.title3.bold())
+                .accessibilityAddTraits(.isHeader)
+            Text(content)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
         }
-        .padding(.vertical, 12)
     }
 }
 
-private struct DetailQuickAction: View {
-    let icon: String
-    let title: String
-    let action: () -> Void
+private struct EventSecondaryActions: View {
+    let canOpenRoute: Bool
+    let canAddCalendar: Bool
+    let isAddingToCalendar: Bool
+    let locale: Locale
+    let openRoute: () -> Void
+    let addToCalendar: () -> Void
+
     var body: some View {
-        Button(action: action) {
-            VStack(spacing: 7) {
-                Image(systemName: icon).font(.system(size: 17, weight: .semibold))
-                Text(LocalizedStringKey(title)).font(.caption.weight(.semibold))
+        HStack(spacing: 10) {
+            Button(action: openRoute) {
+                Label(text("journey.detail.route"), systemImage: "map")
+                    .frame(maxWidth: .infinity, minHeight: 44)
             }
-            .foregroundStyle(SpottColor.ink)
-            .frame(maxWidth: .infinity, minHeight: 68)
-            .spottGlassPanel(shape: RoundedRectangle(cornerRadius: 18))
+            .disabled(!canOpenRoute)
+
+            Button(action: addToCalendar) {
+                HStack(spacing: 8) {
+                    if isAddingToCalendar {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "calendar.badge.plus")
+                    }
+                    Text(text("journey.common.add_calendar"))
+                }
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .disabled(!canAddCalendar || isAddingToCalendar)
+            .accessibilityIdentifier("event.detail.add_calendar")
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
+        // Restraint: route + add-to-calendar are secondary utilities, not the
+        // screen's accent. Neutral glass keeps purple exclusive to the single
+        // primary CTA (预留名额).
+        .tint(SpottColor.ink)
+    }
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        CoreJourneyLocalization.text(key, locale: locale)
     }
 }
 
-private struct FeeBoundaryCard: View {
+private struct EventFeeDetailsView: View {
     let fee: EventFee
-    var body: some View {
-        SurfaceCard {
-            VStack(alignment: .leading, spacing: 11) {
-                Label("活动费用边界", systemImage: "hand.raised.fill").font(.headline)
-                Text(fee.boundaryStatement).font(.subheadline).foregroundStyle(SpottColor.muted).lineSpacing(3)
-                if let collector = fee.collectorName { LabeledContent("收款主体", value: collector) }
-                if let method = fee.method { LabeledContent("方式", value: method) }
-                if let deadline = fee.paymentDeadlineText { LabeledContent("付款期限", value: deadline) }
-                if let policy = fee.refundPolicy { Divider(); Text(policy).font(.caption).foregroundStyle(SpottColor.muted) }
-            }
-        }
-    }
-}
+    let locale: Locale
 
-private struct OrganizerCard: View {
-    let event: EventSummary
     var body: some View {
-        HStack(spacing: 13) {
-            Circle()
-                .fill(LinearGradient(colors: [Color(red: 0.18, green: 0.33, blue: 0.46), SpottColor.twilight], startPoint: .topLeading, endPoint: .bottomTrailing))
-                .frame(width: 52, height: 52)
-                .overlay(Text(String((event.organizerName ?? event.organizerHandle ?? "S").prefix(1))).font(.title3.bold()).foregroundStyle(.white))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(event.organizerName ?? "Spott 局头").font(.system(size: 16, weight: .bold, design: .rounded))
-                Text("@\(event.organizerHandle ?? String(event.organizerId.uuidString.prefix(8))) · 手机号已验证")
-                    .font(.caption).foregroundStyle(SpottColor.muted)
+        VStack(alignment: .leading, spacing: 12) {
+            Label(text("journey.detail.payment_details"), systemImage: "yensign.circle")
+                .font(.title3.bold())
+                .accessibilityAddTraits(.isHeader)
+
+            if let collector = nonempty(fee.collectorName) {
+                LabeledContent(text("journey.detail.payment_collector"), value: collector)
             }
-            Spacer()
-            Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(SpottColor.muted)
+            if let method = nonempty(fee.method) {
+                LabeledContent(text("journey.detail.payment_method"), value: method)
+            }
+            if let deadline = nonempty(fee.paymentDeadlineText) {
+                LabeledContent(text("journey.detail.payment_deadline"), value: deadline)
+            }
+            if let refundPolicy = nonempty(fee.refundPolicy) {
+                Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(text("journey.detail.refund_policy"))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(refundPolicy)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
         .padding(16)
-        .background(SpottColor.surface, in: RoundedRectangle(cornerRadius: SpottMetric.cardRadius))
-        .overlay(RoundedRectangle(cornerRadius: SpottMetric.cardRadius).stroke(SpottColor.divider))
+        .background(
+            Color(uiColor: .secondarySystemGroupedBackground),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
+    }
+
+    private func nonempty(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        return value
+    }
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        CoreJourneyLocalization.text(key, locale: locale)
     }
 }
 
-private struct RiskDisclosure: View {
-    let flags: [String]
+struct OrganizerTrustPresentation: Equatable, Sendable {
+    let sectionTitle: String
+    let name: String
+    let handle: String
+    let initial: String
+    let signals: [String]
+
+    init(organizer: EventOrganizer, locale: Locale) {
+        sectionTitle = CoreJourneyLocalization.text(
+            "journey.detail.organizer",
+            locale: locale
+        )
+        name = organizer.name
+        handle = "@\(organizer.handle)"
+        initial = String(organizer.name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1))
+
+        var values: [String] = []
+        if organizer.trust.phoneVerified {
+            values.append(
+                CoreJourneyLocalization.text(
+                    "journey.detail.verified_host",
+                    locale: locale
+                )
+            )
+        }
+        if organizer.trust.completedEventCount > 0 {
+            values.append(
+                CoreJourneyLocalization.format(
+                    "journey.detail.completed_events",
+                    locale: locale,
+                    organizer.trust.completedEventCount
+                )
+            )
+        }
+        let attendanceKey: String.LocalizationValue = switch organizer.trust.attendanceRateBand {
+        case .unavailable: "journey.detail.attendance_unavailable"
+        case .under70: "journey.detail.attendance_under70"
+        case .from70To89: "journey.detail.attendance_70_89"
+        case .over90: "journey.detail.attendance_90_plus"
+        }
+        values.append(CoreJourneyLocalization.text(attendanceKey, locale: locale))
+        signals = values
+    }
+}
+
+private struct OrganizerTrustView: View {
+    let organizer: EventOrganizer
+    let locale: Locale
+
+    private var presentation: OrganizerTrustPresentation {
+        .init(organizer: organizer, locale: locale)
+    }
+
+    private var avatarSeedColor: Color {
+        let palette = [
+            SpottColor.twilight,
+            SpottColor.coral,
+            SpottColor.mint,
+            SpottColor.amber,
+            SpottColor.twilightDeep
+        ]
+        let seed = presentation.name.unicodeScalars
+            .reduce(7) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF }
+        return palette[seed % palette.count]
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("活动风险披露", systemImage: "exclamationmark.shield")
-                .font(.headline)
-            Text(flags.map(display).joined(separator: " · "))
-                .font(.subheadline).foregroundStyle(SpottColor.muted)
-        }
-        .padding(16)
-        .background(SpottColor.amber.opacity(0.09), in: RoundedRectangle(cornerRadius: 17))
-    }
-    private func display(_ value: String) -> String { ["alcohol": "酒精", "late_night": "深夜", "family": "亲子", "minors": "未成年人", "outdoor": "户外", "mountain": "山地", "water": "涉水", "high_fee": "高额费用", "career": "职业招募", "investment": "投资相关", "gender_limited": "性别限制"][value] ?? value }
-}
+            Text(presentation.sectionTitle)
+                .font(.title3.bold())
+                .accessibilityAddTraits(.isHeader)
 
-private struct SafetyNote: View {
-    var body: some View {
-        Label {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("见面安全提示").font(.subheadline.bold())
-                Text("首次见面请选择公共场所，不要在 Spott 外预付不明款项。")
-                    .font(.caption).foregroundStyle(SpottColor.muted)
-            }
-        } icon: {
-            Image(systemName: "shield.lefthalf.filled").foregroundStyle(SpottColor.mint)
-        }
-        .padding(16)
-        .background(SpottColor.mint.opacity(0.08), in: RoundedRectangle(cornerRadius: 17))
-    }
-}
-
-private struct RegistrationSheet: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    let event: EventSummary
-    let completion: (Registration) -> Void
-    @State private var partySize: Int
-    @State private var joinWaitlist: Bool
-    @State private var answers: [UUID: RegistrationAnswer]
-    @State private var attendeeNote: String
-    @State private var submitting = false
-    @State private var error: UserFacingError?
-
-    init(
-        event: EventSummary,
-        draft: DeferredRegistrationDraft = .init(),
-        completion: @escaping (Registration) -> Void
-    ) {
-        self.event = event
-        self.completion = completion
-        _partySize = State(initialValue: draft.partySize)
-        _joinWaitlist = State(initialValue: draft.joinWaitlistIfFull)
-        _answers = State(initialValue: draft.answers)
-        _attendeeNote = State(initialValue: draft.attendeeNote)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("报名确认") {
-                    Text(event.title).font(.headline)
-                    Stepper("参加人数：\(partySize)", value: $partySize, in: 1...10)
-                    Toggle("满员时加入候补", isOn: $joinWaitlist)
+            content
+                .background(
+                    Color(uiColor: .secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
                 }
-                if let questions = event.registrationQuestions, !questions.isEmpty {
-                    Section("报名问题") {
-                        ForEach(questions) { question in
-                            questionField(question)
+        }
+    }
+
+    private var content: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 14) {
+                avatar
+                organizerSummary
+                Spacer(minLength: 4)
+                disclosureIndicator
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                avatar
+                organizerSummary
+                disclosureIndicator
+            }
+        }
+        .padding(16)
+        .contentShape(.rect)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("event.detail.organizer")
+    }
+
+    private var avatar: some View {
+        ZStack {
+            // Restraint: a single seeded brand hue, not a twilight→mint rainbow.
+            // Matches the kit's AvatarInitialCircle so identity chips read as one
+            // system across the app.
+            Circle()
+                .fill(avatarSeedColor.gradient)
+            Text(presentation.initial.isEmpty ? "S" : presentation.initial)
+                .font(.title3.bold())
+                .foregroundStyle(.white)
+        }
+        .frame(width: 52, height: 52)
+        .accessibilityHidden(true)
+    }
+
+    private var organizerSummary: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(presentation.name)
+                .font(.headline)
+                .lineLimit(2)
+            Text(presentation.handle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(presentation.signals.joined(separator: " · "))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var disclosureIndicator: some View {
+        Image(systemName: "chevron.right")
+            .font(.caption.bold())
+            .foregroundStyle(.tertiary)
+            .accessibilityHidden(true)
+    }
+}
+
+/// "Who's coming" social-proof wall (Luma signature). Renders the confirmed head
+/// count with a row of overlapping, real attendee avatars. Each avatar deep-links
+/// to that attendee's public profile. Only reached when the organizer exposes the
+/// guest list and at least one attendee has confirmed — the parent gates on that.
+private struct EventGoingPreviewView: View {
+    let preview: GoingPreview
+    let locale: Locale
+
+    private static let displayCap = 6
+    private let avatarDiameter: CGFloat = 40
+    private let avatarOverlap: CGFloat = 13
+
+    private var visible: [GoingPreview.Attendee] {
+        Array(preview.previews.prefix(Self.displayCap))
+    }
+
+    private var overflow: Int {
+        max(0, preview.confirmedCount - visible.count)
+    }
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        EventDetailExtrasLocalization.text(key, locale: locale)
+    }
+
+    private var countLabel: String {
+        EventDetailExtrasLocalization.format(
+            "eventdetail.going.count",
+            locale: locale,
+            preview.confirmedCount
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(text("eventdetail.going.title"))
+                .font(.title3.bold())
+                .accessibilityAddTraits(.isHeader)
+
+            HStack(spacing: 12) {
+                avatarWall
+                Text(countLabel)
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .background(
+                Color(uiColor: .secondarySystemGroupedBackground),
+                in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("event.detail.going")
+    }
+
+    private var avatarWall: some View {
+        HStack(spacing: -avatarOverlap) {
+            ForEach(visible) { attendee in
+                NavigationLink {
+                    PublicProfileView(identifier: attendee.userId.uuidString.lowercased())
+                } label: {
+                    EventAttendeeAvatar(attendee: attendee, diameter: avatarDiameter)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(attendee.displayName)
+            }
+
+            if overflow > 0 {
+                overflowChip
+            }
+        }
+    }
+
+    private var overflowChip: some View {
+        ZStack {
+            Circle().fill(SpottColor.muted.opacity(0.18))
+            Text(verbatim: "+\(overflow)")
+                .font(.caption.weight(.bold))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: avatarDiameter, height: avatarDiameter)
+        .overlay(Circle().stroke(Color(uiColor: .secondarySystemGroupedBackground), lineWidth: 2))
+        .accessibilityHidden(true)
+    }
+}
+
+/// A single attendee identity chip: the real profile photo when the attendee has
+/// one, otherwise a seeded monogram derived from their public display name. No
+/// stock or fabricated faces — an attendee without a photo shows their initial.
+private struct EventAttendeeAvatar: View {
+    let attendee: GoingPreview.Attendee
+    let diameter: CGFloat
+
+    private var initial: String {
+        let trimmed = attendee.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stripped = trimmed.hasPrefix("@") ? String(trimmed.dropFirst()) : trimmed
+        return String(stripped.prefix(1)).uppercased()
+    }
+
+    private var seedColor: Color {
+        let palette = [
+            SpottColor.twilight,
+            SpottColor.coral,
+            SpottColor.mint,
+            SpottColor.amber,
+            SpottColor.twilightDeep
+        ]
+        let seed = attendee.userId.uuidString.unicodeScalars
+            .reduce(7) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF }
+        return palette[seed % palette.count]
+    }
+
+    var body: some View {
+        ZStack {
+            if let url = attendee.avatarURL {
+                AsyncImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    monogram
+                }
+            } else {
+                monogram
+            }
+        }
+        .frame(width: diameter, height: diameter)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(Color(uiColor: .secondarySystemGroupedBackground), lineWidth: 2))
+    }
+
+    private var monogram: some View {
+        ZStack {
+            Circle().fill(seedColor.gradient)
+            Text(initial.isEmpty ? "S" : initial)
+                .font(.subheadline.bold())
+                .foregroundStyle(.white)
+        }
+    }
+}
+
+private struct EventRiskDisclosureView: View {
+    let flags: [String]
+    let details: [String: String]
+    let locale: Locale
+
+    var body: some View {
+        if !flags.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                Label(text("journey.detail.risk_title"), systemImage: "exclamationmark.shield.fill")
+                    .font(.title3.bold())
+                    .foregroundStyle(SpottColor.amber)
+                    .accessibilityAddTraits(.isHeader)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(flags.enumerated()), id: \.offset) { _, flag in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(title(for: flag))
+                                .font(.subheadline.weight(.semibold))
+                            if let detail = nonempty(details[flag]) {
+                                Text(detail)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     }
                 }
-                Section("给局头的备注") {
-                    TextField("饮食、无障碍或其他需要说明的事项（选填）", text: $attendeeNote, axis: .vertical)
-                        .lineLimit(2...5)
-                    Text("仅局头和必要的活动管理员可见，最多 1000 字。")
-                        .font(.caption)
-                        .foregroundStyle(SpottColor.muted)
-                }
-                Section("积分与收费") {
-                    LabeledContent("Spott 报名积分", value: "10")
-                    Text(event.fee?.boundaryStatement ?? "Spott 报名积分不等同活动费用。")
-                        .font(.caption).foregroundStyle(SpottColor.muted)
-                }
-                if let error { Section { Text("\(error.message)（\(error.id)）").foregroundStyle(SpottColor.danger) } }
-                Section {
-                    Button { submit() } label: { if submitting { ProgressView().frame(maxWidth: .infinity) } else { Text("确认并报名").frame(maxWidth: .infinity) } }
-                        .buttonStyle(PrimaryButtonStyle())
-                        .disabled(submitting || !requiredAnswersComplete || attendeeNote.count > 1_000)
-                }
-            }
-            .navigationTitle("报名")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
-        }
-    }
-
-    @ViewBuilder
-    private func questionField(_ question: RegistrationQuestion) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(question.prompt)
-                    .font(.subheadline.weight(.semibold))
-                if question.required {
-                    Text("必填")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(SpottColor.coral)
-                }
-            }
-
-            switch question.kind {
-            case .text:
-                TextField("请输入回答", text: stringAnswerBinding(for: question), axis: .vertical)
-                    .lineLimit(2...6)
-            case .singleChoice:
-                Picker("请选择", selection: stringAnswerBinding(for: question)) {
-                    Text("请选择").tag("")
-                    ForEach(question.options, id: \.self) { Text($0).tag($0) }
-                }
-                .pickerStyle(.menu)
-            case .boolean:
-                Picker("请选择", selection: booleanAnswerBinding(for: question)) {
-                    Text("请选择").tag(Optional<Bool>.none)
-                    Text("是").tag(Optional(true))
-                    Text("否").tag(Optional(false))
-                }
-                .pickerStyle(.segmented)
-            }
-        }
-        .padding(.vertical, 3)
-    }
-
-    private func stringAnswerBinding(for question: RegistrationQuestion) -> Binding<String> {
-        Binding {
-            switch answers[question.id] {
-            case .text(let value), .choice(let value): value
-            default: ""
-            }
-        } set: { value in
-            answers[question.id] = question.kind == .singleChoice ? .choice(value) : .text(value)
-        }
-    }
-
-    private func booleanAnswerBinding(for question: RegistrationQuestion) -> Binding<Bool?> {
-        Binding {
-            if case .boolean(let value) = answers[question.id] { return value }
-            return nil
-        } set: { value in
-            if let value { answers[question.id] = .boolean(value) }
-            else { answers.removeValue(forKey: question.id) }
-        }
-    }
-
-    private var requiredAnswersComplete: Bool {
-        (event.registrationQuestions ?? []).allSatisfy { question in
-            guard question.required else { return true }
-            switch answers[question.id] {
-            case .text(let value): return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && value.count <= 1_000
-            case .choice(let value): return question.options.contains(value)
-            case .boolean: return true
-            case nil: return false
-            }
-        }
-    }
-
-    private var sanitizedAnswers: [UUID: RegistrationAnswer] {
-        answers.filter { _, answer in
-            switch answer {
-            case .text(let value), .choice(let value): !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .boolean: true
-            }
-        }
-    }
-
-    private func submit() {
-        submitting = true; error = nil
-        Task {
-            do {
-                let quote = try await model.api.quote(purpose: "registration", resourceID: event.id)
-                let registration = try await model.api.register(
-                    eventID: event.id,
-                    partySize: partySize,
-                    quoteID: quote.id,
-                    expectedEventVersion: event.version,
-                    joinWaitlist: joinWaitlist,
-                    answers: sanitizedAnswers,
-                    attendeeNote: attendeeNote,
-                    idempotencyKey: UUID()
+                .padding(16)
+                .background(
+                    SpottColor.amber.opacity(0.09),
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous)
                 )
-                model.trackAnalytics(.registrationCompleted(
-                    eventID: event.id,
-                    status: registration.status,
-                    partySize: partySize
-                ))
-                completion(registration); dismiss()
-            } catch { self.error = AppModel.map(error) }
-            submitting = false
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(SpottColor.amber.opacity(0.22), lineWidth: 0.5)
+                }
+            }
+            .accessibilityIdentifier("event.detail.risk_disclosure")
         }
+    }
+
+    private func title(for flag: String) -> String {
+        let key: String.LocalizationValue = switch flag {
+        case "alcohol": "journey.detail.risk.alcohol"
+        case "late_night": "journey.detail.risk.late_night"
+        case "family", "minors": "journey.detail.risk.family"
+        case "outdoor": "journey.detail.risk.outdoor"
+        case "mountain": "journey.detail.risk.mountain"
+        case "water": "journey.detail.risk.water"
+        case "high_fee": "journey.detail.risk.high_fee"
+        case "career", "investment": "journey.detail.risk.financial"
+        case "gender_limited": "journey.detail.risk.gender_limited"
+        default: "journey.detail.risk.other"
+        }
+        return text(key)
+    }
+
+    private func nonempty(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        return value
+    }
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        CoreJourneyLocalization.text(key, locale: locale)
     }
 }
 
-private extension Optional where Wrapped == [String] {
-    var orEmpty: [String] { self ?? [] }
+private struct EventSafetyNoteView: View {
+    let locale: Locale
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 13) {
+            Image(systemName: "checkmark.shield.fill")
+                .font(.title3)
+                .foregroundStyle(SpottColor.mint)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(text("journey.detail.safety_title"))
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                Text(text("journey.detail.safety_body"))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            SpottColor.mint.opacity(0.09),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(SpottColor.mint.opacity(0.20), lineWidth: 0.5)
+        }
+        .accessibilityIdentifier("event.detail.safety_note")
+    }
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        CoreJourneyLocalization.text(key, locale: locale)
+    }
+}
+
+private struct RegistrationQuestionPreviewView: View {
+    let questions: [RegistrationQuestion]
+    let locale: Locale
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(text("journey.detail.questions_title"))
+                    .font(.title3.bold())
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                Text(
+                    CoreJourneyLocalization.format(
+                        "journey.detail.questions_count",
+                        locale: locale,
+                        questions.count
+                    )
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(questions.prefix(3)) { question in
+                    HStack(alignment: .top, spacing: 9) {
+                        Image(systemName: "text.bubble")
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Text(question.prompt)
+                            .font(.subheadline)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 4)
+                        Text(
+                            text(
+                                question.required
+                                    ? "journey.registration.required"
+                                    : "journey.registration.optional"
+                            )
+                        )
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(16)
+            .background(
+                Color(uiColor: .secondarySystemGroupedBackground),
+                in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+            )
+        }
+        .accessibilityIdentifier("event.detail.registration_questions")
+    }
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        CoreJourneyLocalization.text(key, locale: locale)
+    }
+}
+
+private struct EventFeedbackSummaryView: View {
+    let summary: FeedbackSummary
+    let locale: Locale
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Label {
+                    Text(text("journey.detail.feedback_title"))
+                } icon: {
+                    Image(systemName: "sparkles").foregroundStyle(SpottColor.amber)
+                }
+                .font(.title3.bold())
+                .accessibilityAddTraits(.isHeader)
+                Spacer()
+                Text(
+                    CoreJourneyLocalization.format(
+                        "journey.detail.feedback_count",
+                        locale: locale,
+                        summary.sampleSize
+                    )
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            }
+
+            if summary.published {
+                ForEach(summary.tags.prefix(4)) { item in
+                    HStack {
+                        Text(tagTitle(item.tag))
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text(item.rate, format: .percent.precision(.fractionLength(0)))
+                            .font(.subheadline.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text(text("journey.detail.feedback_privacy"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(
+                    CoreJourneyLocalization.format(
+                        "journey.detail.feedback_threshold",
+                        locale: locale,
+                        summary.sampleSize,
+                        summary.minimumSampleSize
+                    )
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .background(
+            Color(uiColor: .secondarySystemGroupedBackground),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
+        .accessibilityIdentifier("event.detail.feedback_summary")
+    }
+
+    private func tagTitle(_ tag: FeedbackTag) -> String {
+        let key: String.LocalizationValue = switch tag {
+        case .friendly: "journey.feedback.tag.friendly"
+        case .wellOrganized: "journey.feedback.tag.well_organized"
+        case .clearInformation: "journey.feedback.tag.clear_information"
+        case .safe: "journey.feedback.tag.safe"
+        case .wouldJoinAgain: "journey.feedback.tag.join_again"
+        }
+        return text(key)
+    }
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        CoreJourneyLocalization.text(key, locale: locale)
+    }
 }

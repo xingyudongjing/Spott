@@ -4,27 +4,42 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { useI18n } from "../../components/I18nProvider";
-import type { RegistrationView } from "../../lib/client-api";
+import { apiRequest, readSession, type RegistrationView } from "../../lib/client-api";
 import type { EventDetail } from "../../lib/event-contract";
 import { EventSummary } from "./RegistrationForms";
 import styles from "./RegistrationFlow.module.css";
 import { RegistrationHeader } from "./RegistrationHeader";
+import type { EventTicketType } from "./registration-model";
 
 export function RegistrationConfirmation({
   event,
   registration,
+  ticketType = null,
 }: {
   event: EventDetail;
   registration: RegistrationView;
+  ticketType?: EventTicketType | null;
 }) {
   const { t } = useI18n();
   const [shareNotice, setShareNotice] = useState<{ message: string; error: boolean } | null>(null);
+  // Rehydrate the off-platform payment claim from the persisted registration so
+  // the "reported / confirmed" state survives a reload instead of resetting.
+  const [paymentReported, setPaymentReported] = useState(
+    Boolean(registration.paymentSelfReportedAt),
+  );
+  const paymentConfirmed = Boolean(registration.paymentConfirmedAt);
+  const [paymentBusy, setPaymentBusy] = useState(false);
+  const [paymentError, setPaymentError] = useState("");
   const status = registration.status === "pending" ? "pending" : registration.status === "waitlisted" ? "waitlisted" : "confirmed";
   const title = status === "pending"
     ? t("registration.pendingTitle")
     : status === "waitlisted"
       ? t("registration.waitlistSuccess")
       : t("registration.confirmedTitle");
+  // Only a confirmed registration on a paid tier (or a paid single-fee event) has
+  // anything to settle off-platform — Spott records the claim, never the money.
+  const paidRegistration = ticketType ? !ticketType.isFree : Boolean(event.fee && !event.fee.isFree);
+  const paymentReportable = status === "confirmed" && paidRegistration;
   const body = status === "pending"
     ? t("registration.pendingBody")
     : status === "waitlisted"
@@ -53,18 +68,60 @@ export function RegistrationConfirmation({
     URL.revokeObjectURL(anchor.href);
   }
 
-  async function share() {
-    const url = `${window.location.origin}/e/${event.publicSlug}`;
-    setShareNotice(null);
+  // The attendee just committed to this event, so their invite is the highest
+  // intent share Spott ever sees: attribute it, and fall back to the canonical
+  // public URL whenever the attributed link cannot be minted.
+  async function inviteURL(): Promise<string> {
+    const canonical = `${window.location.origin}/e/${event.publicSlug}`;
+    if (!readSession()) return canonical;
     try {
-      if (navigator.share) await navigator.share({ title: event.title, url });
-      else {
-        await navigator.clipboard.writeText(url);
-        setShareNotice({ message: t("event.linkCopied"), error: false });
+      const created = await apiRequest<{ url?: string }>("/shares", {
+        method: "POST",
+        authenticated: true,
+        body: JSON.stringify({
+          resourceType: "event",
+          resourceId: event.id,
+          campaign: "web_registration_confirmation",
+        }),
+      });
+      return typeof created?.url === "string" && created.url ? created.url : canonical;
+    } catch {
+      return canonical;
+    }
+  }
+
+  async function share() {
+    setShareNotice(null);
+    const url = await inviteURL();
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: event.title, url });
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
       }
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      setShareNotice({ message: t("event.linkCopied"), error: false });
+    } catch {
       setShareNotice({ message: t("registration.shareError"), error: true });
+    }
+  }
+
+  async function reportPayment() {
+    setPaymentBusy(true);
+    setPaymentError("");
+    try {
+      await apiRequest(`/registrations/${registration.id}/payment-report`, {
+        method: "POST",
+        authenticated: true,
+      });
+      setPaymentReported(true);
+    } catch {
+      setPaymentError(t("payment.reportError"));
+    } finally {
+      setPaymentBusy(false);
     }
   }
 
@@ -81,10 +138,27 @@ export function RegistrationConfirmation({
         <p className={styles.partyConfirmation}>{t("registration.partySummary", { count: registration.partySize })}</p>
         <div className={styles.confirmationUtilities}>
           {event.startsAt && event.endsAt ? <button type="button" onClick={addToCalendar}>{t("event.calendar")}</button> : null}
-          <button type="button" onClick={() => void share()}>{t("event.share")}</button>
+          <button type="button" onClick={() => void share()}>{t("registration.invite")}</button>
         </div>
         {shareNotice ? (
           <p className={styles.shareNotice} role={shareNotice.error ? "alert" : "status"}>{shareNotice.message}</p>
+        ) : null}
+        {paymentReportable ? (
+          <section className={styles.paymentReport}>
+            {paymentConfirmed ? (
+              <span className={styles.paymentConfirmed}>✓ {t("payment.confirmed")}</span>
+            ) : paymentReported ? (
+              <span className={styles.paymentReported}>{t("payment.reported")}</span>
+            ) : (
+              <>
+                <button type="button" disabled={paymentBusy} aria-busy={paymentBusy} onClick={() => void reportPayment()}>
+                  {paymentBusy ? t("payment.reporting") : t("payment.reportAction")}
+                </button>
+                <small>{t("payment.reportHint")}</small>
+              </>
+            )}
+            {paymentError ? <p className={styles.paymentError} role="alert">{paymentError}</p> : null}
+          </section>
         ) : null}
         <Link className={styles.confirmationPrimary} href="/me/events">{t("registration.viewItinerary")}</Link>
         <Link className={styles.confirmationSecondary} href={`/e/${event.publicSlug}`}>{t("registration.backEvent")}</Link>

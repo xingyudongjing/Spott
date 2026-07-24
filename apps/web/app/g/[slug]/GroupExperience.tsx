@@ -7,6 +7,7 @@ import { EventCard } from '../../components/EventCard';
 import { useI18n } from '../../components/I18nProvider';
 import { usePreviewMode } from '../../components/PreviewModeProvider';
 import { ReadOnlyCommunityNotice } from '../../components/ReadOnlyCommunityNotice';
+import type { MessageKey } from '../../i18n/messages';
 import { normalizeEvent } from '../../lib/api';
 import type { EventView } from '../../lib/demo-data';
 import {
@@ -18,6 +19,16 @@ import {
   type GroupView,
 } from '../../lib/client-api';
 import { GroupDiscussion } from './GroupDiscussion';
+import { GroupDiscussionThreads } from './GroupDiscussionThreads';
+import styles from './GroupExperience.module.css';
+
+type GroupSection = 'overview' | 'discussion' | 'announcements';
+
+const sections: Array<{ id: GroupSection; label: MessageKey }> = [
+  { id: 'overview', label: 'group.sectionOverview' },
+  { id: 'discussion', label: 'group.sectionDiscussion' },
+  { id: 'announcements', label: 'group.sectionAnnouncements' },
+];
 
 export function GroupExperience({ slug }: { slug: string }) {
   const { locale, t } = useI18n();
@@ -25,6 +36,8 @@ export function GroupExperience({ slug }: { slug: string }) {
   const [group, setGroup] = useState<GroupView | null>(null);
   const [events, setEvents] = useState<EventView[]>([]);
   const [announcements, setAnnouncements] = useState<GroupAnnouncement[]>([]);
+  const [announcementCursor, setAnnouncementCursor] = useState<string | null>(null);
+  const [section, setSection] = useState<GroupSection>('overview');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -39,15 +52,20 @@ export function GroupExperience({ slug }: { slug: string }) {
         apiRequest<{
           items: Array<Partial<EventView> & Pick<EventView, 'id' | 'publicSlug' | 'title'>>;
         }>('/events/search?limit=100'),
-        apiRequest<{ items: GroupAnnouncement[] }>(`/groups/${value.id}/announcements?limit=30`),
+        apiRequest<{ items: GroupAnnouncement[]; hasMore?: boolean; nextCursor?: string | null }>(
+          `/groups/${value.id}/announcements?limit=30`,
+        ),
       ]);
       if (eventResult.status === 'fulfilled')
         setEvents(
           eventResult.value.items.map(normalizeEvent).filter((event) => event.groupId === value.id),
         );
-      if (announcementResult.status === 'fulfilled')
+      if (announcementResult.status === 'fulfilled') {
         setAnnouncements(announcementResult.value.items);
-      else if (!(
+        setAnnouncementCursor(
+          announcementResult.value.hasMore ? announcementResult.value.nextCursor ?? null : null,
+        );
+      } else if (!(
         announcementResult.reason instanceof APIError && announcementResult.reason.status === 404
       ))
         setMessage(errorMessage(announcementResult.reason));
@@ -133,17 +151,15 @@ export function GroupExperience({ slug }: { slug: string }) {
     return (
       <main className="standard-shell">
         <div className="empty-state">
-          <h1>
-            {locale === 'ja'
-              ? 'グループが見つかりません'
-              : locale === 'en'
-                ? 'Group not found'
-                : '群组不存在'}
-          </h1>
-          <p>{message}</p>
+          <span className="spotlight-empty" />
+          <h1>{t('group.notFoundTitle')}</h1>
+          <p>{t('group.notFoundBody')}</p>
           <Link className="primary-action compact" href="/groups">
             {t('group.directory')}
           </Link>
+          <button type="button" onClick={() => void load()}>
+            {t('common.retry')}
+          </button>
         </div>
       </main>
     );
@@ -216,6 +232,12 @@ export function GroupExperience({ slug }: { slug: string }) {
                       ? 'Follow group'
                       : '关注群组'}
               </button>
+              <Link
+                className={styles.reportLink}
+                href={`/reports/new?targetType=group&targetId=${encodeURIComponent(group.id)}`}
+              >
+                {t('group.report')}
+              </Link>
             </div>
           ) : null}
         </section>
@@ -225,39 +247,91 @@ export function GroupExperience({ slug }: { slug: string }) {
             {message}
           </p>
         )}
-        <section className="event-section group-events">
-          <div className="section-heading">
-            <div>
-              <span className="section-number">UP NEXT</span>
-              <h2>{t('group.events')}</h2>
-            </div>
-          </div>
-          {events.length ? (
-            <div className="event-grid wide">
-              {events.map((event) => (
-                <EventCard key={event.id} event={event} />
-              ))}
-            </div>
-          ) : (
-            <div className="empty-state compact-empty">
-              <h2>
-                {locale === 'ja'
-                  ? '予定されているイベントはありません'
-                  : locale === 'en'
-                    ? 'No upcoming events'
-                    : '暂时没有即将开始的群组活动'}
-              </h2>
-              <p>
-                {locale === 'ja'
-                  ? '新しいイベントは Web と iOS に同時に表示されます。'
-                  : locale === 'en'
-                    ? 'New events will appear on Web and iOS at the same time.'
-                    : '新活动发布后会同时出现在 Web 与 iOS。'}
-              </p>
-            </div>
-          )}
-        </section>
-        <GroupDiscussion group={group} initialItems={announcements} />
+        <div className={styles.sectionNav} role="tablist" aria-label={t('group.sectionsLabel')}>
+          {sections.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              id={`group-tab-${item.id}`}
+              className={styles.sectionTab}
+              aria-selected={section === item.id}
+              aria-controls="group-panel"
+              onClick={() => setSection(item.id)}
+            >
+              {t(item.label)}
+            </button>
+          ))}
+        </div>
+        <div
+          className={styles.panel}
+          role="tabpanel"
+          id="group-panel"
+          aria-labelledby={`group-tab-${section}`}
+        >
+          {section === 'overview' ? (
+            <>
+              <section className="event-section group-events">
+                <div className="section-heading">
+                  <div>
+                    <span className="section-number">UP NEXT</span>
+                    <h2>{t('group.events')}</h2>
+                  </div>
+                </div>
+                {events.length ? (
+                  <div className="event-grid wide">
+                    {events.map((event) => (
+                      <EventCard key={event.id} event={event} />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-state compact-empty">
+                    <h2>
+                      {locale === 'ja'
+                        ? '予定されているイベントはありません'
+                        : locale === 'en'
+                          ? 'No upcoming events'
+                          : '暂时没有即将开始的群组活动'}
+                    </h2>
+                    <p>
+                      {locale === 'ja'
+                        ? '新しいイベントは Web と iOS に同時に表示されます。'
+                        : locale === 'en'
+                          ? 'New events will appear on Web and iOS at the same time.'
+                          : '新活动发布后会同时出现在 Web 与 iOS。'}
+                    </p>
+                  </div>
+                )}
+              </section>
+              <section className={styles.about}>
+                <h2>{t('group.about')}</h2>
+                {group.description || group.rules ? (
+                  <>
+                    {group.description ? <p>{group.description}</p> : null}
+                    {group.rules ? (
+                      <div className={styles.rules}>
+                        <h3>{t('group.rules')}</h3>
+                        <p>{group.rules}</p>
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className={styles.muted}>{t('group.aboutEmptyBody')}</p>
+                )}
+              </section>
+            </>
+          ) : null}
+          {section === 'discussion' ? (
+            <GroupDiscussionThreads group={group} onJoin={() => void join()} joinBusy={busy} />
+          ) : null}
+          {section === 'announcements' ? (
+            <GroupDiscussion
+              group={group}
+              initialItems={announcements}
+              initialCursor={announcementCursor}
+            />
+          ) : null}
+        </div>
       </div>
       <Footer />
     </main>

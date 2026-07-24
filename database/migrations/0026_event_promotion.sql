@@ -5,6 +5,7 @@
 -- window, the promotion auto-expires, and a review takedown or platform fault
 -- returns points pro-rata through a ledger Reversal. This never touches activity
 -- fees — Spott does not collect or settle event money.
+BEGIN;
 
 CREATE TABLE commerce.event_promotions (
   id uuid PRIMARY KEY DEFAULT uuidv7(),
@@ -53,3 +54,5 @@ ON CONFLICT (key) DO UPDATE SET
   conditions = EXCLUDED.conditions,
   description = EXCLUDED.description,
   updated_at = clock_timestamp();
+
+COMMIT;

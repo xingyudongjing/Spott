@@ -130,7 +130,7 @@
     {
       "sequence": 26,
       "filename": "0026_event_promotion.sql",
-      "sha256": "a2196808c41b380cc243fa19497f84fcc82b7ab18951cbe2e032e284787e7d58"
+      "sha256": "19bd9facd3dca855e8d3c32439c4b14d5957d6693f0db419c1b4a2d5f07b82d1"
     },
     {
       "sequence": 27,
@@ -141,6 +141,21 @@
       "sequence": 28,
       "filename": "0028_achievement_definitions.sql",
       "sha256": "ab7a4279eaf7b46d5a0009bea98cfe0e0b597d317d7c07ea5747e0deb0b903b2"
+    },
+    {
+      "sequence": 29,
+      "filename": "0029_password_auth.sql",
+      "sha256": "e63cd3066ed64a190e0d21a7a24b49d323a03c5355cb3e4d66857792a15fb506"
+    },
+    {
+      "sequence": 30,
+      "filename": "0030_event_guest_list.sql",
+      "sha256": "80268047c1c53930a3e51c55804342e901b6eb451858c72804188dd5358f294f"
+    },
+    {
+      "sequence": 31,
+      "filename": "0031_event_host_announcements.sql",
+      "sha256": "4be10447d9c4a030d68203809f900231afa0feeee68db67e266bd72a4ea02a83"
     }
   ]
 }

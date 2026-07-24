@@ -44,6 +44,36 @@ export async function fetchEvent(
   return parseEventDetail(await response.json());
 }
 
+export interface EventPromotionView {
+  state?: string;
+  tier?: string;
+  expiresAt?: string;
+}
+
+/**
+ * Active commercial promotion for an event (public endpoint). The detail
+ * EventView does not carry the discovery `promoted` flag, so the badge on
+ * /e/[slug] reads this instead. A badge must never break the page: any
+ * failure resolves to null.
+ */
+export async function fetchEventPromotion(
+  eventId: string,
+  options?: { signal?: AbortSignal },
+): Promise<EventPromotionView | null> {
+  try {
+    const response = await fetch(`${eventAPIBase()}/events/${encodeURIComponent(eventId)}/promotion`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: options?.signal,
+    });
+    if (!response.ok) return null;
+    const payload = await response.json() as EventPromotionView | null;
+    return payload && typeof payload === "object" ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
 function eventAPIBase(): string {
   return (
     process.env.API_INTERNAL_URL

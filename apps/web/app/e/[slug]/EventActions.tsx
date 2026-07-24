@@ -38,8 +38,11 @@ export function EventActions({
   const isReadOnly = usePreviewMode() === "read-only";
   const [favorited, setFavorited] = useState(event.favorited);
   const [following, setFollowing] = useState(event.organizer.viewerFollowing);
+  const [blockedHost, setBlockedHost] = useState(false);
+  const [blockConfirming, setBlockConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const viewerIsOrganizer = Boolean(session && session.user.id === event.organizer.id);
   const offerIdempotencyKey = useRef<string | null>(null);
   const cta = resolveEventCTA(event, {
     authenticated: Boolean(session),
@@ -104,6 +107,40 @@ export function EventActions({
       });
     } catch (error) {
       setFollowing(!next);
+      setMessage(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Blocking is one-way here, exactly like the iOS event menu: the event page
+   * never lists the viewer's blocks, so the control reports what it just did
+   * instead of pretending to know a persistent state.
+   */
+  function requestBlockHost() {
+    if (!readSession()) {
+      window.location.assign(`/login?returnTo=${encodeURIComponent(`/e/${event.publicSlug}`)}`);
+      return;
+    }
+    setMessage("");
+    setBlockConfirming(true);
+  }
+
+  async function confirmBlockHost() {
+    setBusy(true);
+    setMessage("");
+    try {
+      await apiRequest(`/users/${encodeURIComponent(event.organizer.id)}/block`, {
+        method: "PUT",
+        authenticated: true,
+        body: JSON.stringify({ reason: "event_detail_safety_boundary" }),
+      });
+      setBlockedHost(true);
+      setBlockConfirming(false);
+      setFollowing(false);
+      setMessage(t("event.blockHostDone"));
+    } catch (error) {
       setMessage(errorMessage(error));
     } finally {
       setBusy(false);
@@ -185,6 +222,31 @@ export function EventActions({
     </>
   );
 
+  // Safety actions stay a quiet text row: present on every event page, never
+  // competing with the single primary action.
+  const safetyActions = !isReadOnly && !viewerIsOrganizer ? (
+    <div className={styles.safetyActions}>
+      <Link href={`/reports/new?targetType=user&targetId=${encodeURIComponent(event.organizer.id)}`}>
+        {t("event.reportHost")}
+      </Link>
+      {blockConfirming && !blockedHost ? (
+        <>
+          <p className={styles.blockPrompt}>{t("event.blockHostConfirm", { name: event.organizer.name })}</p>
+          <button type="button" disabled={busy} onClick={() => void confirmBlockHost()}>
+            {t("event.blockHost")}
+          </button>
+          <button type="button" disabled={busy} onClick={() => setBlockConfirming(false)}>
+            {t("common.cancel")}
+          </button>
+        </>
+      ) : (
+        <button type="button" disabled={busy || blockedHost} onClick={requestBlockHost}>
+          {t("event.blockHost")}
+        </button>
+      )}
+    </div>
+  ) : null;
+
   return (
     <div className={styles.root}>
       <EventPrimaryAction
@@ -194,9 +256,13 @@ export function EventActions({
         onAccept={acceptOffer}
       />
       <div className={styles.utilities}>{utilities}</div>
+      <div className={styles.desktopSafety}>{safetyActions}</div>
       <details className={styles.mobileUtilities}>
         <summary>{t("common.moreActions")}</summary>
-        <div>{utilities}</div>
+        <div>
+          {utilities}
+          {safetyActions}
+        </div>
       </details>
       {viewerMessage || message ? (
         <p className={styles.message} role="alert">{viewerMessage || message}</p>

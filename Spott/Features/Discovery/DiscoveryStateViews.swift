@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct DiscoveryRefreshBanner: View {
+    @Environment(\.locale) private var locale
     let phase: DiscoveryPhase
     let error: UserFacingError
     let retry: () -> Void
@@ -9,18 +10,26 @@ struct DiscoveryRefreshBanner: View {
         HStack(spacing: 10) {
             Image(systemName: phase == .offline ? "wifi.slash" : "exclamationmark.triangle")
             VStack(alignment: .leading, spacing: 2) {
-                Text(phase == .offline ? "正在显示已保存的活动" : "更新失败")
-                    .font(.subheadline.weight(.semibold))
+                Text(verbatim: DiscoveryHomeLocalization.text(
+                    phase == .offline
+                        ? "discovery.state.offline"
+                        : "discovery.state.update_failed",
+                    locale: locale
+                ))
+                .font(.subheadline.weight(.semibold))
                 Text(verbatim: error.message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
             Spacer(minLength: 4)
-            Button("重试", action: retry)
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .frame(minHeight: 44)
+            Button(
+                DiscoveryHomeLocalization.text("discovery.state.retry", locale: locale),
+                action: retry
+            )
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
+            .frame(minHeight: 44)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -31,24 +40,80 @@ struct DiscoveryRefreshBanner: View {
 }
 
 struct DiscoveryEmptyState: View {
+    @Environment(\.locale) private var locale
     let store: DiscoveryStore
+    let applyWeekendPreset: () -> Void
+    let onClearNearMe: () -> Void
 
     var body: some View {
-        ContentUnavailableView {
-            Label("这个地区还没有活动", systemImage: "calendar.badge.plus")
-        } description: {
-            Text("可以切换地区、放宽筛选，或成为第一个开局的人。")
-        } actions: {
-            if store.hasActiveFilters {
-                Button("清除筛选", action: store.clearFilters)
-                    .buttonStyle(.borderedProminent)
+        ScrollView {
+            if store.hasActiveFilters || !store.searchText.trimmed.isEmpty {
+                filteredEmpty
             } else {
-                Button("重新加载", action: reload)
-                    .buttonStyle(.borderedProminent)
+                regionalEmpty
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SpottScreenBackground())
         .accessibilityIdentifier("discovery.empty")
+    }
+
+    private var regionalEmpty: some View {
+        SpottEmptyState(
+            icon: "calendar.badge.plus",
+            title: DiscoveryHomeLocalization.text("discovery.state.empty.title", locale: locale),
+            message: DiscoveryHomeLocalization.text(
+                "discovery.state.empty.message", locale: locale
+            ),
+            actionTitle: DiscoveryHomeLocalization.text(
+                "discovery.state.empty.reload", locale: locale
+            )
+        ) {
+            reload()
+        }
+        .padding(.top, 64)
+    }
+
+    private var filteredEmpty: some View {
+        VStack(spacing: 16) {
+            SpottEmptyState(
+                icon: "line.3.horizontal.decrease",
+                title: DiscoveryHomeLocalization.text(
+                    "discovery.state.results_empty.title", locale: locale
+                ),
+                message: DiscoveryHomeLocalization.text(
+                    "discovery.state.empty.message", locale: locale
+                )
+            )
+            HStack(spacing: 12) {
+                Button {
+                    onClearNearMe()
+                    store.clearFilters()
+                } label: {
+                    Text(verbatim: DiscoveryHomeLocalization.text(
+                        "discovery.state.results_empty.clear", locale: locale
+                    ))
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .frame(minHeight: 44)
+                }
+                .buttonStyle(.glassProminent)
+                .buttonBorderShape(.capsule)
+                .tint(SpottColor.twilight)
+
+                Button(action: applyWeekendPreset) {
+                    Text(verbatim: DiscoveryHomeLocalization.text(
+                        "discovery.state.results_empty.weekend", locale: locale
+                    ))
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .frame(minHeight: 44)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+                .tint(SpottColor.ink)
+            }
+        }
+        .padding(.top, 64)
     }
 
     private func reload() {
@@ -57,21 +122,39 @@ struct DiscoveryEmptyState: View {
 }
 
 struct DiscoveryErrorState: View {
+    @Environment(\.locale) private var locale
     let store: DiscoveryStore
 
     var body: some View {
-        ContentUnavailableView {
-            Label("暂时无法加载", systemImage: "wifi.exclamationmark")
-        } description: {
-            if let error = store.fatalError {
-                Text("\(error.message)\n错误编号：\(error.id)")
+        ScrollView {
+            VStack(spacing: 8) {
+                SpottEmptyState(
+                    icon: "wifi.exclamationmark",
+                    title: DiscoveryHomeLocalization.text(
+                        "discovery.state.error.title", locale: locale
+                    ),
+                    message: errorMessage,
+                    actionTitle: DiscoveryHomeLocalization.text(
+                        "discovery.state.error.retry", locale: locale
+                    )
+                ) {
+                    reload()
+                }
             }
-        } actions: {
-            Button("重新连接", action: reload)
-                .buttonStyle(.borderedProminent)
+            .padding(.top, 64)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SpottScreenBackground())
         .accessibilityIdentifier("discovery.error")
+    }
+
+    private var errorMessage: String {
+        guard let error = store.fatalError else {
+            return DiscoveryHomeLocalization.text("discovery.state.error.title", locale: locale)
+        }
+        let code = DiscoveryHomeLocalization.format(
+            "discovery.state.error.code", locale: locale, error.id
+        )
+        return "\(error.message)\n\(code)"
     }
 
     private func reload() {
@@ -80,31 +163,90 @@ struct DiscoveryErrorState: View {
 }
 
 struct DiscoverySkeleton: View {
+    @Environment(\.locale) private var locale
+    let showsModules: Bool
+
+    init(showsModules: Bool = true) {
+        self.showsModules = showsModules
+    }
+
     var body: some View {
-        List(0 ..< 5, id: \.self) { _ in
-            DiscoverySkeletonRow()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.secondary.opacity(0.12))
+                    .frame(width: 180, height: 14)
+                    .padding(.horizontal, 16)
+                if showsModules {
+                    DiscoveryFeedSkeleton()
+                }
+                VStack(spacing: 16) {
+                    DiscoveryCardSkeleton()
+                    DiscoveryCardSkeleton()
+                }
+                .padding(.horizontal, 16)
+            }
+            .padding(.top, 8)
+            .spottSkeleton()
         }
-        .listStyle(.plain)
-        .accessibilityLabel("正在加载活动")
+        .scrollDisabled(true)
+        .background(SpottScreenBackground())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: DiscoveryHomeLocalization.text(
+            "discovery.state.loading", locale: locale
+        )))
         .accessibilityIdentifier("discovery.loading")
     }
 }
 
-private struct DiscoverySkeletonRow: View {
+struct DiscoveryFeedSkeleton: View {
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            RoundedRectangle(cornerRadius: 14)
+        VStack(alignment: .leading, spacing: 16) {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(Color.secondary.opacity(0.12))
-                .frame(width: 112, height: 112)
-            VStack(alignment: .leading, spacing: 10) {
-                RoundedRectangle(cornerRadius: 4).frame(width: 92, height: 11)
-                RoundedRectangle(cornerRadius: 5).frame(height: 18)
-                RoundedRectangle(cornerRadius: 4).frame(maxWidth: 170).frame(height: 12)
-                RoundedRectangle(cornerRadius: 4).frame(maxWidth: 130).frame(height: 12)
+                .frame(height: DiscoveryHeroCard.posterHeight)
+                .padding(.horizontal, 16)
+            HStack(spacing: 12) {
+                ForEach(0 ..< 2, id: \.self) { _ in
+                    VStack(alignment: .leading, spacing: 8) {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.secondary.opacity(0.12))
+                            .frame(width: 240, height: 132)
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.secondary.opacity(0.12))
+                            .frame(width: 120, height: 12)
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(Color.secondary.opacity(0.12))
+                            .frame(width: 200, height: 16)
+                    }
+                }
             }
-            .foregroundStyle(Color.secondary.opacity(0.12))
+            .padding(.horizontal, 16)
         }
-        .redacted(reason: .placeholder)
-        .listRowInsets(.init(top: 12, leading: 16, bottom: 12, trailing: 16))
+        .accessibilityHidden(true)
+    }
+}
+
+private struct DiscoveryCardSkeleton: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            RoundedRectangle(cornerRadius: 0)
+                .fill(Color.secondary.opacity(0.12))
+                .aspectRatio(16 / 9, contentMode: .fit)
+            VStack(alignment: .leading, spacing: 8) {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.secondary.opacity(0.12))
+                    .frame(width: 140, height: 11)
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(Color.secondary.opacity(0.12))
+                    .frame(height: 18)
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.secondary.opacity(0.12))
+                    .frame(width: 180, height: 12)
+            }
+            .padding(12)
+        }
+        .background(SpottColor.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }

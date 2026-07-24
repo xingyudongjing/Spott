@@ -40,6 +40,7 @@ export type EventCardEvent = Pick<
   | "organizer"
   | "capacity"
   | "availableCapacity"
+  | "promoted"
   | "waitlistEnabled"
   | "availableActions"
   | "registrationStatus"
@@ -81,6 +82,9 @@ export function EventResultCard({
         </div>
         <div className={styles.eventBody}>
           <p className={styles.eventDate}>
+            {event.promoted ? (
+              <span className={styles.promotedBadge}>{t("event.promoted")}</span>
+            ) : null}
             {eventDate(event.startsAt, locale, event.displayTimeZone)}
             <span aria-hidden="true"> · </span>
             {eventTime(event.startsAt, event.endsAt, locale, event.displayTimeZone)}

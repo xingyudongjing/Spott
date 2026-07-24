@@ -11,6 +11,8 @@ import {
 } from "../../lib/client-api";
 import { trackProductEvent } from "../../lib/analytics";
 import { DashboardNav } from "../DashboardNav";
+import { DailyCheckinCard } from "./DailyCheckinCard";
+import { PointsRules } from "./PointsRules";
 
 export function WalletClient() {
   const { locale } = useI18n();
@@ -128,6 +130,8 @@ export function WalletClient() {
             {message}
           </p>
         )}
+        <DailyCheckinCard locale={locale} onWalletUpdate={setWallet} />
+        <PointsRules />
         {wallet ? (
           <>
             <div className="wallet-cards">
@@ -214,6 +218,9 @@ function transactionLabel(type: string, locale: Locale): string {
     event_publish_hold: ["活动发布预留", "公開ポイント確保", "Event publish hold"],
     event_publish: ["活动发布", "イベント公開", "Event published"],
     storekit_credit: ["积分购买", "ポイント購入", "Points purchase"],
+    daily_checkin_reward: ["每日签到奖励", "毎日チェックインボーナス", "Daily check-in reward"],
+    streak_7_reward: ["连续 7 天签到奖励", "7日連続ボーナス", "7-day streak bonus"],
+    streak_30_reward: ["连续 30 天签到奖励", "30日連続ボーナス", "30-day streak bonus"],
     attendance_reward: ["活动到场奖励", "参加ボーナス", "Attendance reward"],
     feedback_reward: ["反馈奖励", "フィードバックボーナス", "Feedback reward"],
     host_completion_reward: ["活动完成奖励", "主催完了ボーナス", "Host completion reward"],

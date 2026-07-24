@@ -1,0 +1,141 @@
+"discovery.title" = "发现";
+"discovery.search.prompt" = "搜索活动、地区或兴趣";
+"discovery.search.recent" = "最近搜索";
+"discovery.search.recent.delete" = "删除最近搜索：%@";
+"discovery.search.categories" = "按类目浏览";
+
+"discovery.region.accessibility" = "地区";
+"discovery.region.tokyo" = "东京";
+"discovery.region.kanagawa" = "神奈川";
+"discovery.region.osaka" = "大阪";
+"discovery.region.kyoto" = "京都";
+"discovery.region.fallback" = "日本";
+
+"discovery.toolbar.notifications" = "通知";
+"discovery.toolbar.show_map" = "显示地图";
+"discovery.toolbar.show_list" = "显示列表";
+
+"discovery.chip.filters" = "筛选";
+"discovery.chip.filters.active" = "已启用 %lld 项筛选";
+"discovery.chip.nearby" = "附近";
+
+"discovery.category.all" = "全部";
+"discovery.category.family" = "亲子";
+"discovery.category.outdoor" = "户外";
+"discovery.category.sports" = "运动";
+"discovery.category.city_walk" = "城市探索";
+"discovery.category.food" = "美食";
+"discovery.category.art" = "文化艺术";
+"discovery.category.learning" = "技能学习";
+"discovery.category.networking" = "职业交流";
+"discovery.category.music" = "音乐";
+"discovery.category.games" = "桌游游戏";
+
+"discovery.module.today.eyebrow" = "TODAY · 今日";
+"discovery.module.today.title" = "今日可参加";
+"discovery.module.weekend.eyebrow" = "WEEKEND · 周末";
+"discovery.module.weekend.title" = "本周末";
+"discovery.module.nearby.eyebrow" = "NEARBY · 附近";
+"discovery.module.nearby.title" = "附近热门";
+"discovery.module.interest.eyebrow" = "FOR YOU · 为你";
+"discovery.module.interest.title" = "兴趣推荐";
+"discovery.module.new.eyebrow" = "NEW · 新上";
+"discovery.module.new.title" = "新活动";
+"discovery.module.verified.title" = "认证主办";
+"discovery.module.followed.title" = "关注动态";
+"discovery.module.see_all" = "查看全部";
+"discovery.module.nearby.view_map" = "在地图中查看";
+"discovery.module.nearby.enable.title" = "开启定位，看看附近正在发生什么";
+"discovery.module.nearby.enable.action" = "开启";
+
+"discovery.card.today" = "今天 %@";
+"discovery.card.tomorrow" = "明天 %@";
+"discovery.card.free" = "免费";
+"discovery.card.fee_onsite" = "¥%@ 现场支付";
+"discovery.card.fee_pending" = "费用待发布";
+"discovery.card.time_pending" = "时间待定";
+"discovery.card.capacity" = "%lld/%lld";
+"discovery.card.remaining_low" = "仅剩 %lld 位";
+"discovery.card.waitlist" = "候补中";
+"discovery.card.full" = "已满员";
+"discovery.card.hosted_count" = "已办 %lld 场";
+"discovery.card.attendance_90" = "出席率 90%+";
+"discovery.card.attendance_70" = "出席率 70%+";
+"discovery.card.verified" = "已认证主办";
+"discovery.card.favorite" = "收藏";
+"discovery.card.unfavorite" = "取消收藏";
+"discovery.card.promoted" = "推广";
+"discovery.card.open_detail" = "打开活动详情";
+
+"discovery.all.title" = "全部活动";
+"discovery.all.count" = "%lld 个活动";
+"discovery.all.count_more" = "%lld+ 个活动";
+
+"discovery.sort.title" = "排序";
+"discovery.sort.recommended" = "按推荐";
+"discovery.sort.time" = "按时间";
+"discovery.sort.newest" = "最新发布";
+"discovery.sort.almost_full" = "即将满员";
+"discovery.sort.distance" = "按距离";
+
+"discovery.results.clear" = "清除";
+"discovery.results.chip.nearby" = "附近";
+"discovery.results.chip.map_area" = "地图区域";
+"discovery.results.chip.remove" = "移除筛选：%@";
+
+"discovery.filter.title" = "筛选";
+"discovery.filter.done" = "完成";
+"discovery.filter.any" = "不限";
+"discovery.filter.date" = "日期";
+"discovery.filter.date.any" = "不限";
+"discovery.filter.date.today" = "今天";
+"discovery.filter.date.tomorrow" = "明天";
+"discovery.filter.date.weekend" = "本周末";
+"discovery.filter.date.custom" = "自定义";
+"discovery.filter.date.starts" = "开始";
+"discovery.filter.date.ends" = "结束";
+"discovery.filter.format" = "形式";
+"discovery.filter.format.in_person" = "线下";
+"discovery.filter.format.online" = "线上";
+"discovery.filter.format.hybrid" = "混合";
+"discovery.filter.language" = "语言";
+"discovery.filter.language.zh" = "简体中文";
+"discovery.filter.language.ja" = "日本語";
+"discovery.filter.language.en" = "English";
+"discovery.filter.price" = "价格";
+"discovery.filter.price.free" = "免费";
+"discovery.filter.price.paid" = "付费";
+"discovery.filter.available" = "仅看可报名";
+"discovery.filter.clear_all" = "清除全部";
+
+"discovery.location.denied.title" = "需要定位权限";
+"discovery.location.denied.message" = "请在设置中允许 Spott 使用定位，以查看附近的活动。";
+"discovery.location.denied.settings" = "前往设置";
+"discovery.location.denied.cancel" = "取消";
+
+"discovery.state.loading" = "正在加载活动";
+"discovery.state.offline" = "正在显示已保存的活动";
+"discovery.state.update_failed" = "更新失败";
+"discovery.state.retry" = "重试";
+"discovery.state.empty.title" = "这个地区还没有活动";
+"discovery.state.empty.message" = "可以切换地区、放宽筛选，或成为第一个开局的人。";
+"discovery.state.empty.reload" = "重新加载";
+"discovery.state.results_empty.title" = "这个筛选下暂无活动";
+"discovery.state.results_empty.clear" = "清除筛选";
+"discovery.state.results_empty.weekend" = "看看本周末";
+"discovery.state.error.title" = "暂时无法加载";
+"discovery.state.error.retry" = "重新连接";
+"discovery.state.error.code" = "错误编号：%@";
+"discovery.pagination.loading" = "加载更多活动…";
+
+"discovery.map.a11y.label" = "活动地图";
+"discovery.map.a11y.hint" = "地图位置均为主办方公开的约略位置；结果也可在列表中浏览。";
+"discovery.map.results" = "%lld 个地图结果";
+"discovery.map.results_title" = "地图结果";
+"discovery.map.close" = "关闭";
+"discovery.map.no_locations.title" = "没有可显示的位置";
+"discovery.map.no_locations.message" = "这些活动尚未发布公共地图位置，请使用列表查看。";
+"discovery.map.minicard.hint" = "打开活动详情";
+
+"discovery.colophon.title" = "今晚的%@，就到这里";
+"discovery.colophon.map" = "打开地图";

@@ -1,0 +1,119 @@
+- generic [active] [ref=f3e1]:
+  - link "跳到主要内容" [ref=f3e2] [cursor=pointer]:
+    - /url: "#spott-main-content"
+  - banner [ref=f3e3]:
+    - generic [ref=f3e4]:
+      - link "Spott" [ref=f3e5] [cursor=pointer]:
+        - /url: /discover
+      - link "地区：日本" [ref=f3e6] [cursor=pointer]:
+        - /url: /discover
+        - text: 日本
+    - generic [ref=f3e9]:
+      - generic [ref=f3e10]: 语言
+      - combobox "语言" [ref=f3e11] [cursor=pointer]:
+        - option "简体中文" [selected]
+        - option "日本語"
+        - option "English"
+  - status [ref=f3e12]:
+    - strong [ref=f3e13]: 公开只读预览
+    - generic [ref=f3e14]: 活动浏览、筛选、详情、分享与日历可用；登录、报名和发布请使用加密的内部测试入口。
+  - navigation "移动导航" [ref=f3e15]:
+    - link "发现" [ref=f3e16] [cursor=pointer]:
+      - /url: /discover
+    - link "群组" [ref=f3e21] [cursor=pointer]:
+      - /url: /groups
+  - main [ref=f3e27]:
+    - generic [ref=f3e28]:
+      - generic [ref=f3e29]:
+        - heading "遇见真正想参加的活动" [level=1] [ref=f3e30]
+        - paragraph [ref=f3e31]: 看清时间、地点、费用与名额，再决定出发。
+      - generic [ref=f3e32]:
+        - generic [ref=f3e33]:
+          - generic [ref=f3e37]: 搜索活动
+          - searchbox "搜索活动" [ref=f3e38]
+        - generic "列表 / 地图" [ref=f3e39]:
+          - button "列表" [pressed] [ref=f3e40] [cursor=pointer]
+          - button "地图" [ref=f3e46] [cursor=pointer]
+      - generic [ref=f3e50]:
+        - group "时间" [ref=f3e51]:
+          - button "本周末" [ref=f3e52] [cursor=pointer]
+          - button "只看有名额" [ref=f3e56] [cursor=pointer]
+        - button "更多筛选" [ref=f3e61] [cursor=pointer]
+      - generic [ref=f3e67]:
+        - heading "新活动" [level=2] [ref=f3e69]
+        - generic [ref=f3e70]:
+          - article "东京余光 · 隅田川蓝调散步" [ref=f3e71]:
+            - link "东京余光 · 隅田川蓝调散步 7月25日周六12:00–14:30 东京余光 · 隅田川蓝调散步 清澄白河站附近 免费 线下 中文 语言已确认 活动标签 东京余光散步会 Spott 新主办方 余 13" [ref=f3e72] [cursor=pointer]:
+              - /url: /e/tokyo-afterglow-preview
+              - img "东京余光 · 隅田川蓝调散步" [ref=f3e74]
+              - generic [ref=f3e83]:
+                - paragraph [ref=f3e84]: 7月25日周六 · 12:00–14:30
+                - heading "东京余光 · 隅田川蓝调散步" [level=3] [ref=f3e85]
+                - generic [ref=f3e86]:
+                  - generic [ref=f3e87]: 清澄白河站附近
+                  - generic [ref=f3e91]:
+                    - text: 免费
+                    - generic [ref=f3e94]: ·
+                    - text: 线下
+                  - generic [ref=f3e95]:
+                    - text: 中文
+                    - generic [ref=f3e99]: ·
+                    - text: 语言已确认
+                - list "活动标签" [ref=f3e100]:
+                  - listitem [ref=f3e101]: "#城市探索"
+                  - listitem [ref=f3e102]: "#摄影"
+                  - listitem [ref=f3e103]: "#城市散步"
+                - generic [ref=f3e104]:
+                  - generic [ref=f3e105]: 东京余光散步会
+                  - generic [ref=f3e108]: Spott 新主办方
+              - strong [ref=f3e110]: 余 13
+          - article "下北沢 Listening Table · 一枚を聴く夜" [ref=f3e113]:
+            - link "下北沢 Listening Table · 一枚を聴く夜 8月31日周一21:00–00:00 下北沢 Listening Table · 一枚を聴く夜 下北沢 免费 线下 日语 语言已确认 活动标签 Shimokita Listening Table Spott 新主办方 余 11" [ref=f3e114] [cursor=pointer]:
+              - /url: /e/shimokita-vinyl-preview
+              - img "下北沢 Listening Table · 一枚を聴く夜" [ref=f3e116]
+              - generic [ref=f3e124]:
+                - paragraph [ref=f3e125]: 8月31日周一 · 21:00–00:00
+                - heading "下北沢 Listening Table · 一枚を聴く夜" [level=3] [ref=f3e126]
+                - generic [ref=f3e127]:
+                  - generic [ref=f3e128]: 下北沢
+                  - generic [ref=f3e132]:
+                    - text: 免费
+                    - generic [ref=f3e135]: ·
+                    - text: 线下
+                  - generic [ref=f3e136]:
+                    - text: 日语
+                    - generic [ref=f3e140]: ·
+                    - text: 语言已确认
+                - list "活动标签" [ref=f3e141]:
+                  - listitem [ref=f3e142]: "#音乐"
+                  - listitem [ref=f3e143]: "#音楽"
+                  - listitem [ref=f3e144]: "#レコード"
+                - generic [ref=f3e145]:
+                  - generic [ref=f3e146]: Shimokita Listening Table
+                  - generic [ref=f3e149]: Spott 新主办方
+              - strong [ref=f3e151]: 余 11
+          - article "Kamakura Morning Reset · Coastline Walk & Coffee" [ref=f3e154]:
+            - link "Kamakura Morning Reset · Coastline Walk & Coffee 10月15日周四12:00–15:00 Kamakura Morning Reset · Coastline Walk & Coffee 鎌倉海岸 JP¥3,800 线下 英语 语言已确认 活动标签 东京余光散步会 Spott 新主办方 余 3" [ref=f3e155] [cursor=pointer]:
+              - /url: /e/kamakura-morning-preview
+              - img "Kamakura Morning Reset · Coastline Walk & Coffee" [ref=f3e157]
+              - generic [ref=f3e163]:
+                - paragraph [ref=f3e164]: 10月15日周四 · 12:00–15:00
+                - heading "Kamakura Morning Reset · Coastline Walk & Coffee" [level=3] [ref=f3e165]
+                - generic [ref=f3e166]:
+                  - generic [ref=f3e167]: 鎌倉海岸
+                  - generic [ref=f3e171]:
+                    - text: JP¥3,800
+                    - generic [ref=f3e174]: ·
+                    - text: 线下
+                  - generic [ref=f3e175]:
+                    - text: 英语
+                    - generic [ref=f3e179]: ·
+                    - text: 语言已确认
+                - list "活动标签" [ref=f3e180]:
+                  - listitem [ref=f3e181]: "#户外"
+                  - listitem [ref=f3e182]: "#coast"
+                  - listitem [ref=f3e183]: "#morning"
+                - generic [ref=f3e184]:
+                  - generic [ref=f3e185]: 东京余光散步会
+                  - generic [ref=f3e188]: Spott 新主办方
+              - strong [ref=f3e190]: 余 3

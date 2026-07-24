@@ -22,17 +22,7 @@ function stubApi() {
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/auth/email/challenges")) {
-        return new Response(
-          JSON.stringify({
-            challengeId: "challenge-1",
-            expiresAt: new Date(Date.now() + 600_000).toISOString(),
-            retryAfterSeconds: 30,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      if (url.includes("/auth/email/verify")) {
+      if (url.includes("/auth/password/login")) {
         return new Response(JSON.stringify(session), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -55,11 +45,10 @@ async function loginWith(returnTo: string): Promise<string[]> {
   fireEvent.change(screen.getByLabelText("Email address"), {
     target: { value: "tester@example.jp" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Send email code" }));
-
-  const codeField = await screen.findByLabelText("6-digit code");
-  fireEvent.change(codeField, { target: { value: "123456" } });
-  fireEvent.click(screen.getByRole("button", { name: "Verify and log in" }));
+  fireEvent.change(screen.getByLabelText("Password"), {
+    target: { value: "Str0ngPass!23" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Log in" }));
 
   await waitFor(() => expect(assign).toHaveBeenCalled());
   return assign.mock.calls.map((call) => String(call[0]));

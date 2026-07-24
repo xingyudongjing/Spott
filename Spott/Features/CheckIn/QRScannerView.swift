@@ -193,7 +193,7 @@ struct ParticipantCheckInView: View {
                             .padding(.horizontal, 16)
                             .frame(height: 44)
                     }
-                    .modifier(CheckInFloatingButtonStyle())
+                    .buttonStyle(.glass)
                     .foregroundStyle(.white)
                     .padding(.bottom, 18)
                 }
@@ -243,8 +243,10 @@ struct ParticipantCheckInView: View {
                     if busy { ProgressView().tint(.white) }
                     Text(text("journey.checkin.submit"))
                 }
+                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(PrimaryButtonStyle())
+            .spottProminentActionStyle()
+            .controlSize(.large)
             .disabled(busy || code.count != 6)
         }
         .padding(.top, 16)
@@ -369,25 +371,18 @@ struct ParticipantCheckInView: View {
     }
 }
 
-private struct CheckInFloatingButtonStyle: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.buttonStyle(.glass)
-        } else {
-            content.buttonStyle(.bordered)
-        }
-    }
-}
-
 struct HostCheckInView: View {
     private enum Mode: String, CaseIterable, Identifiable {
         case dynamicQR = "dynamic_qr"
         case sixDigit = "six_digit"
         var id: String { rawValue }
-        var title: LocalizedStringKey { self == .dynamicQR ? "动态二维码" : "6 位动态码" }
+        var titleKey: String.LocalizationValue {
+            self == .dynamicQR ? "host.checkin.mode_qr" : "host.checkin.mode_six_digit"
+        }
     }
 
     @Environment(AppModel.self) private var model
+    @Environment(\.locale) private var locale
     let event: EventSummary
     @State private var mode: Mode
     @State private var currentCode: CheckInCode?
@@ -399,50 +394,55 @@ struct HostCheckInView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 22) {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(event.title)
-                        .font(.system(size: 25, weight: .bold, design: .rounded))
-                    Text("把这一页展示给现场参与者。签到码仅在 30 秒内有效，截屏或远程转发会很快失效。")
-                        .font(.subheadline)
-                        .foregroundStyle(SpottColor.muted)
-                        .lineSpacing(3)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Picker("展示方式", selection: $mode) {
-                    ForEach(Mode.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-
-                codeCard
-
-                HStack(spacing: 12) {
-                    NavigationLink {
-                        HostAttendeeManagerView(event: event)
-                    } label: {
-                        Label("报名与人工签到", systemImage: "person.2.badge.gearshape")
-                            .frame(maxWidth: .infinity)
+        ZStack {
+            SpottScreenBackground()
+            ScrollView {
+                VStack(spacing: 22) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(event.title)
+                            .font(.system(size: 25, weight: .bold, design: .rounded))
+                        Text(text("host.checkin.guidance"))
+                            .font(.subheadline)
+                            .foregroundStyle(SpottColor.muted)
+                            .lineSpacing(3)
                     }
-                    .buttonStyle(.bordered)
-                }
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                if let error {
-                    Label(error.message, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(SpottColor.danger)
+                    Picker(text("host.checkin.display_mode"), selection: $mode) {
+                        ForEach(Mode.allCases) { Text(text($0.titleKey)).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+
+                    codeCard
+
+                    HStack(spacing: 12) {
+                        NavigationLink {
+                            HostAttendeeManagerView(event: event)
+                        } label: {
+                            Label(text("host.checkin.attendee_link"), systemImage: "person.2.badge.gearshape")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                        }
+                        .buttonStyle(.glass)
+                    }
+
+                    if let error {
+                        Label(error.message, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(SpottColor.danger)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Text(text("host.checkin.audit_note"))
+                        .font(.caption)
+                        .foregroundStyle(SpottColor.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-
-                Text("Spott 会记录签到方式、操作者和时间；同一报名只发放一次真实到场奖励。")
-                    .font(.caption)
-                    .foregroundStyle(SpottColor.muted)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(SpottMetric.pageInset)
             }
-            .padding(SpottMetric.pageInset)
         }
         .background(SpottColor.canvas.ignoresSafeArea())
-        .navigationTitle("现场签到台")
+        .navigationTitle(text("host.checkin.title"))
         .navigationBarTitleDisplayMode(.inline)
         .task(id: mode) { await refreshLoop() }
     }
@@ -455,26 +455,39 @@ struct HostCheckInView: View {
                     if mode == .dynamicQR, let token = currentCode.token {
                         QRCodeView(value: token)
                             .frame(width: 260, height: 260)
-                            .accessibilityLabel("现场动态签到二维码")
+                            .accessibilityLabel(text("host.checkin.qr_accessibility"))
                     } else if let code = currentCode.code {
                         Text(code)
                             .font(.system(size: 50, weight: .bold, design: .monospaced))
                             .tracking(12)
                             .minimumScaleFactor(0.72)
-                            .accessibilityLabel("现场签到码 \(code)")
+                            .foregroundStyle(Color.black)
+                            .accessibilityLabel(
+                                HostLocalization.format("host.checkin.code_accessibility", locale: locale, code)
+                            )
                     }
 
                     let remaining = max(0, currentCode.validUntil.timeIntervalSince(context.date))
                     VStack(spacing: 7) {
                         ProgressView(value: remaining, total: 30)
                             .tint(remaining < 8 ? SpottColor.coral : SpottColor.twilight)
-                        Text("\(Int(ceil(remaining))) 秒后自动更新")
+                        Text(
+                            HostLocalization.format(
+                                "host.checkin.refresh_countdown",
+                                locale: locale,
+                                Int(ceil(remaining))
+                            )
+                        )
                             .font(.caption.monospacedDigit())
-                            .foregroundStyle(SpottColor.muted)
+                            .foregroundStyle(Color.black.opacity(0.55))
                     }
                 } else {
-                    ProgressView("正在生成安全签到码…")
-                        .frame(height: 260)
+                    ProgressView {
+                        Text(text("host.checkin.generating"))
+                            .foregroundStyle(Color.black.opacity(0.7))
+                    }
+                    .tint(SpottColor.twilight)
+                    .frame(height: 260)
                 }
             }
             .padding(24)
@@ -483,6 +496,10 @@ struct HostCheckInView: View {
             .overlay(RoundedRectangle(cornerRadius: 30).stroke(SpottColor.divider))
             .shadow(color: SpottColor.ink.opacity(0.07), radius: 22, y: 10)
         }
+    }
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        HostLocalization.text(key, locale: locale)
     }
 
     private func refreshLoop() async {
@@ -513,19 +530,20 @@ struct HostAttendeeManagerView: View {
         case checkedIn = "checked_in"
         case corrections
         var id: String { rawValue }
-        var title: LocalizedStringKey {
+        var titleKey: String.LocalizationValue {
             switch self {
-            case .all: "全部"
-            case .pending: "待审核"
-            case .confirmed: "已确认"
-            case .checkedIn: "已签到"
-            case .corrections: "补签"
+            case .all: "host.attendees.filter_all"
+            case .pending: "host.attendees.filter_pending"
+            case .confirmed: "host.attendees.filter_confirmed"
+            case .checkedIn: "host.attendees.filter_checked_in"
+            case .corrections: "host.attendees.filter_corrections"
             }
         }
         var apiValue: String? { self == .all || self == .corrections ? nil : rawValue }
     }
 
     @Environment(AppModel.self) private var model
+    @Environment(\.locale) private var locale
     let event: EventSummary
     @State private var filter: Filter = .all
     @State private var attendees: [EventAttendee] = []
@@ -533,26 +551,55 @@ struct HostAttendeeManagerView: View {
     @State private var loading = true
     @State private var workingID: UUID?
     @State private var error: UserFacingError?
+    @State private var searchText = ""
+    @State private var statusCounts: [String: Int]?
+    @State private var listTruncated = false
+
+    private var visibleAttendees: [EventAttendee] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return attendees }
+        return attendees.filter {
+            $0.attendee.nickname.lowercased().contains(query)
+                || $0.attendee.publicHandle.lowercased().contains(query)
+        }
+    }
 
     var body: some View {
         VStack(spacing: 12) {
-            Picker("名单筛选", selection: $filter) {
-                ForEach(Filter.allCases) { Text($0.title).tag($0) }
+            Picker(text("host.attendees.filter_label"), selection: $filter) {
+                ForEach(Filter.allCases) { Text(text($0.titleKey)).tag($0) }
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, SpottMetric.pageInset)
 
+            if let statusCounts, filter != .corrections {
+                Text(countsSummary(statusCounts))
+                    .font(.caption)
+                    .foregroundStyle(SpottColor.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, SpottMetric.pageInset)
+            }
+
+            if listTruncated, filter != .corrections {
+                Label(text("host.attendees.truncated"), systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(SpottColor.amber)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, SpottMetric.pageInset)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if loading && attendees.isEmpty && corrections.isEmpty {
                 Spacer()
-                ProgressView("正在同步报名名单…")
+                ProgressView(text("host.attendees.loading"))
                 Spacer()
             } else if filter == .corrections, corrections.isEmpty {
                 Spacer()
                 SpottStateCard(
                     icon: "checkmark.seal",
-                    title: "没有待处理补签",
-                    message: "参与者在活动结束后 48 小时内提交的申请会出现在这里。",
-                    actionTitle: "刷新"
+                    title: text("host.attendees.corrections_empty_title"),
+                    message: text("host.attendees.corrections_empty_message"),
+                    actionTitle: text("host.attendees.refresh")
                 ) { Task { await load() } }
                 .padding(SpottMetric.pageInset)
                 Spacer()
@@ -563,15 +610,30 @@ struct HostAttendeeManagerView: View {
                 }
                 .listStyle(.plain)
                 .refreshable { await load() }
-            } else if attendees.isEmpty {
+            } else if visibleAttendees.isEmpty {
                 Spacer()
-                SpottStateCard(icon: "person.2", title: "当前没有成员", message: "新的报名会实时出现在这里。", actionTitle: "刷新") {
-                    Task { await load() }
+                if attendees.isEmpty {
+                    SpottStateCard(
+                        icon: "person.2",
+                        title: text("host.attendees.empty_title"),
+                        message: text("host.attendees.empty_message"),
+                        actionTitle: text("host.attendees.refresh")
+                    ) {
+                        Task { await load() }
+                    }
+                    .padding(SpottMetric.pageInset)
+                } else {
+                    SpottStateCard(
+                        icon: "magnifyingglass",
+                        title: text("host.attendees.search_empty_title"),
+                        message: text("host.attendees.search_empty_message"),
+                        actionTitle: nil
+                    ) { }
+                    .padding(SpottMetric.pageInset)
                 }
-                .padding(SpottMetric.pageInset)
                 Spacer()
             } else {
-                List(attendees) { attendee in
+                List(visibleAttendees) { attendee in
                     attendeeRow(attendee)
                         .listRowBackground(SpottColor.surface)
                 }
@@ -587,9 +649,29 @@ struct HostAttendeeManagerView: View {
             }
         }
         .background(SpottColor.canvas.ignoresSafeArea())
-        .navigationTitle("报名与签到")
+        .navigationTitle(text("host.attendees.title"))
         .navigationBarTitleDisplayMode(.inline)
+        .searchable(
+            text: $searchText,
+            placement: .navigationBarDrawer(displayMode: .automatic),
+            prompt: Text(text("host.attendees.search_prompt"))
+        )
         .task(id: filter) { await load() }
+    }
+
+    private func countsSummary(_ counts: [String: Int]) -> String {
+        let parts: [(String.LocalizationValue, String)] = [
+            ("host.attendees.filter_pending", "pending"),
+            ("host.attendees.filter_confirmed", "confirmed"),
+            ("host.attendees.filter_checked_in", "checked_in"),
+            ("host.attendees.count_waitlisted", "waitlisted"),
+        ]
+        return parts
+            .compactMap { key, status in
+                guard let count = counts[status], count > 0 else { return nil }
+                return "\(text(key)) \(count)"
+            }
+            .joined(separator: " · ")
     }
 
     private func correctionRow(_ correction: HostCheckInCorrection) -> some View {
@@ -598,15 +680,21 @@ struct HostAttendeeManagerView: View {
                 Text(correction.reason)
                     .font(.subheadline)
                     .lineSpacing(3)
-                Text("提交于 \(correction.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                Text(
+                    HostLocalization.format(
+                        "host.attendees.correction_submitted_at",
+                        locale: locale,
+                        correction.createdAt.formatted(date: .abbreviated, time: .shortened)
+                    )
+                )
                     .font(.caption)
                     .foregroundStyle(SpottColor.muted)
                 HStack(spacing: 10) {
-                    Button("确认补签") { decide(correction, approve: true) }
-                        .buttonStyle(.borderedProminent)
+                    Button(text("host.attendees.correction_approve")) { decide(correction, approve: true) }
+                        .buttonStyle(.glassProminent)
                         .tint(SpottColor.mint)
-                    Button("拒绝") { decide(correction, approve: false) }
-                        .buttonStyle(.bordered)
+                    Button(text("host.attendees.correction_reject")) { decide(correction, approve: false) }
+                        .buttonStyle(.glass)
                         .tint(SpottColor.danger)
                 }
                 .disabled(workingID != nil)
@@ -619,7 +707,14 @@ struct HostAttendeeManagerView: View {
                     .foregroundStyle(SpottColor.amber)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(correction.attendee.nickname).font(.headline)
-                    Text("@\(correction.attendee.publicHandle) · \(correction.registration.partySize) 人")
+                    Text(
+                        HostLocalization.format(
+                            "host.attendees.handle_party",
+                            locale: locale,
+                            correction.attendee.publicHandle,
+                            correction.registration.partySize
+                        )
+                    )
                         .font(.caption)
                         .foregroundStyle(SpottColor.muted)
                 }
@@ -633,7 +728,7 @@ struct HostAttendeeManagerView: View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 9) {
                 if let note = attendee.attendeeNote, !note.isEmpty {
-                    LabeledContent("参与备注", value: note)
+                    LabeledContent(text("host.attendees.note_label"), value: note)
                 }
                 ForEach(answerRows(attendee), id: \.question) { row in
                     LabeledContent(row.question, value: row.answer)
@@ -649,7 +744,7 @@ struct HostAttendeeManagerView: View {
                     .foregroundStyle(attendee.status == "checked_in" ? SpottColor.mint : SpottColor.twilight)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(attendee.attendee.nickname).font(.headline)
-                    Text("@\(attendee.attendee.publicHandle) · \(statusTitle(attendee.status))")
+                    Text(verbatim: "@\(attendee.attendee.publicHandle) · \(statusTitle(attendee.status))")
                         .font(.caption)
                         .foregroundStyle(SpottColor.muted)
                 }
@@ -661,28 +756,53 @@ struct HostAttendeeManagerView: View {
 
     @ViewBuilder
     private func actionButtons(_ attendee: EventAttendee) -> some View {
-        HStack(spacing: 10) {
-            if attendee.status == "pending" {
-                Button("确认报名") { mutate(attendee, action: .approve) }
-                    .buttonStyle(.borderedProminent)
-                Button("拒绝") { mutate(attendee, action: .reject) }
-                    .buttonStyle(.bordered)
-                    .tint(SpottColor.danger)
-            } else if attendee.status == "confirmed" {
-                Button { mutate(attendee, action: .manualCheckIn) } label: {
-                    Label("人工签到", systemImage: "checkmark.seal")
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                if attendee.status == "pending" {
+                    Button(text("host.attendees.approve")) { mutate(attendee, action: .approve) }
+                        .buttonStyle(.glassProminent)
+                        .tint(SpottColor.twilight)
+                    Button(text("host.attendees.reject")) { mutate(attendee, action: .reject) }
+                        .buttonStyle(.glass)
+                        .tint(SpottColor.danger)
+                } else if attendee.status == "confirmed" {
+                    Button { mutate(attendee, action: .manualCheckIn) } label: {
+                        Label(text("host.attendees.manual_checkin"), systemImage: "checkmark.seal")
+                    }
+                    .buttonStyle(.glassProminent)
+                    .tint(SpottColor.mint)
+                } else if attendee.status == "checked_in" {
+                    Label(text("host.attendees.verified"), systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(SpottColor.mint)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(SpottColor.mint)
-            } else if attendee.status == "checked_in" {
-                Label("已完成现场核验", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(SpottColor.mint)
             }
+            paymentControl(attendee)
         }
         .disabled(workingID != nil)
     }
 
-    private enum Mutation { case approve, reject, manualCheckIn }
+    @ViewBuilder
+    private func paymentControl(_ attendee: EventAttendee) -> some View {
+        if attendee.paymentConfirmedAt != nil {
+            Label(text("host.attendees.payment_confirmed"), systemImage: "checkmark.seal.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(SpottColor.mint)
+                .accessibilityIdentifier(
+                    "host.attendees.\(attendee.id.uuidString.lowercased()).payment_confirmed"
+                )
+        } else if attendee.paymentSelfReportedAt != nil {
+            Button { mutate(attendee, action: .confirmPayment) } label: {
+                Label(text("host.attendees.confirm_payment"), systemImage: "yensign.circle")
+            }
+            .buttonStyle(.glass)
+            .tint(SpottColor.mint)
+            .accessibilityIdentifier(
+                "host.attendees.\(attendee.id.uuidString.lowercased()).confirm_payment"
+            )
+        }
+    }
+
+    private enum Mutation { case approve, reject, manualCheckIn, confirmPayment }
 
     private func mutate(_ attendee: EventAttendee, action: Mutation) {
         workingID = attendee.id
@@ -697,6 +817,8 @@ struct HostAttendeeManagerView: View {
                     _ = try await model.api.decideRegistration(registrationID: attendee.id, approve: false)
                 case .manualCheckIn:
                     _ = try await model.api.manualCheckIn(eventID: event.id, registrationID: attendee.id)
+                case .confirmPayment:
+                    _ = try await model.api.confirmPayment(registrationID: attendee.id)
                 }
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 await load()
@@ -733,8 +855,21 @@ struct HostAttendeeManagerView: View {
                 corrections = try await model.api.checkInCorrections(eventID: event.id).items
                 attendees = []
             } else {
-                attendees = try await model.api.eventAttendees(eventID: event.id, status: filter.apiValue).items
+                let page = try await model.api.eventAttendees(eventID: event.id, status: filter.apiValue)
+                attendees = page.items
                 corrections = []
+                if filter == .all {
+                    listTruncated = page.hasMore
+                    if page.hasMore {
+                        statusCounts = nil
+                    } else {
+                        statusCounts = page.items.reduce(into: [:]) { counts, attendee in
+                            counts[attendee.status, default: 0] += 1
+                        }
+                    }
+                } else {
+                    listTruncated = page.hasMore
+                }
             }
             error = nil
         } catch {
@@ -753,7 +888,7 @@ struct HostAttendeeManagerView: View {
     private func display(_ value: JSONValue) -> String {
         switch value {
         case .string(let value): value
-        case .bool(let value): value ? String(localized: "是") : String(localized: "否")
+        case .bool(let value): value ? text("host.attendees.answer_yes") : text("host.attendees.answer_no")
         case .number(let value): value.formatted()
         case .null: "—"
         case .array, .object: "—"
@@ -761,16 +896,22 @@ struct HostAttendeeManagerView: View {
     }
 
     private func statusTitle(_ status: String) -> String {
-        switch status {
-        case "pending": String(localized: "待审核")
-        case "confirmed": String(localized: "已确认")
-        case "waitlisted": String(localized: "候补中")
-        case "offered": String(localized: "待递补确认")
-        case "checked_in": String(localized: "已签到")
-        case "cancelled": String(localized: "已取消")
-        case "rejected": String(localized: "已拒绝")
-        default: status
+        let key: String.LocalizationValue? = switch status {
+        case "pending": "host.attendees.status_pending"
+        case "confirmed": "host.attendees.status_confirmed"
+        case "waitlisted": "host.attendees.status_waitlisted"
+        case "offered": "host.attendees.status_offered"
+        case "checked_in": "host.attendees.status_checked_in"
+        case "cancelled": "host.attendees.status_cancelled"
+        case "rejected": "host.attendees.status_rejected"
+        default: nil
         }
+        guard let key else { return status }
+        return text(key)
+    }
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        HostLocalization.text(key, locale: locale)
     }
 }
 

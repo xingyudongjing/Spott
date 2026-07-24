@@ -3,14 +3,13 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useAppDialog } from "../../components/AppDialog";
-import { EventCard } from "../../components/EventCard";
 import { Footer } from "../../components/Footer";
 import { useI18n } from "../../components/I18nProvider";
 import { usePreviewMode } from "../../components/PreviewModeProvider";
 import { ReadOnlyCommunityNotice } from "../../components/ReadOnlyCommunityNotice";
-import { normalizeEvent } from "../../lib/api";
 import { APIError, apiRequest, errorMessage, readSession } from "../../lib/client-api";
-import type { EventView } from "../../lib/demo-data";
+import { eventDate, eventTime } from "../../lib/format";
+import { ProfileAchievements } from "./ProfileAchievements";
 
 interface PublicProfile {
   userId: string;
@@ -29,12 +28,29 @@ interface BlockedUser {
   userId: string;
 }
 
+/**
+ * `/profiles/{handle}/events` returns a lean public card, not the full event
+ * summary contract: no organizer trust facts, no capacity, no viewer state. It
+ * is rendered as a compact row rather than a discovery card so the page shows
+ * exactly what the endpoint vouches for instead of inventing trust signals.
+ */
+interface PublicHostedEvent {
+  id: string;
+  publicSlug: string;
+  status: string;
+  title: string;
+  startsAt: string;
+  endsAt: string;
+  publicArea?: string | null;
+  priceLabel?: string | null;
+}
+
 export function HostProfile({ handle }: { handle: string }) {
   const { locale, t } = useI18n();
   const isReadOnly = usePreviewMode() === "read-only";
   const appDialog = useAppDialog();
   const [profile, setProfile] = useState<PublicProfile | null>(null);
-  const [events, setEvents] = useState<EventView[]>([]);
+  const [events, setEvents] = useState<PublicHostedEvent[]>([]);
   const [blocked, setBlocked] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -48,12 +64,12 @@ export function HostProfile({ handle }: { handle: string }) {
     try {
       const [profileValue, eventPayload] = await Promise.all([
         apiRequest<PublicProfile>(`/profiles/${encodeURIComponent(handle)}`),
-        apiRequest<{
-          items: Array<Partial<EventView> & Pick<EventView, "id" | "publicSlug" | "title">>;
-        }>(`/profiles/${encodeURIComponent(handle)}/events?limit=60`),
+        apiRequest<{ items: PublicHostedEvent[] }>(
+          `/profiles/${encodeURIComponent(handle)}/events?limit=60`,
+        ),
       ]);
       setProfile(profileValue);
-      setEvents(eventPayload.items.map(normalizeEvent));
+      setEvents(eventPayload.items);
       if (!isReadOnly && readSession()) {
         try {
           const blockPage = await apiRequest<{ items: BlockedUser[] }>("/me/blocks", {
@@ -172,10 +188,11 @@ export function HostProfile({ handle }: { handle: string }) {
     return (
       <main className="standard-shell">
         <div className="empty-state">
+          <span className="spotlight-empty" />
           <h1>{loadFailure === "not-found" ? copy.notFound : copy.loadError}</h1>
-          <p>{loadFailure === "not-found" ? copy.notFoundBody : message || copy.loadErrorBody}</p>
+          <p>{loadFailure === "not-found" ? copy.notFoundBody : copy.loadErrorBody}</p>
           {loadFailure === "error" ? (
-            <button className="secondary-action compact" type="button" onClick={() => void load()}>
+            <button type="button" onClick={() => void load()}>
               {t("common.retry")}
             </button>
           ) : null}
@@ -269,17 +286,37 @@ export function HostProfile({ handle }: { handle: string }) {
               </div>
             </div>
             {events.length ? (
-              <div className="event-grid wide">
+              <div className="host-event-list public-host-events">
                 {events.map((event) => (
-                  <EventCard key={event.id} event={event} />
+                  <article key={event.id}>
+                    <Link href={`/e/${event.publicSlug}`}>
+                      <span className={`event-status status-${event.status}`}>
+                        {copy.status[event.status] ?? event.status}
+                      </span>
+                      <h3>{event.title}</h3>
+                      <p>
+                        {eventDate(event.startsAt, locale)} ·{" "}
+                        {eventTime(event.startsAt, event.endsAt, locale)}
+                        {event.publicArea ? ` · ${event.publicArea}` : ""}
+                      </p>
+                    </Link>
+                    {event.priceLabel ? <span>{event.priceLabel}</span> : null}
+                  </article>
                 ))}
               </div>
             ) : (
               <div className="empty-state compact-empty">
                 <h2>{copy.noEvents}</h2>
+                <p>{copy.noEventsBody}</p>
               </div>
             )}
           </section>
+        )}
+
+        {/* Public achievements need a signed-in viewer: the endpoint is not
+            public, so signed-out visitors never see a section that would fail. */}
+        {!blocked && !isReadOnly && readSession() && (
+          <ProfileAchievements userId={profile.userId} />
         )}
       </div>
       <Footer />
@@ -311,6 +348,14 @@ function profileCopy(locale: "zh-Hans" | "ja" | "en") {
       blockedBody: "主催イベントや直接の交流を非表示にしています。安全メニューからいつでも解除できます。",
       hosted: "主催イベント",
       noEvents: "公開中のイベントはありません",
+      noEventsBody: "このホストが新しいイベントを公開すると、ここに表示されます。",
+      status: {
+        published: "募集中",
+        registration_closed: "受付終了",
+        in_progress: "開催中",
+        ended: "終了",
+        cancelled: "中止",
+      } as Record<string, string>,
     };
   if (locale === "en")
     return {
@@ -335,6 +380,14 @@ function profileCopy(locale: "zh-Hans" | "ja" | "en") {
       blockedBody: "Their hosted events and direct interactions are hidden. You can unblock them from the safety menu at any time.",
       hosted: "Hosted events",
       noEvents: "No live events",
+      noEventsBody: "When this host publishes something new, it will show up here.",
+      status: {
+        published: "Open",
+        registration_closed: "Closed",
+        in_progress: "Happening",
+        ended: "Ended",
+        cancelled: "Cancelled",
+      } as Record<string, string>,
     };
   return {
     notFound: "用户主页不存在",
@@ -358,5 +411,13 @@ function profileCopy(locale: "zh-Hans" | "ja" | "en") {
     blockedBody: "对方主办的活动与直接互动已隐藏。你可以随时从安全菜单解除拉黑。",
     hosted: "正在发起",
     noEvents: "暂时没有公开活动",
+    noEventsBody: "这位主办方发布新活动后，会出现在这里。",
+    status: {
+      published: "报名中",
+      registration_closed: "报名已截止",
+      in_progress: "进行中",
+      ended: "已结束",
+      cancelled: "已取消",
+    } as Record<string, string>,
   };
 }

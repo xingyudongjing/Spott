@@ -91,6 +91,7 @@ export interface EventDraftInput {
   checkinMode?: 'dynamic_qr' | 'six_digit' | 'manual' | undefined;
   commentPermission?: 'disabled' | 'participants' | 'group_members' | undefined;
   posterEnabled?: boolean | undefined;
+  showGuestList?: boolean | undefined;
   exactAddressVisibility?: 'public' | 'confirmed' | undefined;
   format?: EventFormat | undefined;
   primaryLocale?: EventLocale | undefined;
@@ -156,6 +157,8 @@ interface EventRow {
   registration_status: string | null;
   registration_party_size: number | null;
   offer_expires_at: Date | null;
+  payment_self_reported_at: Date | null;
+  payment_confirmed_at: Date | null;
   organizer_name: string | null;
   organizer_handle: string;
   phone_verified: boolean;
@@ -170,6 +173,7 @@ interface EventRow {
   checkin_mode: string;
   comment_permission: string;
   poster_enabled: boolean;
+  show_guest_list: boolean;
   exact_address_visibility: string | null;
   latitude: number | null;
   longitude: number | null;
@@ -497,6 +501,71 @@ export class EventsService {
     }
   }
 
+  /**
+   * "Who's coming" social proof. Public, unauthenticated. Returns the confirmed
+   * attendee count plus up to eight preview avatars — but only when the organizer
+   * left events.show_guest_list enabled. When the guest list is hidden the endpoint
+   * still reports the count for social proof yet reveals no attendee identities.
+   * Only public profile fields (nickname, handle, avatar) are ever exposed; email
+   * and phone never leave the service.
+   */
+  async goingPreview(identifier: string): Promise<unknown> {
+    const eventResult = await this.database.query<{
+      id: string;
+      status: EventStatus;
+      show_guest_list: boolean;
+      confirmed_count: number;
+    }>(
+      `SELECT e.id, e.status, e.show_guest_list,
+         (SELECT count(*)::int FROM events.registrations rc
+            WHERE rc.event_id = e.id AND rc.deleted_at IS NULL
+              AND rc.status IN ('confirmed', 'checked_in')) AS confirmed_count
+       FROM events.events e
+       WHERE (e.id::text = $1 OR e.public_slug = $1) AND e.deleted_at IS NULL`,
+      [identifier],
+    );
+    const event = eventResult.rows[0];
+    if (!event || event.status === 'removed') {
+      throw new DomainError('EVENT_NOT_FOUND', '活动不存在或已不可见。', 404);
+    }
+    const confirmedCount = event.confirmed_count;
+    if (!event.show_guest_list || confirmedCount === 0) {
+      // Guest list hidden by the organizer, or nobody confirmed yet: count only,
+      // never an identity.
+      return { confirmedCount, previews: [], hasMore: confirmedCount > 0 };
+    }
+    const previewLimit = 8;
+    const previewResult = await this.database.query<{
+      user_id: string;
+      display_name: string | null;
+      handle: string;
+      avatar_url: string | null;
+    }>(
+      `SELECT r.user_id, p.nickname AS display_name, u.public_handle AS handle,
+         (SELECT avatar.derivatives->'thumb'->>'url' FROM media.assets avatar
+            WHERE avatar.id = p.avatar_asset_id AND avatar.state = 'ready'
+              AND avatar.moderation_state = 'approved') AS avatar_url
+       FROM events.registrations r
+       JOIN identity.users u ON u.id = r.user_id
+       LEFT JOIN identity.profiles p ON p.user_id = r.user_id AND p.deleted_at IS NULL
+       WHERE r.event_id = $1 AND r.deleted_at IS NULL
+         AND r.status IN ('confirmed', 'checked_in')
+       ORDER BY r.confirmed_at ASC NULLS LAST, r.created_at ASC, r.id ASC
+       LIMIT $2`,
+      [event.id, previewLimit],
+    );
+    const previews = previewResult.rows.map((row) => ({
+      userId: row.user_id,
+      displayName: row.display_name ?? `@${row.handle}`,
+      avatarURL: row.avatar_url,
+    }));
+    return {
+      confirmedCount,
+      previews,
+      hasMore: confirmedCount > previews.length,
+    };
+  }
+
   async hosted(user: AuthenticatedUser): Promise<unknown> {
     const result = await this.database.query<EventRow>(
       `SELECT e.*, l.region_id, l.public_area, l.exact_address_cipher,
@@ -508,6 +577,7 @@ export class EventsService {
            - COALESCE(c.pending_count, 0) - COALESCE(c.offered_count, 0))::int AS available_capacity,
          NULL::uuid AS registration_id, NULL::text AS registration_status,
          NULL::int AS registration_party_size, NULL::timestamptz AS offer_expires_at,
+         NULL::timestamptz AS payment_self_reported_at, NULL::timestamptz AS payment_confirmed_at,
          p.nickname AS organizer_name,
          u.public_handle AS organizer_handle, u.phone_verified_at IS NOT NULL AS phone_verified,
          COALESCE(trust.completed_event_count, 0)::int AS completed_event_count,
@@ -571,6 +641,7 @@ export class EventsService {
            - COALESCE(c.pending_count, 0) - COALESCE(c.offered_count, 0))::int AS available_capacity,
          r.id AS registration_id, r.status::text AS registration_status,
          r.party_size::int AS registration_party_size, promotion.expires_at AS offer_expires_at,
+         r.payment_self_reported_at, r.payment_confirmed_at,
          p.nickname AS organizer_name,
          u.public_handle AS organizer_handle, u.phone_verified_at IS NOT NULL AS phone_verified,
          COALESCE(trust.completed_event_count, 0)::int AS completed_event_count,
@@ -827,7 +898,8 @@ export class EventsService {
         'id', 'public_slug', 'organizer_id', 'title', 'description', 'category_id',
         'starts_at', 'ends_at', 'deadline_at', 'capacity', 'registration_mode',
         'waitlist_enabled', 'tags', 'attendee_requirements', 'risk_flags', 'risk_details',
-        'group_id', 'checkin_mode', 'comment_permission', 'poster_enabled', 'created_by', 'updated_by',
+        'group_id', 'checkin_mode', 'comment_permission', 'poster_enabled', 'show_guest_list',
+        'created_by', 'updated_by',
       ];
       const eventValues: unknown[] = [
         id,
@@ -850,6 +922,7 @@ export class EventsService {
         input.checkinMode ?? 'dynamic_qr',
         input.commentPermission ?? 'participants',
         input.posterEnabled ?? true,
+        input.showGuestList ?? true,
       ];
       const eventExpressions = eventValues.map((_, index) => `$${index + 1}`);
       eventExpressions.push('$3', '$3');
@@ -926,6 +999,7 @@ export class EventsService {
         checkinMode: 'checkin_mode',
         commentPermission: 'comment_permission',
         posterEnabled: 'poster_enabled',
+        showGuestList: 'show_guest_list',
         exactAddressVisibility: '',
         format: 'format',
         primaryLocale: '',
@@ -1279,6 +1353,7 @@ export class EventsService {
          r.id AS registration_id, r.status::text AS registration_status,
          r.party_size::int AS registration_party_size,
          promotion.expires_at AS offer_expires_at,
+         r.payment_self_reported_at, r.payment_confirmed_at,
          p.nickname AS organizer_name,
          u.public_handle AS organizer_handle, u.phone_verified_at IS NOT NULL AS phone_verified,
          COALESCE(trust.completed_event_count, 0)::int AS completed_event_count,
@@ -1457,6 +1532,8 @@ export class EventsService {
             status: row.registration_status,
             partySize: row.registration_party_size,
             offerExpiresAt: row.offer_expires_at?.toISOString() ?? null,
+            paymentSelfReportedAt: row.payment_self_reported_at?.toISOString() ?? null,
+            paymentConfirmedAt: row.payment_confirmed_at?.toISOString() ?? null,
           }
         : null,
       registrationMode: row.registration_mode,
@@ -1479,6 +1556,7 @@ export class EventsService {
         checkinMode: row.checkin_mode,
         commentPermission: row.comment_permission,
         posterEnabled: row.poster_enabled,
+        showGuestList: row.show_guest_list ?? true,
         exactAddressVisibility: row.exact_address_visibility ?? 'confirmed',
         registrationQuestions: row.registration_questions,
         media: row.media_items,

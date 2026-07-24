@@ -1,0 +1,104 @@
+- generic [ref=f2e1]:
+  - link "跳到主要内容" [ref=f2e2] [cursor=pointer]:
+    - /url: "#spott-main-content"
+  - banner [ref=f2e3]:
+    - generic [ref=f2e4]:
+      - link "Spott" [ref=f2e5] [cursor=pointer]:
+        - /url: /discover
+      - link "地区：日本" [ref=f2e6] [cursor=pointer]:
+        - /url: /discover
+        - text: 日本
+    - navigation "主导航" [ref=f2e7]:
+      - link "发现" [ref=f2e8] [cursor=pointer]:
+        - /url: /discover
+      - link "群组" [ref=f2e9] [cursor=pointer]:
+        - /url: /groups
+    - generic [ref=f2e12]:
+      - generic [ref=f2e13]: 语言
+      - combobox "语言" [ref=f2e14] [cursor=pointer]:
+        - option "简体中文" [selected]
+        - option "日本語"
+        - option "English"
+  - status [ref=f2e15]:
+    - strong [ref=f2e16]: 公开只读预览
+    - generic [ref=f2e17]: 活动浏览、筛选、详情、分享与日历可用；登录、报名和发布请使用加密的内部测试入口。
+  - main [ref=f2e19]:
+    - generic [ref=f2e20]:
+      - generic [ref=f2e21]:
+        - generic [ref=f2e22]: 下北
+        - generic [ref=f2e23]:
+          - text: 兴趣社区 · 东京
+          - heading "下北沢一枚聴く会" [level=1] [ref=f2e24]
+          - paragraph [ref=f2e25]: 一度に数曲だけを、最後までゆっくり聴く会です。下北沢の小さなテーブルで、選んだ理由や最近見つけた音楽を持ち寄ります。
+          - generic [ref=f2e26]:
+            - generic [ref=f2e27]: 2 位成员
+            - generic [ref=f2e28]: 上限 100 人
+            - generic [ref=f2e29]: 审核加入
+            - generic [ref=f2e30]: 音楽
+            - generic [ref=f2e31]: レコード
+            - generic [ref=f2e32]: 少人数
+      - note [ref=f2e33]:
+        - strong [ref=f2e34]: 公开只读预览
+        - generic [ref=f2e35]: 此页面仅展示公开内容。创建、加入、关注、点赞、评论、举报和拉黑请使用加密的内部测试入口。
+      - generic [ref=f2e36]:
+        - generic [ref=f2e38]:
+          - generic [ref=f2e39]: 即将开始
+          - heading "群组活动" [level=2] [ref=f2e40]
+        - article "下北沢 Listening Table · 一枚を聴く夜" [ref=f2e42]:
+          - link "下北沢 Listening Table · 一枚を聴く夜 8月31日周一21:00–00:00 下北沢 Listening Table · 一枚を聴く夜 下北沢 免费 线下 日语 语言已确认 活动标签 Shimokita Listening Table Spott 新主办方 余 11" [ref=f2e43] [cursor=pointer]:
+            - /url: /e/shimokita-vinyl-preview
+            - img "下北沢 Listening Table · 一枚を聴く夜" [ref=f2e45]
+            - generic [ref=f2e53]:
+              - paragraph: 8月31日周一 · 21:00–00:00
+              - heading "下北沢 Listening Table · 一枚を聴く夜" [level=3]
+              - generic:
+                - generic [ref=f2e54]: 下北沢
+                - generic [ref=f2e58]:
+                  - text: 免费
+                  - generic [ref=f2e61]: ·
+                  - text: 线下
+                - generic [ref=f2e62]:
+                  - text: 日语
+                  - generic [ref=f2e66]: ·
+                  - text: 语言已确认
+              - list "活动标签":
+                - listitem [ref=f2e67]: "#音乐"
+                - listitem [ref=f2e68]: "#音楽"
+                - listitem [ref=f2e69]: "#レコード"
+              - generic:
+                - generic [ref=f2e70]: Shimokita Listening Table
+                - generic [ref=f2e73]: Spott 新主办方
+            - strong [ref=f2e75]: 余 11
+      - generic [ref=f2e78]:
+        - generic [ref=f2e80]:
+          - generic [ref=f2e81]: 社区动态
+          - heading "公告与讨论" [level=2] [ref=f2e82]
+        - article [ref=f2e84]:
+          - generic [ref=f2e85]:
+            - generic [ref=f2e86]: 置顶 · 2026年7月18日 · Shimokita Listening Table
+            - heading "今月のテーマ：一曲目" [level=3] [ref=f2e87]
+            - paragraph [ref=f2e88]: アルバムの一曲目だけを持ち寄る回です。手ぶらの方には主催者の候補から選んでもらいます。好きな理由を一言話せれば十分です。
+            - button "↳ 0 评论" [active] [ref=f2e90] [cursor=pointer]
+    - generic [ref=f2e91]:
+      - generic [ref=f2e92]:
+        - generic [ref=f2e93]: SPOTT
+        - paragraph [ref=f2e94]: 发现活动，遇见同好。
+      - generic [ref=f2e95]:
+        - link "发现" [ref=f2e96] [cursor=pointer]:
+          - /url: /discover
+        - link "群组" [ref=f2e97] [cursor=pointer]:
+          - /url: /groups
+        - link "安全中心" [ref=f2e98] [cursor=pointer]:
+          - /url: /safety
+        - link "隐私" [ref=f2e99] [cursor=pointer]:
+          - /url: /privacy
+        - link "条款" [ref=f2e100] [cursor=pointer]:
+          - /url: /terms
+      - generic [ref=f2e101]:
+        - generic [ref=f2e102]:
+          - generic [ref=f2e103]: 语言
+          - combobox "语言" [ref=f2e104] [cursor=pointer]:
+            - option "简体中文" [selected]
+            - option "日本語"
+            - option "English"
+        - paragraph [ref=f2e105]: Tokyo · 2026

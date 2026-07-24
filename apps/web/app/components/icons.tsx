@@ -56,6 +56,10 @@ export function SlidersIcon({ size = 18, className }: IconProps = {}) {
   return <svg aria-hidden="true" className={className} width={size} height={size} viewBox="0 0 24 24" fill="none"><path d="M4 7h5M15 7h5M4 17h8M18 17h2" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/><circle cx="12" cy="7" r="3" stroke="currentColor" strokeWidth="1.7"/><circle cx="15" cy="17" r="3" stroke="currentColor" strokeWidth="1.7"/></svg>;
 }
 
+export function SortIcon({ size = 16, className }: IconProps = {}) {
+  return <svg aria-hidden="true" className={className} width={size} height={size} viewBox="0 0 24 24" fill="none"><path d="M7.5 4.5v15m0 0L4 16m3.5 3.5L11 16M16.5 19.5v-15m0 0L13 8m3.5-3.5L20 8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/></svg>;
+}
+
 export function ChevronIcon({ size = 18, className }: IconProps = {}) {
   return <svg aria-hidden="true" className={className} width={size} height={size} viewBox="0 0 24 24" fill="none"><path d="m9 5 7 7-7 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>;
 }

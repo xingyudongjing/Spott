@@ -3,12 +3,37 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "../components/I18nProvider";
-import type { Locale } from "../i18n/messages";
+import type { Locale, MessageKey } from "../i18n/messages";
 import { apiRequest, errorMessage, type NotificationView } from "../lib/client-api";
+import { notificationHref } from "../lib/notification-routing";
 import { DashboardNav } from "../me/DashboardNav";
 
+const knownTypes = new Set([
+  "event.key_fields_changed",
+  "event.cancelled",
+  "event.reminder",
+  "event.reviewed",
+  "event.removed",
+  "event.host_announcement",
+  "registration.confirmed",
+  "registration.rejected",
+  "registration.changed",
+  "registration.hold_expired",
+  "waitlist.offered",
+  "waitlist.expired",
+  "group.announcement",
+  "group.transfer",
+  "group.dissolution_scheduled",
+  "points.expiring",
+  "points.adjusted",
+  "achievements.awarded",
+  "moderation.decided",
+  "account.restricted",
+  "safety.case",
+]);
+
 export function NotificationsClient() {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const [items, setItems] = useState<NotificationView[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -78,37 +103,6 @@ export function NotificationsClient() {
     }
   }
 
-  const copy =
-    locale === "ja"
-      ? {
-          title: "お知らせ",
-          body: "既読状態は iOS と Web で共有されます。",
-          all: "すべて既読にする",
-          syncing: "お知らせを同期中…",
-          empty: "新しいお知らせはありません",
-          emptyBody: "申込、キャンセル待ち、グループ、イベントの重要な変更がここに届きます。",
-          open: "関連内容を開く",
-        }
-      : locale === "en"
-        ? {
-            title: "Notifications",
-            body: "Read status is shared across iOS and Web.",
-            all: "Mark all as read",
-            syncing: "Syncing notifications…",
-            empty: "No new notifications",
-            emptyBody: "Important registration, waitlist, group, and event updates appear here.",
-            open: "Open related item",
-          }
-        : {
-            title: "通知中心",
-            body: "iOS 与 Web 共用已读状态。",
-            all: "全部标为已读",
-            syncing: "正在同步通知…",
-            empty: "没有新通知",
-            emptyBody: "报名、候补、群组和活动关键变化会出现在这里。",
-            open: "打开相关内容",
-          };
-
   return (
     <main className="dashboard-shell">
       <DashboardNav current="notifications" />
@@ -116,8 +110,8 @@ export function NotificationsClient() {
         <div className="dashboard-heading">
           <div>
             <span className="section-number">INBOX / SYNCED</span>
-            <h1>{copy.title}</h1>
-            <p>{copy.body}</p>
+            <h1>{t("notify.title")}</h1>
+            <p>{t("notify.body")}</p>
           </div>
           <button
             className="secondary-action compact"
@@ -125,7 +119,7 @@ export function NotificationsClient() {
             onClick={() => void markAll()}
             disabled={busy || !items.some((item) => !item.readAt)}
           >
-            {copy.all}
+            {t("notify.markAll")}
           </button>
         </div>
         {message && (
@@ -136,23 +130,26 @@ export function NotificationsClient() {
         {loading ? (
           <div className="loading-state">
             <span />
-            <p>{copy.syncing}</p>
+            <p>{t("notify.loading")}</p>
           </div>
         ) : items.length ? (
           <div className="notification-list">
             {items.map((item) => (
-              <article
-                className={!item.readAt ? "unread" : ""}
-                key={item.id}
-                onClick={() => void markRead(item)}
-              >
+              <article className={!item.readAt ? "unread" : ""} key={item.id}>
                 <span className="note-dot" />
                 <div>
-                  <span>{notificationTitle(item.type, locale)}</span>
-                  <h2>{notificationBody(item, locale)}</h2>
+                  <span>{notificationTitle(item.type, t)}</span>
+                  <h2>{notificationBody(item, t)}</h2>
                   <small>{relativeTime(item.createdAt, renderedAt, locale)}</small>
                 </div>
-                <Link href={resourceLink(item)} aria-label={copy.open}>
+                {/* Opening the subject is the same gesture that marks it read,
+                    so the unread dot never lingers on something already handled. */}
+                <Link
+                  className="notification-open"
+                  href={notificationHref(item)}
+                  aria-label={t("notify.open")}
+                  onClick={() => void markRead(item)}
+                >
                   ↗
                 </Link>
               </article>
@@ -160,8 +157,8 @@ export function NotificationsClient() {
           </div>
         ) : (
           <div className="empty-state compact-empty">
-            <h2>{copy.empty}</h2>
-            <p>{copy.emptyBody}</p>
+            <h2>{t("notify.emptyTitle")}</h2>
+            <p>{t("notify.emptyBody")}</p>
           </div>
         )}
       </section>
@@ -169,35 +166,21 @@ export function NotificationsClient() {
   );
 }
 
-function notificationTitle(type: string, locale: Locale): string {
-  const labels: Record<string, [string, string, string]> = {
-    "event.key_fields_changed": ["活动关键变化", "イベントの重要な変更", "Important event change"],
-    "event.cancelled": ["活动取消", "イベント中止", "Event cancelled"],
-    "registration.confirmed": ["报名成功", "参加確定", "Registration confirmed"],
-    "registration.rejected": ["报名结果", "申込結果", "Registration decision"],
-    "waitlist.offered": ["候补递补", "空席のご案内", "Waitlist spot offered"],
-    "waitlist.expired": ["候补名额已过期", "空席案内の期限切れ", "Waitlist offer expired"],
-    "group.announcement": ["群组公告", "グループのお知らせ", "Group announcement"],
-    "group.transfer": ["群主转让", "グループ所有権の移行", "Group ownership transfer"],
-    "points.expiring": ["积分即将到期", "ポイント期限", "Points expiring"],
-    "points.adjusted": ["积分调整", "ポイント調整", "Points adjusted"],
-  };
-  return (
-    labels[type]?.[locale === "ja" ? 1 : locale === "en" ? 2 : 0] ??
-    (locale === "ja" ? "Spott の更新" : locale === "en" ? "Spott update" : "Spott 更新")
-  );
+type Translate = (key: MessageKey, values?: Record<string, string | number>) => string;
+
+function notificationTitle(type: string, t: Translate): string {
+  const normalized = type.startsWith("event.reminder") ? "event.reminder" : type;
+  return knownTypes.has(normalized)
+    ? t(`notify.type.${normalized}` as MessageKey)
+    : t("notify.generic");
 }
 
-function notificationBody(item: NotificationView, locale: Locale): string {
+function notificationBody(item: NotificationView, t: Translate): string {
   const values = item.variables;
   for (const key of ["message", "title", "eventTitle", "groupName", "reason"]) {
     if (typeof values[key] === "string") return values[key] as string;
   }
-  return locale === "ja"
-    ? "あなたに関係する新しい更新があります。開いて詳細を確認してください。"
-    : locale === "en"
-      ? "There is a new update related to you. Open it for details."
-      : "有一条与你相关的新动态，打开查看详情。";
+  return t("notify.genericBody");
 }
 
 function relativeTime(createdAt: string, now: number, locale: Locale): string {
@@ -212,13 +195,4 @@ function relativeTime(createdAt: string, now: number, locale: Locale): string {
   const hours = Math.round(minutes / 60);
   if (hours < 24) return formatter.format(-hours, "hour");
   return formatter.format(-Math.round(hours / 24), "day");
-}
-
-function resourceLink(item: NotificationView): string {
-  if (item.resourceType === "event" && item.resourcePublicId)
-    return `/e/${item.resourcePublicId}`;
-  if (item.resourceType === "group" && item.resourcePublicId)
-    return `/g/${item.resourcePublicId}`;
-  if (item.type.startsWith("points.")) return "/me/wallet";
-  return "/me/events";
 }

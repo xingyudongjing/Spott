@@ -1,0 +1,104 @@
+- generic [active] [ref=f15e1]:
+  - link "Skip to main content" [ref=f15e2] [cursor=pointer]:
+    - /url: "#spott-main-content"
+  - banner [ref=f15e3]:
+    - generic [ref=f15e4]:
+      - link "Spott" [ref=f15e5] [cursor=pointer]:
+        - /url: /discover
+      - 'link "Region: Japan" [ref=f15e6] [cursor=pointer]':
+        - /url: /discover
+        - text: Japan
+    - navigation "Primary navigation" [ref=f15e7]:
+      - link "Discover" [ref=f15e8] [cursor=pointer]:
+        - /url: /discover
+      - link "Groups" [ref=f15e9] [cursor=pointer]:
+        - /url: /groups
+    - generic [ref=f15e12]:
+      - generic [ref=f15e13]: Language
+      - combobox "Language" [ref=f15e14] [cursor=pointer]:
+        - option "简体中文"
+        - option "日本語"
+        - option "English" [selected]
+  - status [ref=f15e15]:
+    - strong [ref=f15e16]: Public read-only preview
+    - generic [ref=f15e17]: Browse, filters, details, sharing and calendar are available. Use the encrypted internal-test entry for sign-in, registration and publishing.
+  - main [ref=f15e19]:
+    - generic [ref=f15e20]:
+      - generic [ref=f15e21]:
+        - generic [ref=f15e22]: 东京
+        - generic [ref=f15e23]:
+          - text: Interest community · Tokyo
+          - heading "东京慢走与光线观察" [level=1] [ref=f15e24]
+          - paragraph [ref=f15e25]: 不赶景点，也不比设备。每月选一段适合慢走的东京街区，边走边观察光线、建筑和日常生活。
+          - generic [ref=f15e26]:
+            - generic [ref=f15e27]: 2 members
+            - generic [ref=f15e28]: Capacity 100
+            - generic [ref=f15e29]: Open to join
+            - generic [ref=f15e30]: 城市散步
+            - generic [ref=f15e31]: 摄影
+            - generic [ref=f15e32]: 新手友好
+      - note [ref=f15e33]:
+        - strong [ref=f15e34]: Public read-only preview
+        - generic [ref=f15e35]: This page shows public content only. Use the encrypted internal-test entry to create, join, follow, like, comment, report, or block.
+      - generic [ref=f15e36]:
+        - generic [ref=f15e38]:
+          - generic [ref=f15e39]: Coming up
+          - heading "Group events" [level=2] [ref=f15e40]
+        - article "东京余光 · 隅田川蓝调散步" [ref=f15e42]:
+          - link "东京余光 · 隅田川蓝调散步 Sat, July 2512:00–14:30 东京余光 · 隅田川蓝调散步 清澄白河站附近 Free In person Chinese Language confirmed Event tags 东京余光散步会 New to hosting on Spott 13 left" [ref=f15e43] [cursor=pointer]:
+            - /url: /e/tokyo-afterglow-preview
+            - img "东京余光 · 隅田川蓝调散步" [ref=f15e45]
+            - generic [ref=f15e54]:
+              - paragraph: Sat, July 25 · 12:00–14:30
+              - heading "东京余光 · 隅田川蓝调散步" [level=3]
+              - generic:
+                - generic [ref=f15e55]: 清澄白河站附近
+                - generic [ref=f15e59]:
+                  - text: Free
+                  - generic [ref=f15e62]: ·
+                  - text: In person
+                - generic [ref=f15e63]:
+                  - text: Chinese
+                  - generic [ref=f15e67]: ·
+                  - text: Language confirmed
+              - list "Event tags":
+                - listitem [ref=f15e68]: "#City walks"
+                - listitem [ref=f15e69]: "#摄影"
+                - listitem [ref=f15e70]: "#城市散步"
+              - generic:
+                - generic [ref=f15e71]: 东京余光散步会
+                - generic [ref=f15e74]: New to hosting on Spott
+            - strong [ref=f15e76]: 13 left
+      - generic [ref=f15e79]:
+        - generic [ref=f15e81]:
+          - generic [ref=f15e82]: Community updates
+          - heading "Announcements & discussion" [level=2] [ref=f15e83]
+        - article [ref=f15e85]:
+          - generic [ref=f15e86]:
+            - generic [ref=f15e87]: Pinned · Jul 18, 2026 · 东京余光散步会
+            - heading "第一次同行前，可以先知道这些" [level=3] [ref=f15e88]
+            - paragraph [ref=f15e89]: 路线通常是 3–5 公里，中间会停下来观察和交流。手机就够用，也可以完全不拍照。集合点与天气调整会在活动页更新。
+            - button "↳ 0 comments" [ref=f15e91] [cursor=pointer]
+    - generic [ref=f15e92]:
+      - generic [ref=f15e93]:
+        - generic [ref=f15e94]: SPOTT
+        - paragraph [ref=f15e95]: Find events. Meet your people.
+      - generic [ref=f15e96]:
+        - link "Discover" [ref=f15e97] [cursor=pointer]:
+          - /url: /discover
+        - link "Groups" [ref=f15e98] [cursor=pointer]:
+          - /url: /groups
+        - link "Safety" [ref=f15e99] [cursor=pointer]:
+          - /url: /safety
+        - link "Privacy" [ref=f15e100] [cursor=pointer]:
+          - /url: /privacy
+        - link "Terms" [ref=f15e101] [cursor=pointer]:
+          - /url: /terms
+      - generic [ref=f15e102]:
+        - generic [ref=f15e103]:
+          - generic [ref=f15e104]: Language
+          - combobox "Language" [ref=f15e105] [cursor=pointer]:
+            - option "简体中文"
+            - option "日本語"
+            - option "English" [selected]
+        - paragraph [ref=f15e106]: Tokyo · 2026

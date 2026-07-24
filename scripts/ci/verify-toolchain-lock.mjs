@@ -9,6 +9,7 @@ const SHA256 = /^[a-f0-9]{64}$/u;
 const DIGEST_REFERENCE = /^[^\s@]+@sha256:[a-f0-9]{64}$/u;
 const HTTPS_URL = /^https:\/\/[^\s]+$/u;
 const ignoredDirectories = new Set([
+  '.claude',
   '.git',
   '.next',
   '.turbo',

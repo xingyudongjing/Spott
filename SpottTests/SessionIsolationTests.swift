@@ -384,7 +384,7 @@ final class SessionIsolationTests: XCTestCase {
         let router = AppRouter()
         var sensitiveEvent = EventSummary.samples[0]
         sensitiveEvent.exactAddress = "participant-only exact address"
-        router.show(event: sensitiveEvent, in: .activities)
+        router.show(event: sensitiveEvent, in: .profile)
         let reference = EventRouteReference(event: sensitiveEvent)
         let model = AppModel(
             api: api,
@@ -499,7 +499,7 @@ final class SessionIsolationTests: XCTestCase {
         let lifecycle = FailingSyncLifecycle(failBootstrap: false, failDeactivate: true)
         let persistence = PersistenceStore.makeInMemory()
         let router = AppRouter()
-        router.show(event: EventSummary.samples[0], in: .activities)
+        router.show(event: EventSummary.samples[0], in: .profile)
         let model = AppModel(
             api: api,
             analytics: AnalyticsClient(environment: .preview),

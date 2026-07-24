@@ -125,7 +125,11 @@ describe('EventsController discovery query handling', () => {
   ] as const)('%s forwards the complete parsed query to service.%s', async (method, serviceMethod) => {
     const discovery = vi.fn().mockResolvedValue({ items: [] });
     const recommendationFeed = vi.fn().mockResolvedValue({ modules: [] });
-    const controller = new EventsController({ discovery, recommendationFeed } as never, {} as never) as unknown as Record<
+    const controller = new EventsController(
+      { discovery, recommendationFeed } as never,
+      {} as never,
+      {} as never,
+    ) as unknown as Record<
       typeof method,
       (request: { user?: undefined }, query: Record<string, string>) => Promise<unknown>
     >;

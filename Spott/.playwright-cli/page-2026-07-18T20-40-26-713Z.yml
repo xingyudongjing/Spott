@@ -1,0 +1,104 @@
+- generic [ref=f18e1]:
+  - link "Skip to main content" [ref=f18e2] [cursor=pointer]:
+    - /url: "#spott-main-content"
+  - banner [ref=f18e3]:
+    - generic [ref=f18e4]:
+      - link "Spott" [ref=f18e5] [cursor=pointer]:
+        - /url: /discover
+      - 'link "Region: Japan" [ref=f18e6] [cursor=pointer]':
+        - /url: /discover
+        - text: Japan
+    - navigation "Primary navigation" [ref=f18e7]:
+      - link "Discover" [ref=f18e8] [cursor=pointer]:
+        - /url: /discover
+      - link "Groups" [ref=f18e9] [cursor=pointer]:
+        - /url: /groups
+    - generic [ref=f18e12]:
+      - generic [ref=f18e13]: Language
+      - combobox "Language" [ref=f18e14] [cursor=pointer]:
+        - option "简体中文"
+        - option "日本語"
+        - option "English" [selected]
+  - status [ref=f18e15]:
+    - strong [ref=f18e16]: Public read-only preview
+    - generic [ref=f18e17]: Browse, filters, details, sharing and calendar are available. Use the encrypted internal-test entry for sign-in, registration and publishing.
+  - main [ref=f18e19]:
+    - generic [ref=f18e20]:
+      - generic [ref=f18e21]:
+        - generic [ref=f18e22]:
+          - text: Tokyo · Interest communities
+          - heading "Interest groups" [level=1] [ref=f18e23]
+          - paragraph [ref=f18e24]: Join the same group on Web and iOS for announcements, discussions, and what’s next.
+        - generic "Live community snapshot" [ref=f18e61]:
+          - generic [ref=f18e62]:
+            - strong [ref=f18e63]: "2"
+            - generic [ref=f18e64]: Public communities
+          - generic [ref=f18e65]:
+            - strong [ref=f18e66]: "4"
+            - generic [ref=f18e67]: Community memberships
+          - generic [ref=f18e68]:
+            - strong [ref=f18e69]: "2"
+            - generic [ref=f18e70]: Recent updates
+      - region "Explore interest communities" [ref=f18e71]:
+        - generic [ref=f18e72]:
+          - generic [ref=f18e73]: Search interest communities
+          - searchbox "Search interest communities" [ref=f18e77]
+        - group "Filter by interest" [ref=f18e78]:
+          - button "All" [ref=f18e79] [cursor=pointer]
+          - button "Music" [active] [pressed] [ref=f18e80] [cursor=pointer]
+          - button "City walks" [ref=f18e81] [cursor=pointer]
+      - region [ref=f18e82]:
+        - generic [ref=f18e83]:
+          - generic [ref=f18e84]:
+            - generic [ref=f18e85]: Public communities
+            - heading "Interest groups" [level=2] [ref=f18e86]
+          - paragraph [ref=f18e87]: "1"
+        - article [ref=f18e89]:
+          - link [ref=f18e90] [cursor=pointer]:
+            - /url: /g/shimokita-one-record
+            - generic [ref=f18e91]:
+              - generic [ref=f18e92]:
+                - generic [ref=f18e94]: Tokyo
+                - strong [ref=f18e95]: 下北
+              - generic [ref=f18e96]: Approval required
+            - generic [ref=f18e97]:
+              - generic [ref=f18e98]:
+                - generic [ref=f18e99]: Tokyo
+                - generic [ref=f18e100]: Music
+              - heading "下北沢一枚聴く会" [level=2] [ref=f18e101]
+              - generic [ref=f18e102]: "Approval required. Tokyo. Music. Hosted by Shimokita Listening Table. Pinned update: 今月のテーマ：一曲目. 2 members. Capacity 100"
+              - paragraph [ref=f18e103]: 一度に数曲だけを、最後までゆっくり聴く会です。下北沢の小さなテーブルで、選んだ理由や最近見つけた音楽を持ち寄ります。
+              - generic [ref=f18e104]: Hosted by Shimokita Listening Table
+              - generic [ref=f18e105]:
+                - generic [ref=f18e106]: 音楽
+                - generic [ref=f18e107]: レコード
+                - generic [ref=f18e108]: 少人数
+              - generic [ref=f18e109]:
+                - generic [ref=f18e111]: Pinned update
+                - strong [ref=f18e112]: 今月のテーマ：一曲目
+              - generic [ref=f18e113]:
+                - generic [ref=f18e114]: 2 members
+                - generic [ref=f18e118]: Capacity 100
+    - generic [ref=f18e45]:
+      - generic [ref=f18e46]:
+        - generic [ref=f18e47]: SPOTT
+        - paragraph [ref=f18e48]: Find events. Meet your people.
+      - generic [ref=f18e49]:
+        - link "Discover" [ref=f18e50] [cursor=pointer]:
+          - /url: /discover
+        - link "Groups" [ref=f18e51] [cursor=pointer]:
+          - /url: /groups
+        - link "Safety" [ref=f18e52] [cursor=pointer]:
+          - /url: /safety
+        - link "Privacy" [ref=f18e53] [cursor=pointer]:
+          - /url: /privacy
+        - link "Terms" [ref=f18e54] [cursor=pointer]:
+          - /url: /terms
+      - generic [ref=f18e55]:
+        - generic [ref=f18e56]:
+          - generic [ref=f18e57]: Language
+          - combobox "Language" [ref=f18e58] [cursor=pointer]:
+            - option "简体中文"
+            - option "日本語"
+            - option "English" [selected]
+        - paragraph [ref=f18e59]: Tokyo · 2026

@@ -4,7 +4,7 @@ import XCTest
 
 final class LocalizationParityTests: XCTestCase {
     private let locales = ["zh-Hans", "ja", "en"]
-    private let tables = ["Localizable", "CoreJourney"]
+    private let tables = ["Localizable", "CoreJourney", "InfoPlist"]
 
     func testEveryLocalizationTableHasTheSameNonEmptyKeysInAllSupportedLocales() throws {
         for table in tables {

@@ -5,8 +5,6 @@ import SwiftUI
 enum AppTab: Hashable, CaseIterable, Sendable {
     case discovery
     case groups
-    case create
-    case activities
     case profile
 }
 
@@ -37,6 +35,7 @@ enum AppRoute: Hashable, Sendable {
     case settings
     case group(UUID)
     case profile(String)
+    case itinerary
 }
 
 enum AppDeepLink: Equatable, Sendable {
@@ -114,11 +113,16 @@ struct DeferredRegistrationIntent: Identifiable, Hashable, Sendable {
 @Observable
 final class AppRouter {
     var selectedTab: AppTab = .discovery
+    private(set) var presentedComposer = false
     private(set) var paths: [AppTab: [AppRoute]]
     private(set) var deferredRegistrationIntent: DeferredRegistrationIntent?
     private(set) var pendingRegistrationPresentation: DeferredRegistrationIntent?
     private(set) var pendingItineraryRegistrationID: UUID?
     private var eventSnapshots: [EventRouteReference: EventSummary] = [:]
+    /// Event ids whose originating feed card carried recommendation.boosted.
+    /// Seeds the detail hero's promoted badge (推广透明) so it never depends
+    /// solely on the separate eventPromotion fetch.
+    private var promotedEventIDs: Set<UUID> = []
 
     init() {
         paths = Dictionary(uniqueKeysWithValues: AppTab.allCases.map { ($0, []) })
@@ -147,16 +151,29 @@ final class AppRouter {
         }
     }
 
-    func show(event: EventSummary, in tab: AppTab? = nil) {
+    func show(event: EventSummary, in tab: AppTab? = nil, promoted: Bool = false) {
         let reference = EventRouteReference(event: event)
         eventSnapshots[reference] = event
+        if promoted { promotedEventIDs.insert(event.id) }
         push(.event(reference), in: tab, selectingExplicitTab: tab != nil)
+    }
+
+    func isKnownPromoted(_ eventID: UUID) -> Bool {
+        promotedEventIDs.contains(eventID)
     }
 
     func showItinerary(registrationID: UUID?) {
         pendingItineraryRegistrationID = registrationID
-        paths[.activities] = []
-        selectedTab = .activities
+        paths[.profile] = [.itinerary]
+        selectedTab = .profile
+    }
+
+    func presentComposer() {
+        presentedComposer = true
+    }
+
+    func dismissComposer() {
+        presentedComposer = false
     }
 
     @discardableResult
@@ -182,26 +199,30 @@ final class AppRouter {
     @discardableResult
     func route(url: URL) -> AppDeepLinkRoutingResult {
         guard let deepLink = validatedDeepLink(from: url) else { return .rejected }
+        let prefix = deepLinkPathPrefix(from: url)
         switch deepLink {
         case .event(let identifier, let targetTab):
-            push(
-                .event(.init(id: nil, slug: identifier)),
-                in: targetTab,
-                selectingExplicitTab: true
-            )
+            openDeepLink(.event(.init(id: nil, slug: identifier)), in: targetTab, prefix: prefix)
             return .opened
         case .group(let identifier, let targetTab):
             guard let id = UUID(uuidString: identifier) else {
                 return .requiresResolution(deepLink)
             }
-            push(.group(id), in: targetTab, selectingExplicitTab: true)
+            openDeepLink(.group(id), in: targetTab, prefix: prefix)
             return .opened
         case .profile(let identifier, let targetTab):
-            push(.profile(identifier), in: targetTab, selectingExplicitTab: true)
+            openDeepLink(.profile(identifier), in: targetTab, prefix: prefix)
             return .opened
         case .share:
             return .requiresResolution(deepLink)
         }
+    }
+
+    private func openDeepLink(_ route: AppRoute, in tab: AppTab, prefix: [AppRoute]) {
+        if !prefix.isEmpty {
+            paths[tab] = prefix
+        }
+        push(route, in: tab, selectingExplicitTab: true)
     }
 
     func deferRegistration(
@@ -255,11 +276,13 @@ final class AppRouter {
 
     func resetSensitiveNavigation() {
         selectedTab = .discovery
+        presentedComposer = false
         paths = Dictionary(uniqueKeysWithValues: AppTab.allCases.map { ($0, []) })
         deferredRegistrationIntent = nil
         pendingRegistrationPresentation = nil
         pendingItineraryRegistrationID = nil
         eventSnapshots.removeAll()
+        promotedEventIDs.removeAll()
     }
 
     private func validatedDeepLink(from url: URL) -> AppDeepLink? {
@@ -314,15 +337,23 @@ final class AppRouter {
     }
 
     private func deepLinkTab(from url: URL) -> AppTab? {
-        guard let value = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?.first(where: { $0.name == "tab" })?.value else { return nil }
-        switch value {
-        case "discover", "discovery": return .discovery
+        switch deepLinkTabValue(from: url) {
+        case "discover", "discovery", "create": return .discovery
         case "groups": return .groups
-        case "create": return .create
-        case "activities", "itinerary": return .activities
-        case "profile": return .profile
+        case "activities", "itinerary", "profile": return .profile
         default: return nil
         }
+    }
+
+    private func deepLinkPathPrefix(from url: URL) -> [AppRoute] {
+        switch deepLinkTabValue(from: url) {
+        case "activities", "itinerary": return [.itinerary]
+        default: return []
+        }
+    }
+
+    private func deepLinkTabValue(from url: URL) -> String? {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "tab" })?.value
     }
 }

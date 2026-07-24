@@ -5,13 +5,16 @@ import { startTransition, useCallback, useEffect, useRef, useState } from "react
 import { apiRequest, readSession } from "../../lib/client-api";
 import { trackProductEvent } from "../../lib/analytics";
 import {
+  boundsCenter,
   parseDiscoveryQuery,
   serializeDiscoveryQuery,
   type EventDiscoveryQuery,
+  type EventDiscoverySort,
   type MapBounds,
 } from "../../lib/discovery-query";
 import { parseEventPage, type EventPage } from "../../lib/event-contract";
 import { useI18n } from "../I18nProvider";
+import { SortIcon } from "../icons";
 import { usePreviewMode } from "../PreviewModeProvider";
 import { DiscoveryFilters } from "./DiscoveryFilters";
 import { DiscoveryToolbar } from "./DiscoveryToolbar";
@@ -170,8 +173,18 @@ export function DiscoveryShell({
     void loadPage(query, { append: true, cursor: page.nextCursor });
   }, [loadPage, page, query]);
   const updateBounds = useCallback((bounds: MapBounds) => {
-    patchQuery({ bounds });
-  }, [patchQuery]);
+    // While sorting by distance, the origin follows the visible map area.
+    patchQuery(query.sort === "distance" ? { bounds, near: boundsCenter(bounds) } : { bounds });
+  }, [patchQuery, query.sort]);
+  const changeSort = useCallback((value: string) => {
+    const sort = value === "time" ? undefined : (value as EventDiscoverySort);
+    if (sort === "distance") {
+      if (!query.bounds) return;
+      patchQuery({ sort, near: boundsCenter(query.bounds) });
+      return;
+    }
+    patchQuery({ sort, near: undefined });
+  }, [patchQuery, query.bounds]);
   const mapFailure = useCallback(() => {
     setError("map");
   }, []);
@@ -186,6 +199,9 @@ export function DiscoveryShell({
   }, []);
 
   const resultCount = page?.items.length ?? 0;
+  const sortValue = query.sort ?? "time";
+  // Distance is only meaningful once the map gives the query a spatial context.
+  const distanceSortAvailable = Boolean(query.bounds);
   return (
     <section className={styles.shell} aria-busy={loading || refreshing}>
       <header className={styles.intro}>
@@ -215,7 +231,23 @@ export function DiscoveryShell({
           <h2>{t("discover.results")}</h2>
           <span>{t("discover.resultCount", { count: resultCount })}</span>
         </div>
-        <span className={styles.sortLabel}>{t("discover.sortTime")}</span>
+        <label className={styles.sortControl}>
+          <SortIcon />
+          <span className="sr-only">{t("discover.sortLabel")}</span>
+          <select
+            value={sortValue}
+            aria-label={t("discover.sortLabel")}
+            onChange={(event) => changeSort(event.target.value)}
+          >
+            <option value="time">{t("discover.sortTime")}</option>
+            <option value="recommended">{t("discover.sortRecommended")}</option>
+            <option value="newest">{t("discover.sortNewest")}</option>
+            <option value="almost_full">{t("discover.sortAlmostFull")}</option>
+            {distanceSortAvailable || sortValue === "distance" ? (
+              <option value="distance">{t("discover.sortDistance")}</option>
+            ) : null}
+          </select>
+        </label>
       </div>
 
       <EventResults

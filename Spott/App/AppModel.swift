@@ -24,12 +24,21 @@ struct SyncBannerState: Equatable, Sendable {
     let tone: Tone
 }
 
+/// A favorite tap that hit the login gate: kept so the auth sheet can show the
+/// event context and the heart is applied right after authentication succeeds
+/// (spec §7 step 9 收藏类 intent).
+struct DeferredFavoriteIntent: Sendable {
+    let event: EventSummary
+    let desired: Bool
+}
+
 @MainActor
 @Observable
 final class AppModel {
     var presentedGate: AppGate?
     var session: UserSession?
     var banner: SyncBannerState?
+    private(set) var deferredFavoriteIntent: DeferredFavoriteIntent?
 
     let api: SpottAPIClient
     let analytics: AnalyticsClient
@@ -88,14 +97,21 @@ final class AppModel {
 #endif
     }
 
-    private var navigationUITestRouteTab: AppTab? {
+    private struct NavigationUITestRoute {
+        let tab: AppTab
+        let path: [AppRoute]
+        let showsEvent: Bool
+    }
+
+    private var navigationUITestRoute: NavigationUITestRoute? {
 #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         guard let keyIndex = arguments.firstIndex(of: "-spott-ui-test-route-tab"),
               arguments.indices.contains(keyIndex + 1) else { return nil }
         switch arguments[keyIndex + 1] {
-        case "activities": return .activities
-        case "profile": return .profile
+        case "activities": return .init(tab: .profile, path: [.itinerary], showsEvent: true)
+        case "itinerary": return .init(tab: .profile, path: [.itinerary], showsEvent: false)
+        case "profile": return .init(tab: .profile, path: [], showsEvent: true)
         default: return nil
         }
 #else
@@ -106,9 +122,12 @@ final class AppModel {
     func bootstrap() async {
         if usesNavigationUITestFixture {
             discovery.replaceWithFixture(EventSummary.samples)
-            if let targetTab = navigationUITestRouteTab {
-                router.selectedTab = targetTab
-                router.show(event: EventSummary.samples[0])
+            if let route = navigationUITestRoute {
+                router.selectedTab = route.tab
+                router.setPath(route.path, for: route.tab)
+                if route.showsEvent {
+                    router.show(event: EventSummary.samples[0])
+                }
             }
             return
         }
@@ -194,8 +213,27 @@ final class AppModel {
         banner = nil
     }
 
-    func show(event: EventSummary, in tab: AppTab? = nil) {
-        router.show(event: event, in: tab)
+    func show(event: EventSummary, in tab: AppTab? = nil, promoted: Bool = false) {
+        router.show(event: event, in: tab, promoted: promoted)
+    }
+
+    /// Records a signed-out favorite tap and opens the login gate. The intent
+    /// is applied (PUT) right after authentication, before discovery refreshes,
+    /// so hearts reflect it everywhere without extra taps.
+    func deferFavorite(event: EventSummary, desired: Bool) {
+        router.cache(event: event)
+        deferredFavoriteIntent = .init(event: event, desired: desired)
+        presentedGate = .login
+    }
+
+    private func applyDeferredFavorite() async {
+        guard let intent = deferredFavoriteIntent, session != nil else { return }
+        deferredFavoriteIntent = nil
+        do {
+            try await api.setFavorite(eventID: intent.event.id, enabled: intent.desired)
+        } catch {
+            banner = .init(title: Self.map(error).message, tone: .warning)
+        }
     }
 
     func trackAnalytics(_ signal: P0AnalyticsSignal) {
@@ -317,6 +355,10 @@ final class AppModel {
                 return
             }
             guard isCurrentAuth(generation, sessionID: authenticatedSessionID) else { return }
+            // Apply a gate-deferred favorite before the discovery refresh so the
+            // refreshed feed already carries the heart the user tapped.
+            await applyDeferredFavorite()
+            guard isCurrentAuth(generation, sessionID: authenticatedSessionID) else { return }
             await discovery.refresh()
             guard isCurrentAuth(generation, sessionID: authenticatedSessionID) else { return }
             await reconcileStorePurchases()
@@ -374,6 +416,7 @@ final class AppModel {
 
     func cancelPresentedGate() {
         router.cancelDeferredIntent()
+        deferredFavoriteIntent = nil
         presentedGate = nil
     }
 
@@ -383,6 +426,7 @@ final class AppModel {
         GoogleSignInManager.shared.signOut()
         session = nil
         presentedGate = nil
+        deferredFavoriteIntent = nil
         router.resetSensitiveNavigation()
         discovery.resetForSessionChange()
         authTask = Task { [weak self] in
@@ -410,6 +454,7 @@ final class AppModel {
         GoogleSignInManager.shared.signOut()
         session = nil
         presentedGate = .login
+        deferredFavoriteIntent = nil
         router.resetSensitiveNavigation()
         discovery.resetForSessionChange()
         banner = .init(
@@ -469,6 +514,60 @@ final class AppModel {
                 message = String(localized: "登录已过期，请重新登录。")
             case "VERSION_CONFLICT", "EVENT_CHANGED", "EVENT_VERSION_CONFLICT":
                 message = String(localized: "内容已更新，请重新核对后继续。")
+            case "INVALID_CREDENTIALS":
+                message = String(localized: "邮箱或密码不正确。")
+            case "EMAIL_ALREADY_REGISTERED":
+                message = String(localized: "该邮箱已注册，请直接登录。")
+            case "PHONE_VERIFICATION_REQUIRED":
+                message = String(localized: "此操作需要先验证手机号。")
+            case "ACCOUNT_RESTRICTED", "DISCUSSION_RESTRICTED":
+                message = String(localized: "当前账号已被限制，暂不能执行此操作。")
+            case "COMMENT_CONTENT_BLOCKED", "DISCUSSION_CONTENT_BLOCKED":
+                message = String(localized: "内容包含不被允许的词语，请修改后再发送。")
+            case "COMMENT_PARENT_NOT_FOUND", "DISCUSSION_POST_NOT_FOUND":
+                message = String(localized: "要回复的内容不存在或已删除。")
+            case "EVENT_COMMENTS_DISABLED":
+                message = String(localized: "该活动未开放评论。")
+            case "EVENT_COMMENT_FORBIDDEN":
+                message = String(localized: "只有活动参与者可以在此评论。")
+            case "GROUP_DISCUSSION_FORBIDDEN":
+                message = String(localized: "只有群成员可以查看或参与群讨论。")
+            case "GROUP_DISCUSSION_MUTED":
+                message = String(localized: "你已被禁言，暂不能在讨论区发言。")
+            case "DISCUSSION_RATE_LIMITED", "GROUP_ANNOUNCEMENT_RATE_LIMITED":
+                message = String(localized: "发布过于频繁，请稍后再试。")
+            case "TICKET_TYPE_INVALID":
+                message = String(localized: "票种信息不完整，请检查后重试。")
+            case "TICKET_TYPE_LIMIT_REACHED":
+                message = String(localized: "票种数量已达上限。")
+            case "TICKET_TYPE_QUOTA_BELOW_SOLD":
+                message = String(localized: "票种名额不能低于已占用的名额。")
+            case "TICKET_TYPE_NOT_FOUND":
+                message = String(localized: "票种不存在或已停用。")
+            case "TICKET_MANAGE_FORBIDDEN", "TICKET_PAYMENT_CONFIRM_FORBIDDEN":
+                message = String(localized: "只有活动组织者可以执行此操作。")
+            case "TICKET_PAYMENT_NOT_APPLICABLE":
+                message = String(localized: "此报名无需线下付款。")
+            case "PROMOTION_TIER_INVALID":
+                message = String(localized: "不支持的置顶档位。")
+            case "PROMOTION_FORBIDDEN":
+                message = String(localized: "只有活动组织者可以购买置顶。")
+            case "PROMOTION_ALREADY_ACTIVE":
+                message = String(localized: "该活动已有生效中的置顶。")
+            case "PROMOTION_EVENT_NOT_OPEN":
+                message = String(localized: "活动需审核通过且仍可报名才能置顶。")
+            case "POINTS_INSUFFICIENT":
+                message = String(localized: "积分余额不足。")
+            case "QUOTE_EXPIRED", "QUOTE_PURPOSE_INVALID":
+                message = String(localized: "报价已失效，请重新发起。")
+            case "CHECKIN_STATE_UNAVAILABLE":
+                message = String(localized: "签到暂时不可用，请稍后再试。")
+            case "INVITE_NOT_FOUND", "SHARE_NOT_FOUND":
+                message = String(localized: "链接不存在或已失效。")
+            case "INVITE_SELF_FORBIDDEN":
+                message = String(localized: "不能使用自己的邀请链接。")
+            case "ACHIEVEMENT_HIDDEN":
+                message = String(localized: "已隐藏的成就无法分享。")
             default:
                 switch apiError.status {
                 case 401:

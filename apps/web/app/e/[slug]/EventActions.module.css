@@ -35,13 +35,46 @@
 }
 .utilities button[aria-pressed="true"] { color: var(--spott-twilight); border-color: color-mix(in srgb, var(--spott-twilight) 45%, var(--spott-divider)); }
 .mobileUtilities { display: none; }
+
+.safetyActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+}
+.safetyActions a,
+.safetyActions button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--spott-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+}
+.blockPrompt {
+  width: 100%;
+  margin: 0;
+  color: var(--spott-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.safetyActions a:hover,
+.safetyActions button:hover:not(:disabled) { color: var(--spott-ink); }
+.safetyActions button:disabled { opacity: .5; }
+
 .message { overflow-wrap: anywhere; color: var(--spott-danger); font-size: 13px; line-height: 1.45; user-select: text; }
 
 @media (max-width: 780px) {
   .root { position: relative; grid-template-columns: minmax(0, 1fr) 48px; align-items: center; gap: 10px; }
   .primary { min-height: 52px; }
-  .utilities { display: none; }
+  .utilities,
+  .desktopSafety { display: none; }
   .mobileUtilities { position: relative; display: block; }
+  .mobileUtilities .safetyActions { padding-top: 4px; border-top: 1px solid var(--spott-divider); }
   .mobileUtilities summary {
     display: grid;
     width: 48px;

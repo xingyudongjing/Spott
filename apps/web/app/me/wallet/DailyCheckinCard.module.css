@@ -1,0 +1,91 @@
+.card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 26px;
+  margin-top: 30px;
+  padding: 26px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.copy { display: grid; gap: 6px; }
+
+.eyebrow {
+  color: var(--twilight);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+
+.copy h2 {
+  margin: 2px 0 0;
+  font-size: 22px;
+  letter-spacing: -.02em;
+}
+
+.copy > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.streak {
+  color: var(--ink, inherit);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.rewards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.rewards li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding-inline: 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--twilight) 6%, var(--paper));
+  font-size: 12px;
+}
+.rewards strong { color: var(--twilight); font-weight: 800; }
+.rewards span { color: var(--muted); }
+
+.error {
+  margin: 4px 0 0;
+  color: var(--spott-danger);
+  font-size: 12px;
+}
+
+.action {
+  flex: none;
+  min-height: 48px;
+  padding-inline: 26px;
+  border: 1px solid var(--twilight);
+  border-radius: 999px;
+  background: var(--twilight);
+  color: white;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.action:disabled {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--muted);
+  cursor: default;
+}
+
+@media (max-width: 780px) {
+  .card { flex-direction: column; align-items: stretch; text-align: left; }
+  .action { width: 100%; }
+}

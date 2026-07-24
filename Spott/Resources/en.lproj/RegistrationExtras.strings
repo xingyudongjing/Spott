@@ -1,0 +1,17 @@
+"regextras.ticket.section" = "Ticket";
+"regextras.ticket.required" = "Choose a ticket to continue.";
+"regextras.ticket.loading" = "Loading tickets…";
+"regextras.ticket.unavailable" = "Tickets can't be loaded right now.";
+"regextras.ticket.free" = "Free";
+"regextras.ticket.pay_onsite" = "Pay on site";
+"regextras.ticket.sold_out_badge" = "Sold out";
+"regextras.ticket.remaining" = "%d left";
+"regextras.ticket.quota" = "Limited to %d";
+"regextras.error.ticket_sold_out" = "That ticket is sold out. Please pick another.";
+"regextras.payment.report_action" = "I paid on site";
+"regextras.payment.reported_chip" = "Organizer notified · awaiting confirmation";
+"regextras.payment.confirmed_chip" = "Organizer confirmed payment";
+"regextras.payment.report_hint" = "After paying on site, let the organizer know here. The organizer makes the final confirmation.";
+"regextras.payment.report_failed" = "Couldn't send right now. Please try again later.";
+"regextras.payment.not_applicable" = "This registration doesn't need a payment confirmation.";
+"regextras.invite.action" = "Invite a friend";

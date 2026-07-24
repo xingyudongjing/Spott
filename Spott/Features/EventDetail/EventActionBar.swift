@@ -147,17 +147,11 @@ private struct EventPrimaryActionButton: View {
     let action: () -> Void
 
     var body: some View {
-        Group {
-            if #available(iOS 26.0, *) {
-                button.buttonStyle(.glassProminent)
-            } else {
-                button
-                    .buttonStyle(.borderedProminent)
-                    .tint(SpottColor.twilight)
-            }
-        }
-        .disabled(presentation.isDisabled || isBusy)
-        .accessibilityIdentifier("event.action.\(presentation.kind.rawValue)")
+        button
+            .buttonStyle(.glassProminent)
+            .tint(SpottColor.twilight)
+            .disabled(presentation.isDisabled || isBusy)
+            .accessibilityIdentifier("event.action.\(presentation.kind.rawValue)")
     }
 
     private var button: some View {

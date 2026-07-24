@@ -15,6 +15,13 @@ export interface RegistrationDraft {
   step: RegistrationStep;
   idempotencyKey: string;
   updatedAt: string;
+  /**
+   * The ticket tier chosen for this draft. Optional so drafts written before
+   * ticket tiers shipped still restore instead of being discarded; a resumed
+   * draft always submits under the same idempotency key, so the selection has to
+   * travel with it or a resumed submission would book the wrong tier.
+   */
+  ticketTypeId?: string | null;
 }
 
 type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -101,6 +108,11 @@ function isRegistrationDraft(
     || typeof value.idempotencyKey !== "string"
     || typeof value.updatedAt !== "string"
     || !isRecord(value.answers)
+    || !(
+      value.ticketTypeId === undefined
+      || value.ticketTypeId === null
+      || typeof value.ticketTypeId === "string"
+    )
   ) return false;
   return Object.values(value.answers).every(
     (answer) => typeof answer === "string" || typeof answer === "boolean",

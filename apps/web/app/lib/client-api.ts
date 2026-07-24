@@ -122,6 +122,8 @@ export interface RegistrationView {
   waitlistPosition?: number | null;
   event?: EventView;
   createdAt?: string;
+  paymentSelfReportedAt?: string | null;
+  paymentConfirmedAt?: string | null;
 }
 
 export interface NotificationView {
@@ -190,12 +192,25 @@ export interface GroupComment {
   updatedAt: string;
 }
 
+const PRIVATE_LAN_HOST = /^(?:192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})$/;
+const LOOPBACK_API = /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::|\/|$)/;
+
 export function apiBase(): string {
   const configured = process.env.NEXT_PUBLIC_API_URL;
-  if (configured) return configured.replace(/\/$/, "");
-  if (typeof window !== "undefined" && ["localhost", "127.0.0.1"].includes(window.location.hostname)) {
-    return "http://localhost:4100/v1";
+  const resolved = configured ? configured.replace(/\/$/, "") : null;
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    // Page opened via this machine's private LAN IP (e.g. a phone on the same WiFi):
+    // a loopback-pointing API URL is unreachable from that device, so talk to the
+    // API on the page's own IP instead.
+    if (PRIVATE_LAN_HOST.test(host) && (!resolved || LOOPBACK_API.test(resolved))) {
+      return `http://${host}:4100/v1`;
+    }
+    if (!resolved && ["localhost", "127.0.0.1"].includes(host)) {
+      return "http://localhost:4100/v1";
+    }
   }
+  if (resolved) return resolved;
   return "https://api.spott.jp/v1";
 }
 

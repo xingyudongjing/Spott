@@ -85,6 +85,10 @@ struct RegistrationFlowView: View {
     let event: EventSummary
     let draft: DeferredRegistrationDraft
     let onCompletion: (Registration) -> Void
+    /// Called when the flow disappears mid-form with resumable state (an
+    /// idempotency key exists and no confirmation was reached), so the caller
+    /// can pre-fill the next presentation instead of starting from defaults.
+    var onDismissDraft: ((DeferredRegistrationDraft) -> Void)? = nil
 
     var body: some View {
         Group {
@@ -126,7 +130,8 @@ struct RegistrationFlowView: View {
             itineraryRefresher: RegistrationItineraryRefreshNotifier(),
             locale: locale,
             onCompletion: onCompletion,
-            onViewItinerary: openItinerary
+            onViewItinerary: openItinerary,
+            onDismissDraft: onDismissDraft
         )
     }
 
@@ -166,7 +171,9 @@ struct RegistrationFlowView: View {
                 offerExpiresAt: nil,
                 updatedAt: .now,
                 rewardPoints: nil,
-                checkinMethod: nil
+                checkinMethod: nil,
+                paymentSelfReportedAt: nil,
+                paymentConfirmedAt: nil
             ),
             event: event
         )
@@ -192,6 +199,7 @@ private struct RegistrationFlowScreen: View {
     private let locale: Locale
     private let onCompletion: (Registration) -> Void
     private let onViewItinerary: (UUID) -> Void
+    private let onDismissDraft: ((DeferredRegistrationDraft) -> Void)?
 
     init(
         event: EventSummary,
@@ -200,7 +208,8 @@ private struct RegistrationFlowScreen: View {
         itineraryRefresher: any RegistrationItineraryRefreshing,
         locale: Locale,
         onCompletion: @escaping (Registration) -> Void,
-        onViewItinerary: @escaping (UUID) -> Void
+        onViewItinerary: @escaping (UUID) -> Void,
+        onDismissDraft: ((DeferredRegistrationDraft) -> Void)? = nil
     ) {
         _store = State(
             initialValue: RegistrationStore(
@@ -214,6 +223,7 @@ private struct RegistrationFlowScreen: View {
         self.locale = locale
         self.onCompletion = onCompletion
         self.onViewItinerary = onViewItinerary
+        self.onDismissDraft = onDismissDraft
     }
 
     private var plan: RegistrationFormPlan {
@@ -253,9 +263,20 @@ private struct RegistrationFlowScreen: View {
                             confirmation: confirmation,
                             locale: locale,
                             refreshMessage: store.confirmationRefreshError,
+                            inviteURL: store.inviteURL,
+                            paymentReport: store.canReportPayment
+                                ? RegistrationPaymentReportUI(
+                                    isBusy: store.isReportingPayment,
+                                    reported: store.paymentReported,
+                                    confirmed: store.paymentConfirmed,
+                                    errorMessage: store.paymentReportError,
+                                    report: reportPayment
+                                )
+                                : nil,
                             onViewItinerary: viewItinerary,
                             onDone: dismiss.callAsFunction
                         )
+                        .task { await store.prepareInviteLink() }
                     }
                 }
             }
@@ -277,6 +298,24 @@ private struct RegistrationFlowScreen: View {
         }
         .onChange(of: store.firstInvalidField) { _, field in
             focusFirstInvalidField(field)
+        }
+        .onChange(of: store.paymentReported) { _, reported in
+            guard reported else { return }
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: RegistrationExtrasLocalization.text(
+                    "regextras.payment.reported_chip",
+                    locale: locale
+                )
+            )
+        }
+        .onDisappear {
+            // Hand mid-form state (party size, answers, note, accepted terms)
+            // back to the presenter so a re-opened flow resumes where the user
+            // left off instead of starting from defaults.
+            if let resumable = store.resumableDraft {
+                onDismissDraft?(resumable)
+            }
         }
     }
 
@@ -321,6 +360,11 @@ private struct RegistrationFlowScreen: View {
         Task { await submitAsync() }
     }
 
+    private func reportPayment() {
+        guard !store.isReportingPayment else { return }
+        Task { await store.reportPayment() }
+    }
+
     private func submitAsync() async {
         await store.submit()
         guard let confirmation = store.confirmation,
@@ -353,7 +397,7 @@ private struct RegistrationFlowScreen: View {
             joinWaitlistIfFull: store.joinWaitlistIfFull,
             answers: store.answers,
             attendeeNote: store.attendeeNote,
-            isPaid: store.event.fee?.isFree == false,
+            isPaid: store.isPaidShell,
             acceptedTerms: store.acceptedTerms
         )
     }
@@ -390,7 +434,7 @@ private struct RegistrationFlowScreen: View {
     private func questionPageIndex(for field: RegistrationField) -> Int? {
         guard case .question(let id) = field else {
             return switch field {
-            case .partySize, .acceptedTerms, .attendeeNote: 0
+            case .ticketType, .partySize, .acceptedTerms, .attendeeNote: 0
             case .question: nil
             }
         }
@@ -450,6 +494,12 @@ private struct RegistrationNativeForm: View {
 
             switch page.kind {
             case .combined:
+                RegistrationTicketTypeSection(
+                    store: store,
+                    focusedField: focusedField,
+                    accessibilityFocusedField: accessibilityFocusedField,
+                    locale: locale
+                )
                 RegistrationAttendanceSection(
                     store: store,
                     focusedField: focusedField,
@@ -470,6 +520,12 @@ private struct RegistrationNativeForm: View {
                     locale: locale
                 )
             case .attendance:
+                RegistrationTicketTypeSection(
+                    store: store,
+                    focusedField: focusedField,
+                    accessibilityFocusedField: accessibilityFocusedField,
+                    locale: locale
+                )
                 RegistrationAttendanceSection(
                     store: store,
                     focusedField: focusedField,
@@ -496,6 +552,7 @@ private struct RegistrationNativeForm: View {
         .scrollContentBackground(.hidden)
         .background(Color(uiColor: .systemGroupedBackground))
         .scrollDismissesKeyboard(.interactively)
+        .task { await store.loadTicketTypes() }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             RegistrationFormFooter(
                 canGoBack: pageIndex > 0,
@@ -518,6 +575,140 @@ private struct RegistrationNativeForm: View {
     }
 }
 
+private struct RegistrationTicketTypeSection: View {
+    @Bindable var store: RegistrationStore
+    let focusedField: FocusState<RegistrationField?>.Binding
+    let accessibilityFocusedField: AccessibilityFocusState<RegistrationField?>.Binding
+    let locale: Locale
+
+    var body: some View {
+        if store.isLoadingTicketTypes, store.activeTicketTypes.isEmpty {
+            Section(extras("regextras.ticket.section")) {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text(extras("regextras.ticket.loading"))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } else if store.requiresTicketSelection {
+            Section(extras("regextras.ticket.section")) {
+                ForEach(store.activeTicketTypes) { ticket in
+                    ticketRow(ticket)
+                }
+                if let error = store.validationErrors[.ticketType] {
+                    RegistrationFieldError(message: error)
+                }
+            }
+        } else if store.ticketTypesUnavailable {
+            Section(extras("regextras.ticket.section")) {
+                Label(
+                    extras("regextras.ticket.unavailable"),
+                    systemImage: "wifi.exclamationmark"
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func ticketRow(_ ticket: EventTicketType) -> some View {
+        Button {
+            store.selectTicketType(ticket.id)
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(ticket.name)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(ticket.soldOut ? .secondary : .primary)
+                    if let description = ticket.description?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                        !description.isEmpty {
+                        Text(description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    if ticket.soldOut {
+                        Text(extras("regextras.ticket.sold_out_badge"))
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(SpottColor.coral)
+                    } else if let remaining = ticket.remaining, remaining <= 10 {
+                        Text(
+                            RegistrationExtrasLocalization.format(
+                                "regextras.ticket.remaining",
+                                locale: locale,
+                                remaining
+                            )
+                        )
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(SpottColor.coral)
+                    } else if let quota = ticket.quota {
+                        Text(
+                            RegistrationExtrasLocalization.format(
+                                "regextras.ticket.quota",
+                                locale: locale,
+                                quota
+                            )
+                        )
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    }
+                    if let refundPolicy = ticket.refundPolicy?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                        !refundPolicy.isEmpty {
+                        Text(refundPolicy)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(2)
+                    }
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 2) {
+                    if ticket.isFree {
+                        Text(extras("regextras.ticket.free"))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(ticket.soldOut ? .secondary : .primary)
+                    } else if let amount = ticket.amountJPY {
+                        Text(amount, format: .currency(code: "JPY"))
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(ticket.soldOut ? .secondary : .primary)
+                        Text(extras("regextras.ticket.pay_onsite"))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Image(
+                    systemName: store.selectedTicketTypeID == ticket.id
+                        ? "checkmark.circle.fill"
+                        : "circle"
+                )
+                .font(.title3)
+                .foregroundStyle(
+                    store.selectedTicketTypeID == ticket.id
+                        ? AnyShapeStyle(SpottColor.twilight)
+                        : AnyShapeStyle(.tertiary)
+                )
+                .accessibilityHidden(true)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(ticket.soldOut)
+        .focused(focusedField, equals: .ticketType)
+        .accessibilityFocused(accessibilityFocusedField, equals: .ticketType)
+        .accessibilityIdentifier("registration.ticket_type.\(ticket.id.uuidString.lowercased())")
+        .accessibilityAddTraits(
+            store.selectedTicketTypeID == ticket.id ? .isSelected : []
+        )
+    }
+
+    private func extras(_ key: String.LocalizationValue) -> String {
+        RegistrationExtrasLocalization.text(key, locale: locale)
+    }
+}
+
 private struct RegistrationPaymentTermsSection: View {
     @Bindable var store: RegistrationStore
     let focusedField: FocusState<RegistrationField?>.Binding
@@ -525,9 +716,9 @@ private struct RegistrationPaymentTermsSection: View {
     let locale: Locale
 
     var body: some View {
-        if let fee = store.event.fee, !fee.isFree {
+        if let shell = store.paymentShell {
             Section(text("journey.registration.payment_terms")) {
-                if let amount = fee.amountJPY {
+                if let amount = shell.amountJPY {
                     LabeledContent(text("journey.registration.fee_amount")) {
                         Text(amount, format: .currency(code: "JPY"))
                             .font(.body.weight(.semibold))
@@ -535,19 +726,19 @@ private struct RegistrationPaymentTermsSection: View {
                 }
                 paymentFact(
                     label: "journey.detail.payment_collector",
-                    value: fee.collectorName
+                    value: shell.collectorName
                 )
                 paymentFact(
                     label: "journey.detail.payment_method",
-                    value: fee.method
+                    value: shell.method
                 )
                 paymentFact(
                     label: "journey.detail.payment_deadline",
-                    value: fee.paymentDeadlineText
+                    value: shell.paymentDeadlineText
                 )
                 paymentFact(
                     label: "journey.detail.refund_policy",
-                    value: fee.refundPolicy
+                    value: shell.refundPolicy
                 )
                 Toggle(
                     text("journey.registration.accept_fee_terms"),
@@ -815,7 +1006,7 @@ private struct RegistrationFormFooter: View {
 
     private func backButton(fillsWidth: Bool) -> some View {
         Button(text("journey.common.back"), action: back)
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .buttonBorderShape(.capsule)
             .frame(maxWidth: fillsWidth ? .infinity : nil, minHeight: 44)
     }
@@ -923,6 +1114,24 @@ private struct RegistrationReviewAnswers: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let ticket = store.selectedTicketType {
+                LabeledContent(
+                    RegistrationExtrasLocalization.text(
+                        "regextras.ticket.section",
+                        locale: locale
+                    )
+                ) {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(ticket.name)
+                            .multilineTextAlignment(.trailing)
+                        Text(ticketPrice(ticket))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 12)
+                Divider()
+            }
             LabeledContent(text("journey.registration.party_size")) {
                 Text(store.partySize, format: .number)
             }
@@ -959,6 +1168,22 @@ private struct RegistrationReviewAnswers: View {
         }
     }
 
+    private func ticketPrice(_ ticket: EventTicketType) -> String {
+        if ticket.isFree {
+            return RegistrationExtrasLocalization.text(
+                "regextras.ticket.free",
+                locale: locale
+            )
+        }
+        let payOnSite = RegistrationExtrasLocalization.text(
+            "regextras.ticket.pay_onsite",
+            locale: locale
+        )
+        guard let amount = ticket.amountJPY else { return payOnSite }
+        let price = amount.formatted(.currency(code: "JPY").locale(locale))
+        return "\(price) · \(payOnSite)"
+    }
+
     private func text(_ key: String.LocalizationValue) -> String {
         CoreJourneyLocalization.text(key, locale: locale)
     }
@@ -969,21 +1194,37 @@ private struct RegistrationReconfirmationView: View {
     let locale: Locale
 
     var body: some View {
-        ContentUnavailableView {
-            Label(
-                text("journey.registration.reconfirmation_title"),
-                systemImage: "arrow.triangle.2.circlepath.circle.fill"
-            )
-        } description: {
-            Text(text("journey.registration.reconfirmation_message"))
-        } actions: {
+        VStack(spacing: 16) {
+            Spacer(minLength: 0)
+            Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                .font(.system(size: 52, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(SpottColor.amber)
+                .accessibilityHidden(true)
+            VStack(spacing: 7) {
+                Text(text("journey.registration.reconfirmation_title"))
+                    .font(.title2.bold())
+                    .multilineTextAlignment(.center)
+                    .accessibilityAddTraits(.isHeader)
+                Text(text("journey.registration.reconfirmation_message"))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             JourneyPrimaryActionButton(
                 title: text("journey.registration.review_updates"),
                 systemImage: "checkmark",
                 isBusy: false,
                 action: store.acceptReconfirmation
             )
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.top, 4)
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(uiColor: .systemGroupedBackground))
         .accessibilityIdentifier("registration.reconfirmation")
     }
 
@@ -999,17 +1240,11 @@ struct JourneyPrimaryActionButton: View {
     let action: () -> Void
 
     var body: some View {
-        Group {
-            if #available(iOS 26.0, *) {
-                button.buttonStyle(.glassProminent)
-            } else {
-                button
-                    .buttonStyle(.borderedProminent)
-                    .tint(SpottColor.twilight)
-            }
-        }
-        .buttonBorderShape(.capsule)
-        .disabled(isBusy)
+        button
+            .buttonStyle(.glassProminent)
+            .tint(SpottColor.twilight)
+            .buttonBorderShape(.capsule)
+            .disabled(isBusy)
     }
 
     private var button: some View {

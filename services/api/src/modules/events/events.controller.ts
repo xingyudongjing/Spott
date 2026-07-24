@@ -23,6 +23,7 @@ import {
 import { parseDiscoveryQuery } from './events.discovery-query.js';
 import { EventsService } from './events.service.js';
 import { EventPromotionService } from './events.promotion.service.js';
+import { EventAnnouncementsService } from './event-announcements.service.js';
 
 export const draftSchema = z.object({
   title: z.string().min(1).max(120).optional(),
@@ -45,6 +46,7 @@ export const draftSchema = z.object({
   checkinMode: z.enum(['dynamic_qr', 'six_digit', 'manual']).optional(),
   commentPermission: z.enum(['disabled', 'participants', 'group_members']).optional(),
   posterEnabled: z.boolean().optional(),
+  showGuestList: z.boolean().optional(),
   exactAddressVisibility: z.enum(['public', 'confirmed']).optional(),
   format: z.enum(['in_person', 'online', 'hybrid']).optional(),
   primaryLocale: z.enum(['zh-Hans', 'ja', 'en']).optional(),
@@ -99,6 +101,7 @@ export class EventsController {
   constructor(
     private readonly events: EventsService,
     private readonly promotions: EventPromotionService,
+    private readonly announcements: EventAnnouncementsService,
   ) {}
 
   @Public()
@@ -123,6 +126,12 @@ export class EventsController {
   @Get('events/:id')
   get(@Req() request: SpottRequest, @Param('id') id: string) {
     return this.events.get(id, request.user);
+  }
+
+  @Public()
+  @Get('events/:id/going-preview')
+  goingPreview(@Param('id') id: string) {
+    return this.events.goingPreview(id);
   }
 
   @Public()
@@ -226,6 +235,28 @@ export class EventsController {
   @Get('events/:id/promotion')
   activePromotion(@Param('id') id: string) {
     return this.promotions.active(id);
+  }
+
+  @Post('events/:id/announcements')
+  @HttpCode(201)
+  sendAnnouncement(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Headers('idempotency-key') key: string,
+    @Body() body: unknown,
+  ) {
+    const input = z
+      .object({
+        title: z.string().trim().min(2).max(120),
+        body: z.string().trim().min(1).max(2000),
+      })
+      .parse(body);
+    return this.announcements.send(user.id, id, this.requiredKey(key), input);
+  }
+
+  @Get('events/:id/announcements')
+  listAnnouncements(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.announcements.list(user.id, id);
   }
 
   @Put('events/:id/favorite')

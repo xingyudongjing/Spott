@@ -9,6 +9,7 @@ import { analyticsConsent, setAnalyticsConsent, trackProductEvent } from "../../
 import { apiRequest, clearSession, errorMessage, readSession } from "../../lib/client-api";
 import { uploadProcessedImage } from "../../lib/media-upload";
 import { DashboardNav } from "../DashboardNav";
+import { NotificationPreferences } from "./NotificationPreferences";
 
 interface Profile {
   userId: string;
@@ -22,37 +23,6 @@ interface Profile {
   updatedAt: string;
 }
 
-interface Preference {
-  type: string;
-  inApp: boolean;
-  push: boolean;
-  email: boolean;
-  quietHours: string | null;
-  locale: Locale;
-}
-
-interface Achievement {
-  id: string;
-  code: string;
-  audience: string;
-  visibility: string;
-  awardedAt: string;
-  revokedAt: string | null;
-}
-
-interface AchievementProgress {
-  checked_in_count: number;
-  hosted_ended_count: number;
-  owned_group_members: number;
-}
-
-const notificationTypes = [
-  "event.critical",
-  "registration.status",
-  "group.update",
-  "recommendation",
-] as const;
-
 const regions = [
   ["tokyo", "东京", "東京", "Tokyo"],
   ["kanagawa", "神奈川", "神奈川", "Kanagawa"],
@@ -62,22 +32,12 @@ const regions = [
   ["kyoto", "京都", "京都", "Kyoto"],
 ] as const;
 
-const achievementDefinitions = [
-  { code: "first_checkin", metric: "checked_in_count", threshold: 1 },
-  { code: "city_explorer_5", metric: "checked_in_count", threshold: 5 },
-  { code: "first_hosted_event", metric: "hosted_ended_count", threshold: 1 },
-  { code: "community_builder", metric: "owned_group_members", threshold: 10 },
-] as const;
-
 export function SettingsClient() {
-  const { locale, setLocale: applyInterfaceLocale } = useI18n();
+  const { locale, t, setLocale: applyInterfaceLocale } = useI18n();
   const appDialog = useAppDialog();
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [prefs, setPrefs] = useState<Record<string, boolean>>({});
-  const [preferredLocale, setPreferredLocale] = useState<Preference["locale"]>("zh-Hans");
+  const [preferredLocale, setPreferredLocale] = useState<Locale>("zh-Hans");
   const [contentLanguages, setContentLanguages] = useState<Locale[]>(["zh-Hans"]);
-  const [achievements, setAchievements] = useState<Achievement[]>([]);
-  const [achievementProgress, setAchievementProgress] = useState<AchievementProgress | null>(null);
   const [deletionPending, setDeletionPending] = useState(false);
   const [analyticsEnabled, setAnalyticsEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -86,31 +46,12 @@ export function SettingsClient() {
 
   const load = useCallback(async () => {
     try {
-      const evaluated = await apiRequest<{ metrics: AchievementProgress }>(
-        "/me/achievements/evaluate",
-        { method: "POST", authenticated: true },
-      ).catch(() => null);
-      const [profileValue, preferences, achievementPage] = await Promise.all([
-        apiRequest<Profile>("/me/profile", { authenticated: true }),
-        apiRequest<{ items: Preference[] }>("/notifications/preferences", {
-          authenticated: true,
-        }),
-        apiRequest<{ items: Achievement[] }>("/me/achievements", {
-          authenticated: true,
-        }).catch(() => ({ items: [] })),
-      ]);
+      const profileValue = await apiRequest<Profile>("/me/profile", { authenticated: true });
       setProfile(profileValue);
       setPreferredLocale(profileValue.preferredLocale ?? "zh-Hans");
       setContentLanguages(
         profileValue.contentLanguages?.length ? profileValue.contentLanguages : ["zh-Hans"],
       );
-      setAchievements(achievementPage.items.filter((item) => !item.revokedAt));
-      setAchievementProgress(evaluated?.metrics ?? null);
-      const values: Record<string, boolean> = {};
-      for (const item of preferences.items) values[item.type] = item.inApp;
-      setPrefs(values);
-      if (!profileValue.preferredLocale && preferences.items[0])
-        setPreferredLocale(preferences.items[0].locale);
     } catch (error) {
       setMessage(errorMessage(error));
     }
@@ -155,14 +96,10 @@ export function SettingsClient() {
           safetyBody: "案件の進捗、異議申立て、ブロック中のユーザーを非公開で確認",
           safetyOpen: "開く",
           achievements: "実績",
-          achievementsBody: "参加、主催、コミュニティづくりの節目は iOS と Web に同期されます。",
-          unlocked: "獲得済み",
-          locked: "進行中",
           logout: "ログアウト",
           logoutAll: "すべての端末からログアウト",
           logoutAllBody: "iOS と Web のすべてのセッションを取り消します",
           logoutAllConfirm: "すべての端末からログアウトしますか？もう一度ログインが必要です。",
-          notifications: "通知",
           analytics: "匿名プロダクト分析",
           analyticsBody: "検索語や連絡先などの内容は送信せず、主要な導線の改善に必要な最小限の利用状況だけを共有します。",
           saving: "保存中…",
@@ -173,7 +110,7 @@ export function SettingsClient() {
           cancelDelete: "削除申請を取り消す",
           cancelDeleteConfirm: "アカウント削除申請を取り消しますか？",
           deleteCancelled: "アカウント削除申請を取り消しました。",
-          loading: "プロフィールと通知設定を同期中…",
+          loading: "プロフィールを同期中…",
           confirmDelete:
             "アカウント削除を申請しますか？未完了イベントやグループ所有権を確認後、待機期間に入ります。",
           deleteRecorded: "削除申請を受け付けました。最短実行日時",
@@ -208,14 +145,10 @@ export function SettingsClient() {
             safetyBody: "Privately review case progress, appeals, and blocked people",
             safetyOpen: "Open",
             achievements: "Achievements",
-            achievementsBody: "Milestones for attending, hosting, and building communities sync across iOS and Web.",
-            unlocked: "Unlocked",
-            locked: "In progress",
             logout: "Log out",
             logoutAll: "Log out everywhere",
             logoutAllBody: "Revoke every iOS and Web session",
             logoutAllConfirm: "Log out on every device? You will need to sign in again.",
-            notifications: "Notifications",
             analytics: "Anonymous product analytics",
             analyticsBody: "Share minimal funnel usage to improve Spott. Search text, contact details, and private content are never included.",
             saving: "Saving…",
@@ -226,7 +159,7 @@ export function SettingsClient() {
             cancelDelete: "Cancel deletion request",
             cancelDeleteConfirm: "Cancel the account deletion request?",
             deleteCancelled: "Account deletion request cancelled.",
-            loading: "Syncing profile and notification preferences…",
+            loading: "Syncing your profile…",
             confirmDelete:
               "Request account deletion? We first check unfinished events and group ownership, then begin the cooling-off period.",
             deleteRecorded: "Deletion request recorded. Earliest execution",
@@ -260,14 +193,10 @@ export function SettingsClient() {
             safetyBody: "私密查看案件进度、申诉和已拉黑用户",
             safetyOpen: "打开",
             achievements: "成就",
-            achievementsBody: "参加、主办和建设社区的里程碑会在 iOS 与 Web 同步。",
-            unlocked: "已获得",
-            locked: "进行中",
             logout: "退出登录",
             logoutAll: "退出所有设备",
             logoutAllBody: "撤销全部 iOS 与 Web 登录会话",
             logoutAllConfirm: "确定退出所有设备吗？之后需要重新登录。",
-            notifications: "通知",
             analytics: "匿名产品体验分析",
             analyticsBody: "仅共享改进核心流程所需的最少使用情况，不会发送搜索文字、联系方式或私密内容。",
             saving: "正在保存…",
@@ -278,7 +207,7 @@ export function SettingsClient() {
             cancelDelete: "撤销注销申请",
             cancelDeleteConfirm: "确定撤销账号注销申请吗？",
             deleteCancelled: "账号注销申请已撤销。",
-            loading: "正在同步资料和通知偏好…",
+            loading: "正在同步个人资料…",
             confirmDelete: "确定申请注销账号吗？系统会先检查未结束活动和群主责任，并进入冷静期。",
             deleteRecorded: "注销申请已记录，最早执行时间",
           };
@@ -300,22 +229,6 @@ export function SettingsClient() {
           contentLanguages,
         }),
       });
-      await Promise.all(
-        notificationTypes.map((type) =>
-          apiRequest(`/notifications/preferences/${type}`, {
-            method: "PUT",
-            authenticated: true,
-            body: JSON.stringify({
-              inApp: prefs[type] ?? true,
-              push: prefs[type] ?? true,
-              email: false,
-              quietStart: "22:00",
-              quietEnd: "08:00",
-              locale: preferredLocale,
-            }),
-          }),
-        ),
-      );
       setProfile(updated);
       applyInterfaceLocale(preferredLocale);
     } catch (error) {
@@ -524,7 +437,7 @@ export function SettingsClient() {
                 <select
                   value={preferredLocale}
                   onChange={(event) =>
-                    setPreferredLocale(event.target.value as Preference["locale"])
+                    setPreferredLocale(event.target.value as Locale)
                   }
                 >
                   {(Object.keys(localeNames) as Locale[]).map((value) => (
@@ -559,38 +472,12 @@ export function SettingsClient() {
 
             <div className="settings-section">
               <h2>{copy.achievements}</h2>
-              <p className="achievement-intro">{copy.achievementsBody}</p>
-              <div className="achievement-grid">
-                {achievementDefinitions.map((definition) => {
-                  const award = achievements.find((item) => item.code === definition.code);
-                  const current = achievementProgress?.[definition.metric] ?? 0;
-                  const progress = Math.min(100, (current / definition.threshold) * 100);
-                  const labels = achievementLabel(definition.code, locale);
-                  return (
-                    <article className={award ? "unlocked" : ""} key={definition.code}>
-                      <div className="achievement-mark" aria-hidden="true">
-                        {award ? "✓" : labels.symbol}
-                      </div>
-                      <div>
-                        <span>{award ? copy.unlocked : copy.locked}</span>
-                        <strong>{labels.title}</strong>
-                        <p>{labels.body}</p>
-                      </div>
-                      <div className="achievement-progress">
-                        <i>
-                          <b style={{ width: `${award ? 100 : progress}%` }} />
-                        </i>
-                        <small>
-                          {award
-                            ? new Intl.DateTimeFormat(intlLocale(locale), {
-                                dateStyle: "medium",
-                              }).format(new Date(award.awardedAt))
-                            : `${Math.min(current, definition.threshold)} / ${definition.threshold}`}
-                        </small>
-                      </div>
-                    </article>
-                  );
-                })}
+              <div className="setting-row">
+                <div>
+                  <strong>{t("achievements.title")}</strong>
+                  <p>{t("achievements.settingsBody")}</p>
+                </div>
+                <Link href="/me/achievements">{t("achievements.manage")} ↗</Link>
               </div>
             </div>
 
@@ -639,8 +526,10 @@ export function SettingsClient() {
               </div>
             </div>
 
+            <NotificationPreferences preferredLocale={preferredLocale} />
+
             <div className="settings-section">
-              <h2>{copy.notifications}</h2>
+              <h2>{t("prefs.privacy")}</h2>
               <label className="toggle-row">
                 <span>
                   <strong>{copy.analytics}</strong>
@@ -657,22 +546,6 @@ export function SettingsClient() {
                   }}
                 />
               </label>
-              {notificationTypes.map((type) => {
-                const labels = notificationLabel(type, locale);
-                return (
-                  <label className="toggle-row" key={type}>
-                    <span>
-                      <strong>{labels.title}</strong>
-                      <small>{labels.detail}</small>
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={prefs[type] ?? true}
-                      onChange={(event) => setPrefs({ ...prefs, [type]: event.target.checked })}
-                    />
-                  </label>
-                );
-              })}
             </div>
 
             <button className="primary-action compact" disabled={busy}>
@@ -702,66 +575,6 @@ export function SettingsClient() {
       </section>
     </main>
   );
-}
-
-function notificationLabel(
-  type: (typeof notificationTypes)[number],
-  locale: Locale,
-): { title: string; detail: string } {
-  const labels = {
-    "event.critical": [
-      ["活动关键变化", "时间、地点、费用和取消"],
-      ["イベントの重要な変更", "日時、場所、参加費、中止"],
-      ["Important event changes", "Time, place, fees, and cancellation"],
-    ],
-    "registration.status": [
-      ["报名与候补", "确认、拒绝、候补递补和签到"],
-      ["申込とキャンセル待ち", "確定、却下、空席案内、チェックイン"],
-      ["Registration & waitlist", "Confirmation, rejection, offers, and check-in"],
-    ],
-    "group.update": [
-      ["群组更新", "公告、评论和后续活动"],
-      ["グループ更新", "お知らせ、コメント、次のイベント"],
-      ["Group updates", "Announcements, comments, and upcoming events"],
-    ],
-    recommendation: [
-      ["推荐提醒", "与你的兴趣相关的新活动"],
-      ["おすすめ", "興味に合う新しいイベント"],
-      ["Recommendations", "New events related to your interests"],
-    ],
-  } as const;
-  const item = labels[type][locale === "ja" ? 1 : locale === "en" ? 2 : 0];
-  return { title: item[0], detail: item[1] };
-}
-
-function achievementLabel(
-  code: (typeof achievementDefinitions)[number]["code"],
-  locale: Locale,
-): { symbol: string; title: string; body: string } {
-  const labels = {
-    first_checkin: [
-      ["初", "第一次到场", "完成一次真实见面"],
-      ["初", "はじめての参加", "最初の集まりでチェックイン"],
-      ["01", "First arrival", "Check in at your first gathering"],
-    ],
-    city_explorer_5: [
-      ["城", "城市探索者", "累计参加 5 次活动"],
-      ["街", "シティエクスプローラー", "5回の集まりに参加"],
-      ["05", "City explorer", "Attend five gatherings"],
-    ],
-    first_hosted_event: [
-      ["主", "第一次主办", "完整办完一场活动"],
-      ["主", "はじめての主催", "最初のイベントを完了"],
-      ["H", "First hosted event", "Complete your first hosted gathering"],
-    ],
-    community_builder: [
-      ["群", "社区建设者", "自己的群组达到 10 位成员"],
-      ["輪", "コミュニティビルダー", "所有グループが10人に到達"],
-      ["C", "Community builder", "Grow an owned group to ten members"],
-    ],
-  } as const;
-  const item = labels[code][locale === "ja" ? 1 : locale === "en" ? 2 : 0];
-  return { symbol: item[0], title: item[1], body: item[2] };
 }
 
 function intlLocale(locale: Locale): string {

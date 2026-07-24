@@ -51,6 +51,13 @@ refresh_derivation_key=$(openssl rand -hex 32)
   printf 'APP_DATABASE_USER=spott_app\n'
   printf 'APP_DATABASE_PASSWORD=%s\n' "$app_database_password"
   printf 'SPOTT_PUBLIC_ORIGIN=http://%s\n' "$public_ipv4"
+  # SPOTT_CANONICAL_ORIGIN MUST stay https:// even though the preview is served
+  # over plain HTTP. The API (NODE_ENV=production) hard-fails at startup unless
+  # SPOTT_WEB_CANONICAL_ORIGIN is https (services/api/src/config.ts:239-241), and
+  # the value is otherwise never read at runtime. HTTP login does NOT depend on
+  # it: the web client carries its session as a Bearer token in localStorage,
+  # WEB_SESSION_BFF_ENFORCEMENT=off, and http://<ip> is already in WEB_ORIGIN.
+  # Do NOT change this to http:// — doing so crashes the api container.
   printf 'SPOTT_CANONICAL_ORIGIN=https://%s\n' "$public_ipv4"
   printf 'NEXT_PUBLIC_MAP_STYLE_URL=https://demotiles.maplibre.org/style.json\n'
   printf 'ACCESS_TOKEN_SECRET=%s\n' "$access_token_secret"

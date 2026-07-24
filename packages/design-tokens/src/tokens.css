@@ -12,6 +12,36 @@
   --spott-danger: #c83f50;
   --spott-divider: #e6e2da;
   --spott-font-sans: InterVariable, Inter, "Noto Sans SC", "Noto Sans JP", system-ui, sans-serif;
+
+  /* Type scale (px). Body/meta/caption are NOT clamped. */
+  --fs-display: 34px;
+  --lh-display: 1.14;
+  --fs-title: 26px;
+  --lh-title: 1.2;
+  --fs-section: 20px;
+  --lh-section: 1.3;
+  --fs-body: 16px;
+  --lh-body: 1.55;
+  --fs-meta: 13px;
+  --lh-meta: 1.45;
+  --fs-caption: 12px;
+  --lh-caption: 1.4;
+  /* Two fluid hero displays only. */
+  --fs-hero: clamp(30px, 4vw, 46px);
+
+  /* Weight ladder — FIVE stops only. */
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  --fw-display: 800;
+
+  /* Tracking — Latin only; CJK stays ~0 (see globals CJK guard). */
+  --track-display: -0.02em;
+  --track-tight: -0.01em;
+  --track-normal: 0;
+  --track-label: 0.06em;
+
   --spott-radius-control: 12px;
   --spott-radius-card: 18px;
   --spott-radius-cover: 24px;
@@ -26,5 +56,45 @@
     --spott-motion-fast: 1ms;
     --spott-motion-standard: 1ms;
     --spott-motion-narrative: 1ms;
+  }
+}
+
+/*
+ * Dark theme — system-following by default, with an explicit [data-theme]
+ * override hook so a manual toggle can be layered on later without a repaint.
+ * Values are hand-tuned for a layered near-black canvas (never pure #000):
+ * surface sits above canvas, muted text is lifted well clear of the AA floor,
+ * and the twilight accent is lightened so it stays legible on dark chrome.
+ * Cover art and photography are untouched — only chrome tokens change.
+ */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --spott-canvas: #0d0f13;
+  --spott-surface: #171a21;
+  --spott-ink: #f3f4f7;
+  --spott-muted: #a2a8b4;
+  --spott-twilight: #9d8eff;
+  --spott-coral: #ff8a73;
+  --spott-coral-strong: #ff9d88;
+  --spott-mint: #52d3a4;
+  --spott-amber: #ecb552;
+  --spott-danger: #ff6b79;
+  --spott-divider: #2a2f39;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --spott-canvas: #0d0f13;
+    --spott-surface: #171a21;
+    --spott-ink: #f3f4f7;
+    --spott-muted: #a2a8b4;
+    --spott-twilight: #9d8eff;
+    --spott-coral: #ff8a73;
+    --spott-coral-strong: #ff9d88;
+    --spott-mint: #52d3a4;
+    --spott-amber: #ecb552;
+    --spott-danger: #ff6b79;
+    --spott-divider: #2a2f39;
   }
 }

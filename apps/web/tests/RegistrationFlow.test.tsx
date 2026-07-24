@@ -775,7 +775,7 @@ describe("complete registration confirmation", () => {
     expect(screen.getByText(/2 人/)).toBeInTheDocument();
     expect(screen.getByText("清澄白河站附近")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "加入日历" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "分享" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "邀请朋友同行" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "查看我的活动" })).toHaveAttribute("href", "/me/events");
   });
 
@@ -810,7 +810,7 @@ describe("complete registration confirmation", () => {
         />,
       );
 
-      await user.click(screen.getByRole("button", { name: "分享" }));
+      await user.click(screen.getByRole("button", { name: "邀请朋友同行" }));
       expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法分享");
 
       view.unmount();
@@ -824,7 +824,7 @@ describe("complete registration confirmation", () => {
           registration={{ id: "registration", eventId: makeDetail().id, status: "confirmed", partySize: 1 }}
         />,
       );
-      await user.click(screen.getByRole("button", { name: "分享" }));
+      await user.click(screen.getByRole("button", { name: "邀请朋友同行" }));
       await waitFor(() => expect(navigator.share).toHaveBeenCalledOnce());
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     } finally {

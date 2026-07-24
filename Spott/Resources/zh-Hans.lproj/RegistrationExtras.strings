@@ -1,0 +1,17 @@
+"regextras.ticket.section" = "票种";
+"regextras.ticket.required" = "请先选择票种再继续。";
+"regextras.ticket.loading" = "正在加载票种…";
+"regextras.ticket.unavailable" = "暂时无法加载票种。";
+"regextras.ticket.free" = "免费";
+"regextras.ticket.pay_onsite" = "现场支付";
+"regextras.ticket.sold_out_badge" = "已售罄";
+"regextras.ticket.remaining" = "仅剩 %d 张";
+"regextras.ticket.quota" = "限 %d 名";
+"regextras.error.ticket_sold_out" = "该票种已售罄，请选择其他票种。";
+"regextras.payment.report_action" = "我已线下支付";
+"regextras.payment.reported_chip" = "已告知主办方 · 待确认";
+"regextras.payment.confirmed_chip" = "主办方已确认收款";
+"regextras.payment.report_hint" = "现场付款后在这里告知主办方，最终确认由主办方完成。";
+"regextras.payment.report_failed" = "暂时无法提交，请稍后再试。";
+"regextras.payment.not_applicable" = "这笔报名不需要支付确认。";
+"regextras.invite.action" = "邀请朋友同行";

@@ -1,847 +1,1078 @@
 import SwiftUI
+import UIKit
 
-private struct LegacyMyActivitiesView: View {
+struct MyActivitiesView: View {
     @Environment(AppModel.self) private var model
-    @State private var selection: ActivityScope = .upcoming
-    @State private var items: [ActivityItem] = []
-    @State private var loading = false
-    @State private var error: UserFacingError?
-    @State private var selectedCheckIn: ActivityItem?
-    @State private var selectedFeedback: ActivityItem?
-    @State private var selectedCorrection: ActivityItem?
+    @Environment(\.locale) private var locale
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 20) {
-                pageHeader
-                if model.session == nil {
-                    signedOutCard
-                } else {
-                    scopePicker
+        content
+            .id("\(model.session?.sessionId.uuidString ?? "guest")-\(locale.identifier)")
+    }
+
+    @ViewBuilder
+    private var content: some View {
+#if DEBUG
+        if CoreJourneyUIFixtureState.resolve() == .itinerary {
+            MyActivitiesNativeScreen(
+                service: MyActivitiesUIFixtureService(),
+                locale: locale
+            )
+        } else {
+            sessionContent
+        }
+#else
+        sessionContent
+#endif
+    }
+
+    @ViewBuilder
+    private var sessionContent: some View {
+        Group {
+            if model.session == nil {
+                MyActivitiesSignedOutView(locale: locale) {
+                    model.presentedGate = .login
+                }
+            } else {
+                MyActivitiesNativeScreen(
+                    service: model.api,
+                    locale: locale
+                )
+            }
+        }
+    }
+}
+
+@MainActor
+private struct MyActivitiesNativeScreen: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @State private var store: MyActivitiesStore
+    @State private var selectedCheckIn: MyActivitiesCheckInTarget?
+    @State private var selectedFeedback: MyActivitiesCheckInTarget?
+    @State private var selectedCorrection: MyActivitiesCheckInTarget?
+    @State private var selectedStatus: MyActivityItem?
+    @State private var cancellationTarget: MyActivityItem?
+    @State private var routeInFlight: UUID?
+    @State private var didStart = false
+    @State private var focusedRegistrationID: UUID?
+
+    private let locale: Locale
+    private let presentation: MyActivitiesPagePresentation
+
+    init(service: any MyActivitiesServing, locale: Locale) {
+        _store = State(initialValue: MyActivitiesStore(service: service, locale: locale))
+        self.locale = locale
+        presentation = .init(locale: locale)
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 24) {
+                    MyActivitiesHeader(presentation: presentation)
+
+                    if let error = store.error, !store.items.isEmpty {
+                        MyActivitiesInlineNotice(
+                            message: error.message,
+                            retry: { Task { await store.refresh() } }
+                        )
+                    }
+
                     content
                 }
+                .padding(.horizontal, 18)
+                .padding(.top, 18)
+                .padding(.bottom, 42)
             }
-            .padding(.horizontal, SpottMetric.pageInset)
-            .padding(.top, 18)
-            .padding(.bottom, 34)
+            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+            .refreshable { await store.refresh() }
+            .task {
+                await startIfNeeded()
+                focusPendingRegistration(using: proxy)
+            }
+            .onChange(of: model.router.pendingItineraryRegistrationID) { _, _ in
+                focusPendingRegistration(using: proxy)
+            }
+            .onChange(of: store.items.map(\.registration.id)) { _, _ in
+                focusPendingRegistration(using: proxy)
+            }
         }
-        .background(SpottColor.canvas.ignoresSafeArea())
-        .toolbar(.hidden, for: .navigationBar)
-        .task(id: model.session?.sessionId) { await load() }
-        .refreshable { await load() }
-        .sheet(item: $selectedCheckIn, onDismiss: { Task { await load() } }) { item in
+        .task(id: store.nextTemporalRefreshDate) {
+            await refreshAtNextTemporalBoundary()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .spottItineraryNeedsRefresh)
+        ) { _ in
+            Task { await store.refresh() }
+        }
+        .sheet(item: $selectedCheckIn, onDismiss: refreshAfterCheckIn) { target in
             NavigationStack {
-                ParticipantCheckInView(event: item.event, registration: item.registration)
+                ParticipantCheckInView(
+                    event: target.event,
+                    registration: target.registration
+                )
             }
         }
-        .sheet(item: $selectedFeedback, onDismiss: { Task { await load() } }) { item in
-            FeedbackSubmissionView(event: item.event, registration: item.registration)
+        .sheet(item: $selectedFeedback, onDismiss: refreshAfterCheckIn) { target in
+            FeedbackSubmissionView(
+                event: target.event,
+                registration: target.registration
+            )
         }
-        .sheet(item: $selectedCorrection, onDismiss: { Task { await load() } }) { item in
-            CheckInCorrectionView(event: item.event, registration: item.registration)
+        .sheet(item: $selectedCorrection, onDismiss: refreshAfterCheckIn) { target in
+            CheckInCorrectionView(
+                event: target.event,
+                registration: target.registration
+            )
+        }
+        .sheet(item: $selectedStatus) { item in
+            MyActivityStatusSheet(item: item, locale: locale)
+        }
+        .sheet(item: waitlistAcceptanceReviewBinding) { review in
+            WaitlistAcceptanceReviewSheet(
+                review: review,
+                locale: locale,
+                isBusy: store.actionInFlight == review.registrationID,
+                confirm: { Task { await store.confirmWaitlistAcceptance() } },
+                cancel: { store.dismissWaitlistAcceptanceReview() }
+            )
+            .interactiveDismissDisabled(store.actionInFlight == review.registrationID)
+        }
+        .alert(
+            text("journey.itinerary.cancel.title"),
+            isPresented: cancellationAlertPresented
+        ) {
+            Button(text("journey.itinerary.cancel.confirm"), role: .destructive) {
+                confirmCancellation()
+            }
+            .accessibilityIdentifier("itinerary.cancel.confirm")
+            Button(text("journey.common.cancel"), role: .cancel) {
+                cancellationTarget = nil
+            }
+            .accessibilityIdentifier("itinerary.cancel.dismiss")
+        } message: {
+            Text(text("journey.itinerary.cancel.message"))
+        }
+        .accessibilityIdentifier("itinerary.screen")
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if store.isLoading && store.items.isEmpty {
+            VStack(spacing: 14) {
+                ForEach(0..<3, id: \.self) { _ in
+                    MyActivityNativeSkeleton()
+                }
+            }
+            .accessibilityLabel(CoreJourneyLocalization.text(
+                "journey.detail.refreshing",
+                locale: locale
+            ))
+        } else if let error = store.error, store.items.isEmpty {
+            MyActivitiesStateCard(
+                systemImage: "wifi.exclamationmark",
+                title: error.message,
+                message: presentation.syncError,
+                actionTitle: CoreJourneyLocalization.text(
+                    "journey.common.retry",
+                    locale: locale
+                )
+            ) {
+                Task { await store.refresh() }
+            }
+        } else if store.items.isEmpty {
+            SpottEmptyState(
+                icon: "calendar.badge.plus",
+                title: presentation.emptyTitle,
+                message: presentation.emptyMessage,
+                actionTitle: presentation.discoverAction
+            ) {
+                model.router.selectedTab = .discovery
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 42)
+        } else {
+            ForEach(store.sections.filter { !$0.items.isEmpty }) { section in
+                MyActivitiesNativeSection(
+                    section: section,
+                    locale: locale,
+                    actionInFlight: store.actionInFlight ?? routeInFlight,
+                    focusedRegistrationID: focusedRegistrationID,
+                    reportedPaymentIDs: store.reportedPaymentRegistrationIDs,
+                    action: perform
+                )
+            }
         }
     }
 
-    private var pageHeader: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("MY SPOTTS")
-                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                .tracking(1.6)
-                .foregroundStyle(SpottColor.coral)
-            Text("你的行程")
-                .font(.system(size: 34, weight: .bold, design: .rounded))
-                .tracking(-1.2)
-            Text("报名、候补、票码和活动变化会在 iOS 与 Web 实时同步。")
-                .font(.system(size: 14.5, design: .rounded))
-                .foregroundStyle(SpottColor.muted)
-                .lineSpacing(3)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    private func startIfNeeded() async {
+        guard !didStart else { return }
+        didStart = true
+        await store.refresh()
     }
 
-    private var signedOutCard: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            HStack(alignment: .top) {
-                Image(systemName: "calendar.badge.checkmark")
-                    .font(.system(size: 25, weight: .medium))
-                Spacer()
-                Text("跨端同步")
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.white.opacity(0.56), in: Capsule())
+    private func perform(_ action: MyActivityNextAction, item: MyActivityItem) {
+        switch action {
+        case .acceptWaitlist, .reportPayment:
+            Task { await store.perform(action) }
+        case .cancelRegistration:
+            cancellationTarget = item
+        case .checkIn(_, let reference):
+            loadEvent(reference: reference, item: item, destination: .checkIn)
+        case .correctAttendance(_, let reference):
+            loadEvent(reference: reference, item: item, destination: .correction)
+        case .leaveFeedback(_, let reference):
+            loadEvent(reference: reference, item: item, destination: .feedback)
+        case .viewStatus:
+            selectedStatus = item
+        case .viewEvent(let reference):
+#if DEBUG
+            if CoreJourneyUIFixtureState.resolve() == .itinerary,
+               let event = item.event {
+                model.router.show(event: event.coreJourneyDetailFixture, in: .profile)
+                return
             }
-            VStack(alignment: .leading, spacing: 7) {
-                Text("登录后，现场不会手忙脚乱。")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                Text("票码、精确地址、候补确认和签到状态都只属于你的账号。")
-                    .font(.subheadline)
-                    .foregroundStyle(SpottColor.muted)
-                    .lineSpacing(4)
-            }
-            Button("登录或注册") { model.presentedGate = .login }
-                .buttonStyle(PrimaryButtonStyle())
+#endif
+            model.router.push(.event(reference), in: .profile)
+        case .none:
+            break
         }
-        .padding(22)
-        .background(
-            LinearGradient(
-                colors: [Color(red: 0.93, green: 0.95, blue: 1), Color(red: 1, green: 0.93, blue: 0.91)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: SpottMetric.coverRadius, style: .continuous)
+    }
+
+    private func loadEvent(
+        reference: EventRouteReference,
+        item: MyActivityItem,
+        destination: MyActivitiesLoadedDestination
+    ) {
+        guard routeInFlight == nil else { return }
+        routeInFlight = item.registration.id
+        Task { @MainActor in
+            defer { routeInFlight = nil }
+            do {
+                let event = try await model.api.event(identifier: reference.identifier)
+                let target = MyActivitiesCheckInTarget(
+                    event: event,
+                    registration: item.registration
+                )
+                switch destination {
+                case .checkIn: selectedCheckIn = target
+                case .correction: selectedCorrection = target
+                case .feedback: selectedFeedback = target
+                }
+            } catch {
+                model.banner = .init(
+                    title: text("journey.error.action"),
+                    tone: .warning
+                )
+            }
+        }
+    }
+
+    private func refreshAfterCheckIn() {
+        Task { await store.refresh() }
+    }
+
+    private var waitlistAcceptanceReviewBinding: Binding<WaitlistAcceptanceReview?> {
+        Binding(
+            get: { store.waitlistAcceptanceReview },
+            set: { value in
+                if value == nil { store.dismissWaitlistAcceptanceReview() }
+            }
         )
     }
 
-    private var scopePicker: some View {
-        HStack(spacing: 5) {
-            ForEach(ActivityScope.allCases) { scope in
-                Button {
-                    withAnimation(.snappy(duration: 0.25)) { selection = scope }
-                } label: {
-                    Text(LocalizedStringKey(scope.title))
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(selection == scope ? SpottColor.ink : SpottColor.muted)
-                        .frame(maxWidth: .infinity, minHeight: 38)
-                        .background(selection == scope ? Color.white.opacity(0.72) : .clear, in: Capsule())
-                }
-                .buttonStyle(.plain)
-            }
+    private func focusPendingRegistration(using proxy: ScrollViewProxy) {
+        guard let registrationID = model.router.pendingItineraryRegistrationID,
+              store.items.contains(where: { $0.registration.id == registrationID }) else {
+            return
         }
-        .padding(4)
-        .spottGlassPanel(shape: Capsule())
-    }
-
-    @ViewBuilder private var content: some View {
-        if loading && items.isEmpty {
-            VStack(spacing: 12) {
-                ForEach(0..<2, id: \.self) { _ in ActivitySkeleton() }
-            }
-        } else if let error, items.isEmpty {
-            SpottStateCard(
-                icon: "wifi.exclamationmark",
-                title: "暂时无法同步行程",
-                message: "\(error.message)\n错误编号：\(error.id)",
-                actionTitle: "重新连接"
-            ) { Task { await load() } }
-        } else if filteredItems.isEmpty {
-            SpottStateCard(
-                icon: selection == .past ? "clock.arrow.circlepath" : "calendar",
-                title: selection.emptyTitle,
-                message: selection.emptyMessage,
-                actionTitle: selection == .upcoming ? "去发现活动" : nil
-            ) {
-                if selection == .upcoming { model.router.selectedTab = .discovery }
-            }
+        focusedRegistrationID = registrationID
+        if reduceMotion {
+            proxy.scrollTo(registrationID, anchor: .center)
         } else {
-            ForEach(filteredItems) { item in
-                ActivityCard(
-                    item: item,
-                    onOpen: { model.show(event: item.event) },
-                    onCheckIn: { selectedCheckIn = item },
-                    onFeedback: { selectedFeedback = item },
-                    onCorrection: { selectedCorrection = item }
-                ) {
-                    await performPrimaryAction(item)
-                }
+            withAnimation(.snappy) {
+                proxy.scrollTo(registrationID, anchor: .center)
+            }
+        }
+        _ = model.router.completeItineraryFocus(registrationID)
+        UIAccessibility.post(notification: .screenChanged, argument: nil)
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            if focusedRegistrationID == registrationID {
+                focusedRegistrationID = nil
             }
         }
     }
 
-    private var filteredItems: [ActivityItem] {
-        items.filter { selection.includes($0) }
-    }
-
-    private func load() async {
-        guard model.session != nil else { items = []; return }
-        loading = true
-        error = nil
+    private func refreshAtNextTemporalBoundary() async {
+        guard let delay = store.temporalRefreshDelay() else { return }
         do {
-            let registrations = try await model.api.registrations().items
-            var loaded: [ActivityItem] = []
-            await withTaskGroup(of: ActivityItem?.self) { group in
-                for registration in registrations {
-                    group.addTask {
-                        guard let event = try? await model.api.event(identifier: registration.eventId.uuidString.lowercased()) else { return nil }
-                        return ActivityItem(registration: registration, event: event)
-                    }
-                }
-                for await item in group {
-                    if let item { loaded.append(item) }
-                }
-            }
-            items = loaded.sorted { ($0.event.startsAt ?? .distantFuture) < ($1.event.startsAt ?? .distantFuture) }
+            try await Task.sleep(for: .seconds(max(0.01, delay)))
+            try Task.checkCancellation()
+            store.refreshTemporalState()
+            await store.refresh()
         } catch {
-            self.error = AppModel.map(error)
-        }
-        loading = false
-    }
-
-    private func performPrimaryAction(_ item: ActivityItem) async {
-        do {
-            if item.registration.status == "offered" {
-                model.router.showItinerary(registrationID: item.registration.id)
-                return
-            } else if ["pending", "confirmed", "waitlisted"].contains(item.registration.status) {
-                _ = try await model.api.cancelRegistration(registrationID: item.registration.id)
-            } else {
-                model.show(event: item.event)
-                return
-            }
-            await load()
-        } catch {
-            self.error = AppModel.map(error)
+            return
         }
     }
-}
 
-private enum ActivityScope: String, CaseIterable, Identifiable {
-    case upcoming, pending, past
-    var id: String { rawValue }
-    var title: String { switch self { case .upcoming: "即将开始"; case .pending: "待确认"; case .past: "过去" } }
-    var emptyTitle: String { switch self { case .upcoming: "下一次见面还没安排"; case .pending: "没有需要处理的报名"; case .past: "参加过的活动会留在这里" } }
-    var emptyMessage: String { switch self { case .upcoming: "收藏不算行程，完成报名后活动会出现在这里。"; case .pending: "审核、候补和递补确认会集中显示。"; case .past: "签到后可以评价、领取到场积分并沉淀成就。" } }
-    func includes(_ item: ActivityItem) -> Bool {
-        let status = item.registration.status
-        let ended = (item.event.endsAt ?? item.event.startsAt ?? .distantFuture) < .now
-        switch self {
-        case .upcoming: return !ended && ["confirmed", "checked_in"].contains(status)
-        case .pending: return !ended && ["pending", "waitlisted", "offered"].contains(status)
-        case .past: return ended || ["cancelled", "rejected", "event_cancelled", "no_show"].contains(status)
-        }
+    private var cancellationAlertPresented: Binding<Bool> {
+        Binding(
+            get: { cancellationTarget != nil },
+            set: { if !$0 { cancellationTarget = nil } }
+        )
+    }
+
+    private func confirmCancellation() {
+        guard let item = cancellationTarget,
+              let action = item.cancellationAction else { return }
+        cancellationTarget = nil
+        Task { await store.perform(action) }
+    }
+
+    private func text(_ key: String.LocalizationValue) -> String {
+        CoreJourneyLocalization.text(key, locale: locale)
     }
 }
 
-private struct ActivityItem: Identifiable, Sendable {
-    let registration: Registration
-    let event: EventSummary
-    var id: UUID { registration.id }
-}
+private struct MyActivitiesSignedOutView: View {
+    let locale: Locale
+    let signIn: () -> Void
 
-private struct ActivityCard: View {
-    let item: ActivityItem
-    let onOpen: () -> Void
-    let onCheckIn: () -> Void
-    let onFeedback: () -> Void
-    let onCorrection: () -> Void
-    let onPrimary: () async -> Void
-    @State private var busy = false
+    private var presentation: MyActivitiesPagePresentation {
+        .init(locale: locale)
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Button(action: onOpen) {
-                HStack(spacing: 15) {
-                    ActivityCover(event: item.event)
-                        .frame(width: 88, height: 100)
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text(LocalizedStringKey(statusTitle))
-                                .font(.system(size: 11.5, weight: .bold, design: .rounded))
-                                .foregroundStyle(statusColor)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(SpottColor.muted.opacity(0.65))
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                MyActivitiesHeader(presentation: presentation)
+
+                MyActivitiesStateCard(
+                    systemImage: "person.crop.circle.badge.checkmark",
+                    title: presentation.signInTitle,
+                    message: presentation.signInMessage,
+                    actionTitle: presentation.signInAction,
+                    action: signIn
+                )
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 18)
+            .padding(.bottom, 42)
+        }
+        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+        .accessibilityIdentifier("itinerary.signed_out")
+    }
+}
+
+private struct MyActivitiesHeader: View {
+    let presentation: MyActivitiesPagePresentation
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("SPOTT", systemImage: "sparkles")
+                .font(.caption.monospaced().bold())
+                .foregroundStyle(SpottColor.coral)
+                .accessibilityHidden(true)
+
+            Text(presentation.title)
+                .font(.largeTitle.bold())
+                .tracking(-0.8)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("itinerary.title")
+
+            Text(presentation.subtitle)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct MyActivitiesNativeSection: View {
+    let section: MyActivitiesSection
+    let locale: Locale
+    let actionInFlight: UUID?
+    let focusedRegistrationID: UUID?
+    let reportedPaymentIDs: Set<UUID>
+    let action: (MyActivityNextAction, MyActivityItem) -> Void
+
+    private var presentation: MyActivitySectionPresentation {
+        .init(group: section.group, locale: locale)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(presentation.title)
+                    .font(.title3.bold())
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                Text(section.items.count, format: .number)
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            rows
+        }
+        .accessibilityIdentifier("itinerary.section.\(section.group.rawValue)")
+    }
+
+    private var rows: some View {
+        LazyVStack(spacing: 14) {
+            ForEach(section.items) { item in
+                let paymentState = paymentState(for: item)
+                MyActivityNativeRow(
+                    item: item,
+                    locale: locale,
+                    isBusy: actionInFlight == item.registration.id,
+                    isFocused: focusedRegistrationID == item.registration.id,
+                    paymentState: paymentState,
+                    open: {
+                        if let event = item.event {
+                            action(
+                                .viewEvent(.init(id: event.id, slug: event.publicSlug)),
+                                item
+                            )
+                        } else {
+                            action(.viewStatus(item.registration.id), item)
                         }
-                        Text(item.event.title)
-                            .font(.system(size: 17, weight: .bold, design: .rounded))
-                            .foregroundStyle(SpottColor.ink)
-                            .lineLimit(2)
-                        Label(dateLabel, systemImage: "calendar")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(SpottColor.muted)
-                            .lineLimit(1)
+                    },
+                    primaryAction: { action(item.nextAction, item) },
+                    reportPayment: item.registration.status == "confirmed"
+                        && paymentState == .none
+                        ? { action(.reportPayment(item.registration.id), item) }
+                        : nil,
+                    cancel: item.cancellationAction.map { cancellationAction in
+                        { action(cancellationAction, item) }
+                    }
+                )
+                .id(item.registration.id)
+            }
+        }
+    }
+
+    /// Derives the offline-payment chip state from the persisted registration
+    /// fields, falling back to the session-local optimistic set so a just-tapped
+    /// report shows immediately before the itinerary refresh lands.
+    private func paymentState(for item: MyActivityItem) -> MyActivityPaymentState {
+        if item.registration.paymentConfirmedAt != nil { return .confirmed }
+        if item.registration.paymentSelfReportedAt != nil
+            || reportedPaymentIDs.contains(item.registration.id) {
+            return .reported
+        }
+        return .none
+    }
+}
+
+enum MyActivityPaymentState: Equatable, Sendable {
+    case none
+    case reported
+    case confirmed
+}
+
+private struct MyActivityNativeRow: View {
+    let item: MyActivityItem
+    let locale: Locale
+    let isBusy: Bool
+    let isFocused: Bool
+    let paymentState: MyActivityPaymentState
+    let open: () -> Void
+    let primaryAction: () -> Void
+    let reportPayment: (() -> Void)?
+    let cancel: (() -> Void)?
+
+    private var presentation: MyActivityRowPresentation {
+        .init(item: item, locale: locale)
+    }
+
+    var body: some View {
+        content
+            .background(
+                Color(uiColor: .secondarySystemGroupedBackground),
+                in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(
+                        isFocused ? SpottColor.coral : Color.primary.opacity(0.08),
+                        lineWidth: isFocused ? 2 : 0.5
+                    )
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(
+                "itinerary.item.\(item.registration.id.uuidString.lowercased())"
+            )
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            Button(action: open) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 14) {
+                        MyActivityNativeCover(event: item.event)
+                            .frame(width: 86, height: 96)
+                        eventSummary
+                        Spacer(minLength: 0)
+                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        MyActivityNativeCover(event: item.event)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 142)
+                        eventSummary
                     }
                 }
-                .padding(14)
             }
             .buttonStyle(.plain)
-            .accessibilityIdentifier("activity.event.\(item.event.publicSlug)")
+            .accessibilityIdentifier(
+                "itinerary.item.\(item.registration.id.uuidString.lowercased()).open"
+            )
 
-            Divider().padding(.horizontal, 14)
+            switch paymentState {
+            case .confirmed:
+                paymentConfirmedChip
+            case .reported:
+                paymentReportedChip
+            case .none:
+                EmptyView()
+            }
 
-            HStack(spacing: 12) {
-                if item.registration.status == "confirmed" {
-                    Button(action: onCheckIn) {
-                        Label("现场签到", systemImage: "qrcode.viewfinder")
-                    }
-                } else if item.registration.status == "checked_in" {
-                    Label("已签到", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(SpottColor.mint)
-                } else {
-                    Label("\(item.registration.partySize) 人", systemImage: "person.2")
-                        .foregroundStyle(SpottColor.muted)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    partySize
+                    Spacer(minLength: 0)
+                    actionButton(fillsWidth: false)
+                    overflowMenu
                 }
-                Spacer()
-                if feedbackAvailable {
-                    Button("活动反馈", action: onFeedback)
-                        .buttonStyle(.borderedProminent)
-                        .tint(SpottColor.ink)
-                } else if correctionAvailable {
-                    Button("申请补签", action: onCorrection)
-                        .buttonStyle(.bordered)
-                } else {
-                    Button(primaryTitle) {
-                        busy = true
-                        Task { await onPrimary(); busy = false }
-                    }
-                    .disabled(busy)
+                VStack(alignment: .leading, spacing: 10) {
+                    partySize
+                    actionButton(fillsWidth: true)
+                    overflowMenu
                 }
             }
-            .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-            .padding(.horizontal, 16)
-            .frame(height: 48)
         }
-        .background(SpottColor.surface, in: RoundedRectangle(cornerRadius: SpottMetric.cardRadius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: SpottMetric.cardRadius).stroke(SpottColor.divider))
-        .shadow(color: SpottColor.ink.opacity(0.055), radius: 18, y: 8)
+        .padding(15)
     }
 
-    private var statusTitle: String {
-        switch item.registration.status {
-        case "confirmed": "已确认"
-        case "pending": "等待局头确认"
-        case "waitlisted": "候补中"
-        case "offered": "名额已为你保留"
-        case "checked_in": "已签到"
-        case "cancelled": "已取消"
-        case "event_cancelled": "活动已取消"
-        case "no_show": "未记录到场"
-        case "correction_pending": "补签审核中"
-        default: item.registration.status
+    private var paymentReportedChip: some View {
+        GlassPill(
+            text: RegistrationExtrasLocalization.text(
+                "regextras.payment.reported_chip",
+                locale: locale
+            ),
+            systemImage: "clock.badge.checkmark",
+            tint: SpottColor.amber
+        )
+        .accessibilityIdentifier(
+            "itinerary.item.\(item.registration.id.uuidString.lowercased()).payment_chip"
+        )
+    }
+
+    private var paymentConfirmedChip: some View {
+        GlassPill(
+            text: RegistrationExtrasLocalization.text(
+                "regextras.payment.confirmed_chip",
+                locale: locale
+            ),
+            systemImage: "checkmark.seal.fill",
+            tint: SpottColor.mint
+        )
+        .accessibilityIdentifier(
+            "itinerary.item.\(item.registration.id.uuidString.lowercased()).payment_confirmed_chip"
+        )
+    }
+
+    private var eventSummary: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            GlassPill(text: presentation.status, tint: statusTint)
+
+            Text(presentation.title)
+                .font(.headline)
+                .foregroundStyle(.primary)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Label(presentation.date, systemImage: "calendar")
+                .lineLimit(3)
+            Label(
+                presentation.location,
+                systemImage: item.event?.format == .online ? "video" : "mappin.and.ellipse"
+            )
+            .lineLimit(3)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    private var partySize: some View {
+        Label {
+            Text(item.registration.partySize, format: .number)
+        } icon: {
+            Image(systemName: "person.2")
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .accessibilityLabel(
+            "\(CoreJourneyLocalization.text("journey.registration.party_size", locale: locale)): \(item.registration.partySize)"
+        )
+    }
+
+    @ViewBuilder
+    private func actionButton(fillsWidth: Bool) -> some View {
+        if let title = presentation.actionTitle,
+           let systemImage = presentation.actionSystemImage {
+            MyActivityNativeActionButton(
+                title: title,
+                systemImage: systemImage,
+                isBusy: isBusy,
+                isProminent: isProminentAction,
+                fillsWidth: fillsWidth,
+                action: primaryAction
+            )
         }
     }
 
-    private var statusColor: Color {
+    @ViewBuilder
+    private var overflowMenu: some View {
+        if cancel != nil || reportPayment != nil {
+            Menu {
+                if let reportPayment {
+                    Button(action: reportPayment) {
+                        Label(
+                            RegistrationExtrasLocalization.text(
+                                "regextras.payment.report_action",
+                                locale: locale
+                            ),
+                            systemImage: "yensign.circle"
+                        )
+                    }
+                    .accessibilityIdentifier(
+                        "itinerary.item.\(item.registration.id.uuidString.lowercased()).report_payment"
+                    )
+                }
+                if let cancel {
+                    Button(role: .destructive, action: cancel) {
+                        Label(
+                            text("journey.itinerary.action.cancel"),
+                            systemImage: "xmark.circle"
+                        )
+                    }
+                    .accessibilityIdentifier(
+                        "itinerary.item.\(item.registration.id.uuidString.lowercased()).cancel"
+                    )
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.body.weight(.semibold))
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityLabel(text("journey.itinerary.action.more"))
+            }
+            .buttonBorderShape(.circle)
+            .modifier(MyActivityOverflowButtonStyle())
+            .disabled(isBusy)
+            .accessibilityIdentifier(
+                "itinerary.item.\(item.registration.id.uuidString.lowercased()).more"
+            )
+        }
+    }
+
+    private var isProminentAction: Bool {
+        switch item.nextAction {
+        case .acceptWaitlist, .checkIn, .correctAttendance, .leaveFeedback: true
+        case .cancelRegistration, .reportPayment, .viewStatus, .viewEvent, .none: false
+        }
+    }
+
+    private var statusTint: Color {
         switch item.registration.status {
         case "confirmed", "checked_in": SpottColor.mint
         case "offered": SpottColor.coral
         case "pending", "waitlisted": SpottColor.amber
-        default: SpottColor.muted
-        }
-    }
-
-    private var primaryTitle: String {
-        switch item.registration.status {
-        case "offered": "确认名额"
-        case "pending", "confirmed", "waitlisted": "取消"
-        default: "查看详情"
-        }
-    }
-
-    private var dateLabel: String {
-        guard let date = item.event.startsAt else { return "时间待定" }
-        return date.formatted(.dateTime.month().day().weekday().hour().minute())
-    }
-
-    private var hasEnded: Bool {
-        (item.event.endsAt ?? item.event.startsAt ?? .distantFuture) < .now
-    }
-
-    private var feedbackAvailable: Bool {
-        hasEnded && item.registration.status == "checked_in"
-    }
-
-    private var correctionAvailable: Bool {
-        hasEnded && ["confirmed", "no_show", "attendance_disputed"].contains(item.registration.status)
-    }
-}
-
-struct FeedbackSubmissionAuthority: Sendable {
-    private(set) var value: OwnFeedbackState?
-    private(set) var refreshFailedAfterSubmission = false
-
-    init(value: OwnFeedbackState? = nil) {
-        self.value = value
-    }
-
-    var canSubmit: Bool { value?.canSubmit == true }
-    var canEdit: Bool { value?.canEdit == true }
-
-    mutating func mutationSucceeded() {
-        value = nil
-        refreshFailedAfterSubmission = false
-    }
-
-    mutating func received(_ value: OwnFeedbackState) {
-        self.value = value
-        refreshFailedAfterSubmission = false
-    }
-
-    mutating func refreshFailed(afterSubmission: Bool) {
-        guard afterSubmission else { return }
-        value = nil
-        refreshFailedAfterSubmission = true
-    }
-}
-
-struct FeedbackSubmissionView: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.locale) private var locale
-    let event: EventSummary
-    let registration: Registration
-
-    @State private var rating = 5
-    @State private var tags = Set<FeedbackTag>()
-    @State private var comment = ""
-    @State private var visibility: FeedbackVisibility = .aggregateOnly
-    @State private var busy = false
-    @State private var loading = true
-    @State private var authority = FeedbackSubmissionAuthority()
-    @State private var editingExisting = false
-    @State private var submittedReceipt: FeedbackReceipt?
-    @State private var attempt: StableIdempotencyAttempt?
-    @State private var error: UserFacingError?
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    if loading {
-                        ProgressView(text("journey.feedback.loading"))
-                            .frame(maxWidth: .infinity, minHeight: 260)
-                    } else if let feedback = authority.value?.feedback, !editingExisting {
-                        submittedStatus(feedback)
-                    } else if let submittedReceipt, authority.value?.feedback == nil {
-                        submittedFallback(submittedReceipt)
-                    } else if authority.value == nil {
-                        loadFailure
-                    } else if !authority.canSubmit {
-                        unavailableState
-                    } else {
-                        form
-                    }
-                }
-                .padding(SpottMetric.pageInset)
-                .padding(.bottom, 24)
-            }
-            .background(SpottColor.canvas.ignoresSafeArea())
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(text("journey.common.close")) { dismiss() }
-                }
-            }
-            .task(id: registration.id) { await loadState() }
-        }
-    }
-
-    @ViewBuilder private var form: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(text(editingExisting ? "journey.feedback.edit_title" : "journey.feedback.title"))
-                .font(.system(size: 31, weight: .bold, design: .rounded))
-            Text(event.title)
-                .font(.subheadline)
-                .foregroundStyle(SpottColor.muted)
-        }
-
-        feedbackSection(title: text("journey.feedback.overall")) {
-            HStack(spacing: 8) {
-                ForEach(1...5, id: \.self) { value in
-                    Button { rating = value } label: {
-                        Image(systemName: value <= rating ? "star.fill" : "star")
-                            .font(.system(size: 22, weight: .medium))
-                            .foregroundStyle(value <= rating ? SpottColor.amber : SpottColor.muted)
-                            .frame(maxWidth: .infinity, minHeight: 46)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(
-                        CoreJourneyLocalization.format("journey.feedback.star_label", locale: locale, value)
-                    )
-                    .accessibilityValue(value == rating ? text("journey.feedback.star_selected") : "")
-                    .accessibilityAddTraits(value == rating ? .isSelected : [])
-                }
-            }
-        }
-
-        feedbackSection(title: text("journey.feedback.highlights")) {
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 132), spacing: 8)],
-                alignment: .leading,
-                spacing: 8
-            ) {
-                ForEach(FeedbackTag.allCases) { tag in
-                    Button {
-                        if tags.contains(tag) { tags.remove(tag) } else { tags.insert(tag) }
-                    } label: {
-                        Label(
-                            text(tag.localizationKey),
-                            systemImage: tags.contains(tag) ? "checkmark.circle.fill" : "circle"
-                        )
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(tags.contains(tag) ? SpottColor.twilight : SpottColor.ink)
-                        .padding(.horizontal, 12)
-                        .frame(minHeight: 38)
-                        .background(
-                            tags.contains(tag)
-                                ? SpottColor.twilight.opacity(0.11)
-                                : Color(uiColor: .tertiarySystemGroupedBackground),
-                            in: Capsule()
-                        )
-                        .overlay {
-                            Capsule().stroke(
-                                tags.contains(tag)
-                                    ? SpottColor.twilight.opacity(0.35)
-                                    : Color.primary.opacity(0.08),
-                                lineWidth: 0.5
-                            )
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(tags.contains(tag) ? .isSelected : [])
-                }
-            }
-        }
-
-        feedbackSection(title: text("journey.feedback.suggestion")) {
-            TextField(
-                text("journey.feedback.comment_placeholder"),
-                text: $comment,
-                axis: .vertical
-            )
-            .lineLimit(4...8)
-            .padding(14)
-            .background(
-                Color(uiColor: .tertiarySystemGroupedBackground),
-                in: RoundedRectangle(cornerRadius: 16)
-            )
-            .onChange(of: comment) { _, value in
-                if value.count > 500 { comment = String(value.prefix(500)) }
-            }
-        }
-
-        feedbackSection(title: text("journey.feedback.privacy")) {
-            Picker(text("journey.feedback.privacy"), selection: $visibility) {
-                Text(text("journey.feedback.private")).tag(FeedbackVisibility.private)
-                Text(text("journey.feedback.aggregate")).tag(FeedbackVisibility.aggregateOnly)
-            }
-            .pickerStyle(.segmented)
-            Text(
-                visibility == .private
-                    ? text("journey.feedback.private_note")
-                    : text("journey.feedback.aggregate_note")
-            )
-            .font(.caption)
-            .foregroundStyle(SpottColor.muted)
-            .lineSpacing(3)
-        }
-
-        if error != nil {
-            Label(submissionErrorText, systemImage: "exclamationmark.circle.fill")
-                .font(.caption)
-                .foregroundStyle(SpottColor.danger)
-                .accessibilityIdentifier("feedback-submission-error")
-        }
-
-        Button(action: submit) {
-            HStack {
-                if busy { ProgressView().tint(.white) }
-                Text(
-                    text(
-                        busy
-                            ? "journey.feedback.submitting"
-                            : editingExisting
-                                ? "journey.feedback.save_edit"
-                                : "journey.feedback.submit"
-                    )
-                )
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(PrimaryButtonStyle())
-        .disabled(busy)
-    }
-
-    private func feedbackSection<Content: View>(
-        title: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 13) {
-            Text(title).font(.system(size: 17, weight: .bold, design: .rounded))
-            content()
-        }
-        .padding(17)
-        .background(
-            Color(uiColor: .secondarySystemGroupedBackground),
-            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
-        }
-    }
-
-    private func submittedFallback(_ receipt: FeedbackReceipt) -> some View {
-        SpottStateCard(
-            icon: "heart.text.clipboard.fill",
-            title: text("journey.feedback.success_title"),
-            message: submittedFallbackMessage(receipt),
-            actionTitle: text(
-                authority.refreshFailedAfterSubmission
-                    ? "journey.common.retry"
-                    : "journey.common.done"
-            )
-        ) {
-            if authority.refreshFailedAfterSubmission {
-                Task { await loadState() }
-            } else {
-                dismiss()
-            }
-        }
-    }
-
-    private func submittedFallbackMessage(_ receipt: FeedbackReceipt) -> String {
-        let confirmation = receipt.rewardPoints > 0
-            ? CoreJourneyLocalization.format(
-                "journey.feedback.success_points",
-                locale: locale,
-                receipt.rewardPoints
-            )
-            : text("journey.feedback.submitted_message")
-        guard authority.refreshFailedAfterSubmission else { return confirmation }
-        return confirmation + "\n\n" + text("journey.feedback.status_refresh_failed")
-    }
-
-    private func submittedStatus(_ feedback: OwnFeedback) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Image(systemName: "heart.text.clipboard.fill")
-                .font(.system(size: 40, weight: .semibold))
-                .foregroundStyle(SpottColor.twilight)
-                .accessibilityHidden(true)
-            Text(text("journey.feedback.received_title"))
-                .font(.system(size: 29, weight: .bold, design: .rounded))
-            Text(statusMessage(feedback))
-                .foregroundStyle(SpottColor.muted)
-                .lineSpacing(4)
-            if canEditFeedback {
-                Button(text("journey.feedback.edit_once")) {
-                    editingExisting = true
-                    error = nil
-                }
-                .buttonStyle(PrimaryButtonStyle())
-            }
-            Button(text("journey.common.done")) { dismiss() }
-                .buttonStyle(.bordered)
-        }
-        .padding(22)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            Color(uiColor: .secondarySystemGroupedBackground),
-            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
-        )
-    }
-
-    private var loadFailure: some View {
-        SpottStateCard(
-            icon: "wifi.exclamationmark",
-            title: text("journey.feedback.load_error_title"),
-            message: text("journey.feedback.load_error_message"),
-            actionTitle: text("journey.common.retry")
-        ) { Task { await loadState() } }
-    }
-
-    private var unavailableState: some View {
-        SpottStateCard(
-            icon: "clock.badge.xmark",
-            title: text("journey.feedback.unavailable_title"),
-            message: authority.value?.state == .windowClosed
-                ? text("journey.feedback.window_closed")
-                : text("journey.feedback.not_eligible"),
-            actionTitle: text("journey.common.done")
-        ) { dismiss() }
-    }
-
-    private func statusMessage(_ feedback: OwnFeedback) -> String {
-        if let rewardPoints = submittedReceipt?.rewardPoints, rewardPoints > 0 {
-            return CoreJourneyLocalization.format(
-                "journey.feedback.success_points",
-                locale: locale,
-                rewardPoints
-            )
-        }
-        if authority.canEdit {
-            return text("journey.feedback.edit_available_message")
-        }
-        return feedback.editCount >= 1
-            ? text("journey.feedback.edit_used_message")
-            : text("journey.feedback.submitted_message")
-    }
-
-    private var canEditFeedback: Bool {
-        authority.canEdit && (submittedReceipt?.editCount ?? 0) < 1
-    }
-
-    private var submissionErrorText: String {
-        switch error?.id {
-        case "FEEDBACK_WINDOW_CLOSED": text("journey.feedback.window_closed")
-        case "FEEDBACK_EDIT_LIMIT_REACHED": text("journey.feedback.edit_used_message")
-        case "FEEDBACK_NOT_ALLOWED": text("journey.feedback.not_eligible")
-        default: text("journey.feedback.submit_error")
+        default: .secondary
         }
     }
 
     private func text(_ key: String.LocalizationValue) -> String {
         CoreJourneyLocalization.text(key, locale: locale)
     }
+}
 
-    @MainActor
-    private func loadState() async {
-        loading = authority.value == nil
-        error = nil
-        defer { loading = false }
-        do {
-            let value = try await model.api.ownFeedback(registrationID: registration.id)
-            authority.received(value)
-            if let feedback = value.feedback {
-                rating = feedback.attendanceRating
-                tags = Set(feedback.tags)
-                comment = feedback.comment ?? ""
-                visibility = feedback.visibility
+private struct MyActivityOverflowButtonStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content.buttonStyle(.glass)
+    }
+}
+
+private struct MyActivityNativeActionButton: View {
+    let title: String
+    let systemImage: String
+    let isBusy: Bool
+    let isProminent: Bool
+    let fillsWidth: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Group {
+            if isProminent {
+                button
+                    .buttonStyle(.glassProminent)
+                    .tint(SpottColor.twilight)
+            } else {
+                button.buttonStyle(.glass)
             }
-            editingExisting = false
-        } catch {
-            authority.refreshFailed(afterSubmission: submittedReceipt != nil)
-            self.error = AppModel.map(error)
         }
+        .buttonBorderShape(.capsule)
+        .disabled(isBusy)
     }
 
-    private func submit() {
-        let trimmedComment = comment.trimmingCharacters(in: .whitespacesAndNewlines)
-        let submittedTags = FeedbackTag.allCases.filter(tags.contains)
-        let payload = FeedbackSubmissionPayload(
-            attendanceRating: rating,
-            tags: submittedTags,
-            comment: trimmedComment.isEmpty ? nil : trimmedComment,
-            visibility: visibility
-        )
-        guard let resolvedAttempt = try? StableIdempotencyAttempt.resolve(
-            existing: attempt,
-            payload: payload
-        ) else {
-            error = .init(
-                id: "FEEDBACK_ENCODING_FAILED",
-                message: text("journey.feedback.submit_error"),
-                retryable: true
-            )
-            return
-        }
-        attempt = resolvedAttempt
-        busy = true
-        error = nil
-        Task { @MainActor in
-            defer { busy = false }
-            do {
-                let receipt = try await model.api.submitFeedback(
-                    registrationID: registration.id,
-                    payload: payload,
-                    idempotencyKey: resolvedAttempt.idempotencyKey
-                )
-                authority.mutationSucceeded()
-                submittedReceipt = receipt
-                attempt = nil
-                editingExisting = false
-                await loadState()
-            } catch {
-                self.error = AppModel.map(error)
+    private var button: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                if isBusy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: systemImage)
+                }
+                Text(title)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
             }
+            .font(.subheadline.weight(.semibold))
+            .frame(maxWidth: fillsWidth ? .infinity : nil, minHeight: 44)
         }
     }
 }
 
-struct CheckInCorrectionView: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.locale) private var locale
-    let event: EventSummary
-    let registration: Registration
+private struct MyActivityNativeCover: View {
+    let event: ItineraryEventSummary?
 
-    @State private var reason = ""
-    @State private var busy = false
-    @State private var submitted = false
-    @State private var error: UserFacingError?
+    var body: some View {
+        EventCoverView(
+            url: event?.coverURL,
+            category: "",
+            cornerRadius: 16
+        )
+    }
+}
+
+private struct MyActivitiesInlineNotice: View {
+    @Environment(\.locale) private var locale
+    let message: String
+    let retry: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 11) {
+            Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                .foregroundStyle(SpottColor.amber)
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: retry) {
+                Image(systemName: "arrow.clockwise")
+                    .frame(minWidth: 44, minHeight: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(
+                CoreJourneyLocalization.text("journey.common.retry", locale: locale)
+            )
+        }
+        .padding(13)
+        .background(
+            SpottColor.amber.opacity(0.08),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .accessibilityIdentifier("itinerary.sync_error")
+    }
+}
+
+private struct MyActivitiesStateCard: View {
+    let systemImage: String
+    let title: String
+    let message: String
+    let actionTitle: String
+    let action: () -> Void
+
+    var body: some View {
+        content
+            .background(
+                Color(uiColor: .secondarySystemGroupedBackground),
+                in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+            }
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Image(systemName: systemImage)
+                .font(.system(size: 30, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(SpottColor.muted)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 7) {
+                Text(title)
+                    .font(.title2.bold())
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            JourneyPrimaryActionButton(
+                title: actionTitle,
+                systemImage: "arrow.right",
+                isBusy: false,
+                action: action
+            )
+        }
+        .padding(22)
+    }
+}
+
+private struct MyActivityNativeSkeleton: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .fill(Color.primary.opacity(0.055))
+            .frame(height: 158)
+            .redacted(reason: .placeholder)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct MyActivityStatusSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let item: MyActivityItem
+    let locale: Locale
+
+    private var presentation: MyActivityRowPresentation {
+        .init(item: item, locale: locale)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    LabeledContent(
+                        CoreJourneyLocalization.text(
+                            "journey.registration.status_label",
+                            locale: locale
+                        ),
+                        value: presentation.status
+                    )
+                    LabeledContent(
+                        CoreJourneyLocalization.text(
+                            "journey.registration.party_size",
+                            locale: locale
+                        )
+                    ) {
+                        Text(item.registration.partySize, format: .number)
+                    }
+                }
+                if let note = item.registration.attendeeNote?.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ), !note.isEmpty {
+                    Section(
+                        CoreJourneyLocalization.text(
+                            "journey.registration.note",
+                            locale: locale
+                        )
+                    ) {
+                        Text(note)
+                    }
+                }
+            }
+            .navigationTitle(presentation.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(
+                        CoreJourneyLocalization.text("journey.common.done", locale: locale)
+                    ) { dismiss() }
+                }
+            }
+        }
+        .accessibilityIdentifier("itinerary.status")
+    }
+}
+
+private struct WaitlistAcceptanceReviewSheet: View {
+    let review: WaitlistAcceptanceReview
+    let locale: Locale
+    let isBusy: Bool
+    let confirm: () -> Void
+    let cancel: () -> Void
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    if submitted {
-                        SpottStateCard(
-                            icon: "checkmark.seal.fill",
-                            title: text("journey.correction.success_title"),
-                            message: text("journey.correction.success_message"),
-                            actionTitle: text("journey.common.done")
-                        ) { dismiss() }
-                    } else {
-                        Text(text("journey.correction.title"))
-                            .font(.system(size: 31, weight: .bold, design: .rounded))
-                        Text(event.title)
-                            .foregroundStyle(SpottColor.muted)
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(text("journey.correction.situation"))
-                                .font(.headline)
-                            TextField(
-                                text("journey.correction.placeholder"),
-                                text: $reason,
-                                axis: .vertical
-                            )
-                                .lineLimit(5...10)
-                                .padding(14)
-                                .background(Color.white.opacity(0.52), in: RoundedRectangle(cornerRadius: 16))
-                                .onChange(of: reason) { _, value in
-                                    if value.count > 1_000 { reason = String(value.prefix(1_000)) }
-                                }
-                            Text(text("journey.correction.window_hint"))
-                                .font(.caption)
-                                .foregroundStyle(SpottColor.muted)
-                        }
-                        .padding(17)
-                        .background(
-                            Color(uiColor: .secondarySystemGroupedBackground),
-                            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        )
-                        if error != nil {
-                            Label(text("journey.error.action"), systemImage: "exclamationmark.circle.fill")
-                                .foregroundStyle(SpottColor.danger)
-                        }
-                        Button(action: submit) {
-                            HStack {
-                                if busy { ProgressView().tint(.white) }
-                                Text(text(busy ? "journey.correction.submitting" : "journey.correction.submit"))
-                            }
-                            .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(PrimaryButtonStyle())
-                        .disabled(reason.trimmingCharacters(in: .whitespacesAndNewlines).count < 3 || busy)
-                    }
+                    hero
+                    reviewCard
+                    chargeNote
+                    actions
                 }
-                .padding(SpottMetric.pageInset)
+                .padding(.horizontal, 20)
+                .padding(.top, 26)
+                .padding(.bottom, 32)
             }
-            .background(SpottColor.canvas.ignoresSafeArea())
-            .navigationTitle(text("journey.correction.navigation_title"))
+            .background(background.ignoresSafeArea())
+            .navigationTitle(text("journey.waitlist.review.navigation_title"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(text("journey.common.close")) { dismiss() }
-                }
-            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(.ultraThinMaterial)
+        .accessibilityIdentifier("itinerary.waitlist.review")
+    }
+
+    private var hero: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(text("journey.waitlist.review.eyebrow"), systemImage: "ticket.fill")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(SpottColor.coral)
+                .textCase(.uppercase)
+
+            Text(text("journey.waitlist.review.title"))
+                .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+
+            Text(text("journey.waitlist.review.body"))
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    private func submit() {
-        busy = true
-        error = nil
-        Task { @MainActor in
-            defer { busy = false }
-            do {
-                _ = try await model.api.requestCheckInCorrection(
-                    registrationID: registration.id,
-                    reason: reason.trimmingCharacters(in: .whitespacesAndNewlines)
+    private var reviewCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            LabeledContent(text("journey.waitlist.review.event")) {
+                Text(review.eventTitle)
+                    .multilineTextAlignment(.trailing)
+            }
+            LabeledContent(text("journey.waitlist.review.party")) {
+                Text(review.partySize, format: .number)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(text("journey.waitlist.review.cost"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Text(review.quote.amount, format: .number)
+                        .font(.system(size: 38, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                    Text(pointsLabel)
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(
+                    "\(text("journey.waitlist.review.cost")): \(review.quote.amount) \(pointsLabel)"
                 )
-                submitted = true
-            } catch {
-                self.error = AppModel.map(error)
+            }
+
+            Divider()
+
+            Label {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(text("journey.waitlist.review.offer_deadline"))
+                        .font(.caption.weight(.semibold))
+                    Text(deadline)
+                        .font(.subheadline.monospacedDigit())
+                }
+            } icon: {
+                Image(systemName: "timer")
+                    .foregroundStyle(SpottColor.amber)
             }
         }
+        // Content card (红线2): the offer review block is multi-line text, so it
+        // sits on a solid surface instead of glass.
+        .padding(18)
+        .background(SpottColor.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(SpottColor.hairline))
+        .shadow(color: SpottColor.ink.opacity(0.055), radius: 20, y: 8)
+    }
+
+    private var chargeNote: some View {
+        Label {
+            Text(text("journey.waitlist.review.charge_note"))
+                .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: "checkmark.shield.fill")
+                .foregroundStyle(SpottColor.mint)
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 4)
+    }
+
+    private var actions: some View {
+        VStack(spacing: 12) {
+            Button(action: confirm) {
+                HStack(spacing: 9) {
+                    if isBusy { ProgressView().controlSize(.small) }
+                    Text(text(
+                        isBusy
+                            ? "journey.waitlist.review.confirming"
+                            : "journey.waitlist.review.confirm"
+                    ))
+                    .font(.headline)
+                }
+                .frame(maxWidth: .infinity, minHeight: 50)
+            }
+            .spottProminentActionStyle()
+            .disabled(isBusy)
+            .accessibilityIdentifier("itinerary.waitlist.review.confirm")
+
+            Button(text("journey.common.cancel"), action: cancel)
+                .font(.headline)
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .buttonStyle(.plain)
+                .disabled(isBusy)
+                .accessibilityIdentifier("itinerary.waitlist.review.cancel")
+        }
+    }
+
+    private var pointsLabel: String {
+        text(
+            review.quote.amount == 1
+                ? "journey.waitlist.review.points.one"
+                : "journey.waitlist.review.points.other"
+        )
+    }
+
+    private var deadline: String {
+        let deadline = min(review.offerExpiresAt, review.quote.expiresAt)
+        return CoreJourneyLocalization.dateTime(
+            deadline,
+            timeZoneIdentifier: TimeZone.current.identifier,
+            locale: locale
+        )
+    }
+
+    private var background: some View {
+        LinearGradient(
+            colors: [
+                Color(uiColor: .systemGroupedBackground),
+                SpottColor.twilight.opacity(0.09),
+                SpottColor.coral.opacity(0.07),
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
     }
 
     private func text(_ key: String.LocalizationValue) -> String {
@@ -849,48 +1080,203 @@ struct CheckInCorrectionView: View {
     }
 }
 
-private extension FeedbackTag {
-    var localizationKey: String.LocalizationValue {
-        switch self {
-        case .friendly: "journey.feedback.tag.friendly"
-        case .wellOrganized: "journey.feedback.tag.well_organized"
-        case .clearInformation: "journey.feedback.tag.clear_information"
-        case .safe: "journey.feedback.tag.safe"
-        case .wouldJoinAgain: "journey.feedback.tag.join_again"
-        }
-    }
+private enum MyActivitiesLoadedDestination {
+    case checkIn
+    case correction
+    case feedback
 }
 
-private struct ActivityCover: View {
+private struct MyActivitiesCheckInTarget: Identifiable {
     let event: EventSummary
-    var body: some View {
-        Group {
-            if let url = event.coverURL {
-                AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: { fallback }
-            } else { fallback }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+    let registration: Registration
+
+    var id: UUID { registration.id }
+}
+
+#if DEBUG
+private actor MyActivitiesUIFixtureService: MyActivitiesServing {
+    func registrationItinerary(
+        cursor: String?,
+        limit: Int
+    ) async throws -> RegistrationItineraryPage {
+        try Self.makePage()
     }
 
-    private var fallback: some View {
-        LinearGradient(
-            colors: [Color(red: 0.13, green: 0.30, blue: 0.46), Color(red: 0.42, green: 0.35, blue: 0.82)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
+    func quote(purpose: String, resourceID: UUID?) async throws -> Quote {
+        .init(
+            id: UUID(uuidString: "019b0000-0000-7000-8600-000000000001")!,
+            amount: 10,
+            currency: "POINTS",
+            expiresAt: Date().addingTimeInterval(15 * 60)
         )
-        .overlay {
-            Image(systemName: "calendar")
-                .font(.system(size: 23, weight: .light))
-                .foregroundStyle(.white.opacity(0.9))
+    }
+
+    func acceptWaitlist(
+        registrationID: UUID,
+        quoteID: UUID,
+        expectedRegistrationVersion: Int,
+        expectedEventVersion: Int,
+        idempotencyKey: UUID
+    ) async throws -> Registration {
+        try Self.registration(id: registrationID)
+    }
+
+    func cancelRegistration(registrationID: UUID) async throws -> RegistrationCancellation {
+        .init(
+            registration: try Self.registration(id: registrationID),
+            refundedPoints: 0,
+            wallet: .init(paidBalance: 0, freeBalance: 0, totalBalance: 0, version: 1)
+        )
+    }
+
+    func reportPayment(registrationID: UUID) async throws -> TicketPaymentReport {
+        .init(
+            registrationId: registrationID,
+            paymentStatus: "self_reported",
+            selfReportedAt: Date()
+        )
+    }
+
+    private static func registration(id: UUID) throws -> Registration {
+        guard let registration = try makePage().items
+            .map(\.registration)
+            .first(where: { $0.id == id }) else {
+            throw MyActivitiesUIFixtureError.missingRegistration
         }
+        return registration
+    }
+
+    private static func makePage() throws -> RegistrationItineraryPage {
+        let payload: [String: Any] = [
+            "items": [
+                item(
+                    index: 1,
+                    title: "Tokyo Makers Night",
+                    status: "pending",
+                    startsAt: "2026-07-18T10:00:00Z",
+                    endsAt: "2026-07-18T12:00:00Z",
+                    actions: ["cancelRegistration"]
+                ),
+                item(
+                    index: 2,
+                    title: "Tea, Type & Design",
+                    status: "offered",
+                    startsAt: "2026-07-19T05:00:00Z",
+                    endsAt: "2026-07-19T07:00:00Z",
+                    actions: ["register", "cancelRegistration"],
+                    offerExpiresAt: "2026-07-18T03:00:00Z"
+                ),
+                item(
+                    index: 3,
+                    title: "Sunset Photo Walk",
+                    status: "confirmed",
+                    startsAt: "2026-07-20T08:30:00Z",
+                    endsAt: "2026-07-20T10:30:00Z",
+                    actions: ["checkIn", "cancelRegistration"]
+                ),
+            ],
+            "nextCursor": NSNull(),
+            "hasMore": false,
+            "serverTime": "2026-07-16T03:00:00Z",
+        ]
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(
+            RegistrationItineraryPage.self,
+            from: JSONSerialization.data(withJSONObject: payload)
+        )
+    }
+
+    private static func item(
+        index: Int,
+        title: String,
+        status: String,
+        startsAt: String,
+        endsAt: String,
+        actions: [String],
+        offerExpiresAt: String? = nil
+    ) -> [String: Any] {
+        let registrationID = String(format: "019b0000-0000-7000-8400-%012d", index)
+        let eventID = String(format: "019b0000-0000-7000-8500-%012d", index)
+        return [
+            "registration": [
+                "id": registrationID,
+                "eventId": eventID,
+                "userId": "019b0000-0000-7000-8000-000000000001",
+                "status": status,
+                "partySize": index == 3 ? 2 : 1,
+                "attendeeNote": NSNull(),
+                "availableActions": actions,
+                "version": 1,
+                "offerExpiresAt": offerExpiresAt as Any? ?? NSNull(),
+                "updatedAt": "2026-07-16T02:00:00Z",
+                "rewardPoints": NSNull(),
+                "checkinMethod": NSNull(),
+            ],
+            "event": [
+                "id": eventID,
+                "publicSlug": "fixture-event-\(index)",
+                "status": "published",
+                "title": title,
+                "startsAt": startsAt,
+                "endsAt": endsAt,
+                "displayTimeZone": "Asia/Tokyo",
+                "region": "tokyo",
+                "publicArea": index == 2 ? "Daikanyama" : "Shibuya",
+                "coverURL": NSNull(),
+                "format": index == 2 ? "hybrid" : "in_person",
+                "primaryLocale": index == 1 ? "en" : "ja",
+                "localeConfirmed": true,
+                "version": 1,
+                "updatedAt": "2026-07-15T00:00:00Z",
+            ],
+        ]
     }
 }
 
-private struct ActivitySkeleton: View {
-    var body: some View {
-        RoundedRectangle(cornerRadius: SpottMetric.cardRadius)
-            .fill(Color.black.opacity(0.055))
-            .frame(height: 168)
-            .redacted(reason: .placeholder)
+private enum MyActivitiesUIFixtureError: Error {
+    case missingRegistration
+}
+
+private extension ItineraryEventSummary {
+    var coreJourneyDetailFixture: EventSummary {
+        let template = EventSummary.samples[0]
+        return .init(
+            id: id,
+            publicSlug: publicSlug,
+            organizerId: template.organizerId,
+            status: status,
+            title: title,
+            description: "A deterministic native event-detail fixture.",
+            category: "community",
+            startsAt: startsAt,
+            endsAt: endsAt,
+            deadlineAt: startsAt?.addingTimeInterval(-3_600),
+            displayTimeZone: displayTimeZone,
+            region: region,
+            publicArea: publicArea,
+            capacity: 24,
+            confirmedCount: 12,
+            availableCapacity: 12,
+            coverURL: coverURL,
+            tags: ["fixture"],
+            organizer: template.organizer,
+            favorited: false,
+            registrationStatus: nil,
+            viewerRegistration: nil,
+            registrationMode: "automatic",
+            waitlistEnabled: true,
+            format: format,
+            primaryLocale: primaryLocale,
+            supportedLocales: [primaryLocale],
+            localeConfirmed: localeConfirmed,
+            availableActions: [.register],
+            version: version,
+            updatedAt: updatedAt,
+            coordinate: nil,
+            exactAddress: nil,
+            fee: template.fee
+        )
     }
 }
+#endif

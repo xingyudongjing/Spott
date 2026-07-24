@@ -1,0 +1,129 @@
+- generic [active] [ref=f11e1]:
+  - link "跳到主要内容" [ref=f11e2] [cursor=pointer]:
+    - /url: "#spott-main-content"
+  - banner [ref=f11e3]:
+    - generic [ref=f11e4]:
+      - link "Spott" [ref=f11e5] [cursor=pointer]:
+        - /url: /discover
+      - link "地区：日本" [ref=f11e6] [cursor=pointer]:
+        - /url: /discover
+        - text: 日本
+    - generic [ref=f11e9]:
+      - generic [ref=f11e10]: 语言
+      - combobox "语言" [ref=f11e11] [cursor=pointer]:
+        - option "简体中文" [selected]
+        - option "日本語"
+        - option "English"
+  - status [ref=f11e12]:
+    - strong [ref=f11e13]: 公开只读预览
+    - generic [ref=f11e14]: 活动浏览、筛选、详情、分享与日历可用；登录、报名和发布请使用加密的内部测试入口。
+  - navigation "移动导航" [ref=f11e15]:
+    - link "发现" [ref=f11e16] [cursor=pointer]:
+      - /url: /discover
+    - link "群组" [ref=f11e21] [cursor=pointer]:
+      - /url: /groups
+  - main [ref=f11e27]:
+    - generic [ref=f11e28]:
+      - generic [ref=f11e29]:
+        - generic [ref=f11e30]:
+          - text: 东京 · 兴趣社区
+          - heading "兴趣群组" [level=1] [ref=f11e31]
+          - paragraph [ref=f11e32]: 在 Web 和 iOS 加入同一个群组，接收公告、讨论后续活动。
+        - generic "社区实时概览" [ref=f11e34]:
+          - generic [ref=f11e35]:
+            - strong [ref=f11e36]: "2"
+            - generic [ref=f11e37]: 公开社群
+          - generic [ref=f11e38]:
+            - strong [ref=f11e39]: "4"
+            - generic [ref=f11e40]: 社群成员席位
+          - generic [ref=f11e41]:
+            - strong [ref=f11e42]: "2"
+            - generic [ref=f11e43]: 近期动态
+      - region "探索兴趣社群" [ref=f11e44]:
+        - generic [ref=f11e45]:
+          - generic [ref=f11e46]: 搜索兴趣社群
+          - searchbox "搜索兴趣社群" [ref=f11e50]
+        - group "按兴趣筛选" [ref=f11e51]:
+          - button "全部" [pressed] [ref=f11e52] [cursor=pointer]
+          - button "音乐" [ref=f11e53] [cursor=pointer]
+          - button "城市探索" [ref=f11e54] [cursor=pointer]
+      - region [ref=f11e55]:
+        - generic [ref=f11e57]:
+          - generic [ref=f11e58]: 公开社区
+          - heading "兴趣群组" [level=2] [ref=f11e59]
+        - generic [ref=f11e60]:
+          - article [ref=f11e61]:
+            - link [ref=f11e62] [cursor=pointer]:
+              - /url: /g/shimokita-one-record
+              - generic [ref=f11e63]:
+                - generic [ref=f11e64]:
+                  - generic [ref=f11e66]: 东京
+                  - strong [ref=f11e67]: 下北
+                - generic [ref=f11e68]: 申请后加入
+              - generic [ref=f11e69]:
+                - generic [ref=f11e70]:
+                  - generic [ref=f11e71]: 东京
+                  - generic [ref=f11e72]: 音乐
+                - heading "下北沢一枚聴く会" [level=2] [ref=f11e73]
+                - generic [ref=f11e74]: "申请后加入. 东京. 音乐. 由 Shimokita Listening Table 发起. 置顶动态: 今月のテーマ：一曲目. 2 位成员. 上限 100 人"
+                - paragraph [ref=f11e75]: 一度に数曲だけを、最後までゆっくり聴く会です。下北沢の小さなテーブルで、選んだ理由や最近見つけた音楽を持ち寄ります。
+                - generic [ref=f11e76]: 由 Shimokita Listening Table 发起
+                - generic [ref=f11e77]:
+                  - generic [ref=f11e78]: 音楽
+                  - generic [ref=f11e79]: レコード
+                  - generic [ref=f11e80]: 少人数
+                - generic [ref=f11e81]:
+                  - generic [ref=f11e83]: 置顶动态
+                  - strong [ref=f11e84]: 今月のテーマ：一曲目
+                - generic [ref=f11e85]:
+                  - generic [ref=f11e86]: 2 位成员
+                  - generic [ref=f11e90]: 上限 100 人
+          - article [ref=f11e94]:
+            - link [ref=f11e95] [cursor=pointer]:
+              - /url: /g/tokyo-light-walks
+              - generic [ref=f11e96]:
+                - generic [ref=f11e97]:
+                  - generic [ref=f11e99]: 东京
+                  - strong [ref=f11e100]: 东京
+                - generic [ref=f11e101]: 公开加入
+              - generic [ref=f11e102]:
+                - generic [ref=f11e103]:
+                  - generic [ref=f11e104]: 东京
+                  - generic [ref=f11e105]: 城市探索
+                - heading "东京慢走与光线观察" [level=2] [ref=f11e106]
+                - generic [ref=f11e107]: "公开加入. 东京. 城市探索. 由 东京余光散步会 发起. 置顶动态: 第一次同行前，可以先知道这些. 2 位成员. 上限 100 人"
+                - paragraph [ref=f11e108]: 不赶景点，也不比设备。每月选一段适合慢走的东京街区，边走边观察光线、建筑和日常生活。
+                - generic [ref=f11e109]: 由 东京余光散步会 发起
+                - generic [ref=f11e110]:
+                  - generic [ref=f11e111]: 城市散步
+                  - generic [ref=f11e112]: 摄影
+                  - generic [ref=f11e113]: 新手友好
+                - generic [ref=f11e114]:
+                  - generic [ref=f11e116]: 置顶动态
+                  - strong [ref=f11e117]: 第一次同行前，可以先知道这些
+                - generic [ref=f11e118]:
+                  - generic [ref=f11e119]: 2 位成员
+                  - generic [ref=f11e123]: 上限 100 人
+    - generic [ref=f11e127]:
+      - generic [ref=f11e128]:
+        - generic [ref=f11e129]: SPOTT
+        - paragraph [ref=f11e130]: 发现活动，遇见同好。
+      - generic [ref=f11e131]:
+        - link "发现" [ref=f11e132] [cursor=pointer]:
+          - /url: /discover
+        - link "群组" [ref=f11e133] [cursor=pointer]:
+          - /url: /groups
+        - link "安全中心" [ref=f11e134] [cursor=pointer]:
+          - /url: /safety
+        - link "隐私" [ref=f11e135] [cursor=pointer]:
+          - /url: /privacy
+        - link "条款" [ref=f11e136] [cursor=pointer]:
+          - /url: /terms
+      - generic [ref=f11e137]:
+        - generic [ref=f11e138]:
+          - generic [ref=f11e139]: 语言
+          - combobox "语言" [ref=f11e140] [cursor=pointer]:
+            - option "简体中文" [selected]
+            - option "日本語"
+            - option "English"
+        - paragraph [ref=f11e141]: Tokyo · 2026

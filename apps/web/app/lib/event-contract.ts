@@ -105,6 +105,7 @@ const eventSummaryBaseSchema = z.object({
   tags: z.array(z.string()).max(5),
   organizer: eventOrganizerSchema,
   favorited: z.boolean(),
+  promoted: z.boolean().optional(),
   registrationStatus: registrationStatus.nullable(),
   viewerRegistration: viewerRegistrationSchema.nullable(),
   registrationMode: z.enum(["automatic", "approval", "invite_only"]),
@@ -182,7 +183,16 @@ const registrationSchema = z.object({
   status: registrationStatus,
   partySize: z.number().int().min(1),
   attendeeNote: z.string().max(1000).nullable().optional(),
+  // Set when the host offers ticket tiers and the attendee picked one. The API
+  // returns it on every registration (null when the event has no tiers), so the
+  // strict schema has to know about it or the whole itinerary fails to parse.
+  ticketTypeId: uuid.nullable().optional(),
   offerExpiresAt: nullableDateTime.optional(),
+  // Off-platform payment state persisted by the API so the itinerary can show
+  // the reported / confirmed record after a reload. Both null when nothing owed
+  // or nothing reported yet. Strict schema must know them or parsing rejects.
+  paymentSelfReportedAt: nullableDateTime.optional(),
+  paymentConfirmedAt: nullableDateTime.optional(),
   availableActions: z.array(availableAction),
   version: z.number().int().min(1),
   updatedAt: dateTime,

@@ -42,6 +42,7 @@ export function notificationDeepLink(type: string, resourcePublicId: string | nu
   switch (type) {
     case 'event.cancelled':
     case 'waitlist.offered':
+    case 'event.host_announcement':
       return `spott://e/${encodeURIComponent(resourcePublicId)}`;
     case 'group.announcement':
     case 'group.dissolution_scheduled':
@@ -96,6 +97,8 @@ const NOTIFICATION_TYPE_POLICIES: Record<string, Partial<NotificationTypePolicy>
   // 审核、投诉和账号限制 — safety notices, mandatory, exempt from quiet.
   'moderation.decided': { push: false, email: true, closable: false, bypassQuiet: true },
   'account.restricted': { push: false, email: true, closable: false, bypassQuiet: true },
+  // 主办方通知参与者 — closable push, subject to the per-event daily cap.
+  'event.host_announcement': { push: true, closable: true, frequencyCapped: true },
   // 群组公告/新活动 — closable and subject to the daily frequency cap.
   'group.announcement': { push: true, closable: true, frequencyCapped: true },
   'group.dissolution_scheduled': { push: true, closable: false },

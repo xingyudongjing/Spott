@@ -1,0 +1,215 @@
+"profile.day.today" = "今日";
+"profile.day.yesterday" = "昨日";
+
+"profile.home.error_title" = "プロフィールを読み込めません";
+"profile.home.retry" = "再試行";
+"profile.home.edit_profile" = "プロフィールを編集";
+"profile.home.phone_verified" = "日本の電話番号認証済み";
+"profile.home.phone_unverified" = "電話番号を認証";
+
+"profile.signedout.title" = "すべての出会いを、ひとつのアカウントに。";
+"profile.signedout.subtitle" = "ログインすると、お気に入り・イベント・コミュニティ・実績・ポイントが同期されます。";
+"profile.signedout.benefit_sync" = "クロスデバイス同期";
+"profile.signedout.benefit_privacy" = "プライバシー保護";
+"profile.signedout.benefit_identity" = "イベントの実績";
+"profile.signedout.action" = "ログインまたは登録";
+
+"profile.signout.action" = "ログアウト";
+"profile.signout.confirm_title" = "ログアウトしますか？";
+"profile.signout.confirm_action" = "ログアウト";
+"profile.signout.confirm_cancel" = "キャンセル";
+
+"profile.itinerary.title" = "マイスケジュール";
+"profile.itinerary.subtitle" = "申込・キャンセル待ち・チケットはこちら";
+
+"profile.stats.points" = "ポイント";
+"profile.stats.achievements" = "実績";
+
+"profile.section.mine" = "マイ Spott";
+"profile.section.trust" = "信頼と設定";
+"profile.row.favorites" = "お気に入り";
+"profile.row.favorites_subtitle" = "あとで参加したいイベント";
+"profile.row.wallet" = "ポイントウォレット";
+"profile.row.wallet_subtitle" = "チェックイン・履歴・購入";
+"profile.row.notifications" = "お知らせ";
+"profile.row.notifications_subtitle" = "キャンセル待ち・変更・安全のお知らせ";
+"profile.row.achievements" = "実績";
+"profile.row.achievements_subtitle" = "実際の参加が形づくる信頼";
+"profile.row.host_studio" = "主催者スタジオ";
+"profile.row.host_studio_subtitle" = "イベント・参加者リスト・当日チェックイン";
+"profile.row.safety" = "安全センター";
+"profile.row.safety_subtitle" = "通報・ブロック・オフラインの安全ガイド";
+"profile.row.settings" = "設定";
+"profile.row.settings_subtitle" = "言語・通知・アカウント管理";
+
+"profile.common.close" = "閉じる";
+"profile.common.cancel" = "キャンセル";
+
+"profile.wallet.title" = "ポイントウォレット";
+"profile.wallet.error_title" = "ウォレットを読み込めません";
+"profile.wallet.total" = "合計ポイント";
+"profile.wallet.paid" = "有償ポイント";
+"profile.wallet.free" = "無償ポイント";
+"profile.wallet.buy" = "ポイントを購入";
+"profile.wallet.transactions" = "最近の履歴";
+"profile.wallet.transactions_empty" = "ポイントの獲得と利用がここに記録されます。";
+"profile.wallet.spend_order" = "有効期限が近い無償ポイントから使われ、次にその他の無償ポイント、最後に有償ポイントが使われます。有償ポイントに有効期限はありません。";
+"profile.wallet.rules_title" = "ポイントルール";
+"profile.wallet.rules_error" = "ポイントルールを読み込めません";
+
+"profile.checkin.title" = "毎日チェックイン";
+"profile.checkin.subtitle" = "連続チェックインでボーナスポイント";
+"profile.checkin.action" = "今日のチェックイン";
+"profile.checkin.already" = "本日はチェックイン済み";
+"profile.checkin.done" = "チェックイン完了";
+
+"profile.tx.phone_verified" = "電話番号認証ボーナス";
+"profile.tx.attendance_reward" = "参加達成ボーナス";
+"profile.tx.registration_fee" = "イベント申込";
+"profile.tx.event_publish" = "イベント公開";
+"profile.tx.group_create" = "コミュニティ作成";
+"profile.tx.daily_checkin_reward" = "毎日チェックイン報酬";
+"profile.tx.streak_7_reward" = "7日連続チェックイン報酬";
+"profile.tx.streak_30_reward" = "30日連続チェックイン報酬";
+"profile.tx.storekit_purchase" = "App Store 購入";
+"profile.tx.storekit_bonus" = "購入ボーナスポイント";
+"profile.tx.storekit_refund" = "App Store 返金";
+"profile.tx.point_adjustment" = "ポイント調整";
+
+"profile.notifications.title" = "お知らせ";
+"profile.notifications.error_title" = "お知らせを読み込めません";
+"profile.notifications.empty_title" = "新しいお知らせはありません";
+"profile.notifications.empty_message" = "キャンセル待ち・中止・安全に関するお知らせはここに表示されます。";
+"profile.notifications.unread" = "未読";
+"profile.notifications.generic" = "新しいお知らせがあります";
+
+"profile.notification.waitlist_offered" = "キャンセル待ちの枠が空きました";
+"profile.notification.registration_hold_expired" = "キャンセル待ちの確認期限が切れました";
+"profile.notification.registration_changed" = "申込状況が更新されました";
+"profile.notification.event_reminder" = "イベントがまもなく始まります";
+"profile.notification.event_cancelled" = "イベントが中止になりました";
+"profile.notification.event_key_fields_changed" = "イベントの重要情報が変更されました";
+"profile.notification.event_reviewed" = "イベントの審査結果が出ました";
+"profile.notification.event_removed" = "イベントが削除されました";
+"profile.notification.event_host_announcement" = "主催者からのお知らせ";
+"profile.notification.group_announcement" = "コミュニティに新しいお知らせ";
+"profile.notification.group_dissolution_scheduled" = "コミュニティの解散が予定されています";
+"profile.notification.achievements_awarded" = "新しい実績を獲得しました";
+"profile.notification.moderation_decided" = "通報の対応結果が出ました";
+"profile.notification.account_restricted" = "アカウントの状態が変わりました";
+"profile.notification.safety_case" = "安全に関するお知らせ";
+
+"profile.achievements.title" = "実績";
+"profile.achievements.error_title" = "実績を読み込めません";
+"profile.achievements.empty_title" = "実績はリアルな出会いから";
+"profile.achievements.empty_message" = "チェックインやイベントの主催、コミュニティづくりが実績になります。";
+"profile.achievements.new_title" = "新しく獲得した実績";
+"profile.achievements.hidden_tag" = "非表示";
+"profile.achievements.share" = "実績カードを共有";
+"profile.achievements.hide" = "公開しない";
+"profile.achievements.unhide" = "公開する";
+"profile.achievements.actions" = "実績の操作";
+"profile.achievements.awarded_on" = "%@ に獲得";
+"profile.achievements.share_title" = "実績を共有";
+
+"profile.achievement.first_checkin.name" = "はじめの一歩";
+"profile.achievement.first_checkin.detail" = "初めてイベントにチェックインしました。";
+"profile.achievement.city_explorer_5.name" = "シティエクスプローラー";
+"profile.achievement.city_explorer_5.detail" = "イベントに5回チェックインしました。";
+"profile.achievement.first_hosted_event.name" = "はじめての主催";
+"profile.achievement.first_hosted_event.detail" = "初めてイベントを最後まで開催しました。";
+"profile.achievement.community_builder.name" = "コミュニティビルダー";
+"profile.achievement.community_builder.detail" = "コミュニティのメンバーが10人を超えました。";
+"profile.achievement.continuous_participation.name" = "継続参加";
+"profile.achievement.continuous_participation.detail" = "3か月連続で毎月チェックインしました。";
+"profile.achievement.reliable_attendee.name" = "約束を守る人";
+"profile.achievement.reliable_attendee.detail" = "直近10件の申込で出席率90%以上。";
+"profile.achievement.friendly_contributor.name" = "フレンドリーな貢献者";
+"profile.achievement.friendly_contributor.detail" = "有効なフィードバックを10件送りました。";
+"profile.achievement.continuous_organizer.name" = "継続主催";
+"profile.achievement.continuous_organizer.detail" = "3か月連続で毎月イベントを主催しました。";
+
+"profile.favorites.title" = "お気に入り";
+"profile.favorites.error_title" = "お気に入りを読み込めません";
+"profile.favorites.empty_title" = "まだお気に入りはありません";
+"profile.favorites.empty_message" = "お気に入りは枠を取らずに、あとで決められます。";
+"profile.favorites.time_tbd" = "日時未定";
+"profile.favorites.fee_free" = "無料";
+"profile.favorites.fee_onsite" = "¥%ld 現地払い";
+
+"profile.settings.title" = "設定";
+"profile.settings.language" = "言語";
+"profile.settings.language_picker" = "表示言語";
+"profile.settings.notifications" = "通知";
+"profile.settings.push_reminder" = "イベントリマインダーを許可";
+"profile.settings.email_reminder" = "メールでリマインダーを受け取る";
+"profile.settings.lockscreen_address" = "ロック画面に正確な住所を表示";
+"profile.settings.quiet_start" = "通知オフ開始";
+"profile.settings.quiet_end" = "通知オフ終了";
+"profile.settings.quiet_hint" = "通知オフの時間帯は日本時間（JST）で適用されます。";
+"profile.settings.critical_hint" = "中止・繰り上げ・安全に関する通知はオフになりません。";
+"profile.settings.sync_after_login" = "ログインして通知設定を同期";
+"profile.settings.privacy" = "プライバシー";
+"profile.settings.analytics" = "匿名の利用状況分析";
+"profile.settings.privacy_summary" = "データとプライバシーについて";
+"profile.settings.deletion_date" = "アカウント削除の実行日時";
+"profile.settings.deletion_cancel" = "削除リクエストを取り消す";
+"profile.settings.deletion_request" = "アカウント削除をリクエスト";
+"profile.settings.deletion_confirm_title" = "アカウント削除をリクエストしますか？";
+"profile.settings.deletion_confirm_action" = "削除をリクエスト";
+"profile.settings.deletion_confirm_message" = "リクエスト後14日間の猶予期間があります。未終了のイベント、管理中のコミュニティ、マイナス残高がある場合は削除できません。";
+"profile.settings.account" = "アカウント";
+"profile.settings.merge" = "別のアカウントを統合";
+"profile.settings.merge_hint" = "もう一方のアカウントの再認証が必要です。現在のログイン状態だけで統合されることはありません。";
+"profile.settings.revoke_all" = "すべての端末からログアウト";
+"profile.settings.revoke_hint" = "すべての端末のセッションを無効化し、この端末からもログアウトします。";
+"profile.settings.revoke_confirm_title" = "すべての端末からログアウトしますか？";
+"profile.settings.revoke_confirm_action" = "すべてログアウト";
+"profile.settings.revoke_confirm_message" = "すべての端末のセッションがすぐに無効になり、再ログインが必要です。";
+"profile.settings.error_section" = "完了できませんでした";
+"profile.settings.retry_sync" = "通知設定の同期を再試行";
+
+"profile.public.title" = "公開プロフィール";
+"profile.public.about" = "自己紹介";
+"profile.public.no_bio" = "このユーザーはまだ自己紹介を書いていません。";
+"profile.public.privacy_note" = "公開プロフィールに電話番号や安全記録は含まれません";
+"profile.public.error_title" = "このプロフィールを表示できません";
+"profile.public.error_message" = "公開プロフィールが無効になっている可能性があります。";
+"profile.public.report" = "ユーザーを通報";
+"profile.public.block" = "ユーザーをブロック";
+"profile.public.more_actions" = "その他の操作";
+"profile.public.block_confirm_title" = "このユーザーをブロックしますか？";
+"profile.public.block_confirm_action" = "ブロック";
+"profile.public.block_confirm_message" = "ブロックすると相互フォローが解除され、同じ交流スペースへの参加が制限されます。";
+"profile.public.hosted_events" = "主催した公開イベント";
+"profile.public.more_events" = "さらに表示";
+"profile.public.followers" = "フォロワー %ld 人";
+"profile.public.edit" = "プロフィールを編集";
+"profile.public.following" = "フォロー中";
+"profile.public.follow" = "フォローする";
+"profile.public.blocked_banner" = "@%@ をブロックしました";
+"profile.public.no_languages" = "使用言語は未設定";
+
+"profile.region.tokyo" = "東京";
+"profile.region.kanagawa" = "神奈川";
+"profile.region.osaka" = "大阪";
+"profile.region.kyoto" = "京都";
+"profile.region.nationwide" = "日本全国";
+"profile.region.unknown" = "居住エリア非公開";
+
+"profile.language.zh" = "中国語";
+"profile.language.ja" = "日本語";
+"profile.language.en" = "英語";
+
+/* Account merge preview + errors */
+"profile.merge.stat_events" = "移行するイベント";
+"profile.merge.stat_groups" = "移行するグループ";
+"profile.merge.stat_points" = "移行するポイント";
+"profile.merge.conflict.phone" = "両方のアカウントに電話番号が登録されています";
+"profile.merge.conflict.event" = "両方のアカウントが同じイベントに申し込んでいます";
+"profile.merge.conflict.group" = "両方のアカウントが同じグループに参加しています";
+"profile.merge.conflict.operator" = "移行元アカウントに運営管理権限があります";
+"profile.merge.apple_credential_invalid" = "Appleから有効な2つ目のアカウント資格情報が返されませんでした。";
+"profile.edit.image_unreadable" = "この画像を読み込めません。";
+"profile.edit.load_failed" = "プロフィールを読み込めませんでした。";
+"profile.edit.reload" = "再読み込み";

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { normalizeEvent } from "../app/lib/api";
 import {
+  boundsCenter,
   parseDiscoveryQuery,
   resolveDateShortcut,
   serializeDiscoveryQuery,
@@ -99,6 +100,8 @@ describe("discovery query", () => {
       language: "ja",
       price: "paid",
       bounds: { west: 139.6, south: 35.5, east: 139.9, north: 35.8 },
+      near: { latitude: 35.65, longitude: 139.75 },
+      sort: "distance",
       cursor: "2026-07-18T08:30:00.000Z|019b",
       limit: 20,
     };
@@ -116,6 +119,8 @@ describe("discovery query", () => {
       "language",
       "price",
       "bounds",
+      "near",
+      "sort",
       "cursor",
       "limit",
     ]);
@@ -131,6 +136,19 @@ describe("discovery query", () => {
   test("rejects bounds with an empty coordinate segment", () => {
     expect(() => parseDiscoveryQuery("bounds=139.6%2C%2C139.9%2C35.8"))
       .toThrow(/bounds/);
+  });
+
+  test("accepts only the five server sorts and valid near origins", () => {
+    expect(parseDiscoveryQuery("sort=almost_full")).toEqual({ sort: "almost_full" });
+    expect(() => parseDiscoveryQuery("sort=popular")).toThrow(/sort/);
+    expect(() => parseDiscoveryQuery("near=91%2C139.7")).toThrow(/near/);
+    expect(() => parseDiscoveryQuery("near=35.6")).toThrow(/near/);
+  });
+
+  test("derives the distance-sort origin from the center of the map bounds", () => {
+    const center = boundsCenter({ west: 139.6, south: 35.5, east: 139.9, north: 35.8 });
+    expect(center.latitude).toBeCloseTo(35.65, 10);
+    expect(center.longitude).toBeCloseTo(139.75, 10);
   });
 
   test("resolves a quick date into explicit ISO boundaries in the event time zone", () => {

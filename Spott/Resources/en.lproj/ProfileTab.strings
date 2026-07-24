@@ -1,0 +1,215 @@
+"profile.day.today" = "Today";
+"profile.day.yesterday" = "Yesterday";
+
+"profile.home.error_title" = "Couldn't load your profile";
+"profile.home.retry" = "Retry";
+"profile.home.edit_profile" = "Edit profile";
+"profile.home.phone_verified" = "Japan phone verified";
+"profile.home.phone_unverified" = "Verify phone number";
+
+"profile.signedout.title" = "Keep every meetup in one account.";
+"profile.signedout.subtitle" = "Sign in to sync favorites, events, groups, achievements, and your points wallet.";
+"profile.signedout.benefit_sync" = "Cross-device sync";
+"profile.signedout.benefit_privacy" = "Privacy first";
+"profile.signedout.benefit_identity" = "Event identity";
+"profile.signedout.action" = "Sign in or sign up";
+
+"profile.signout.action" = "Sign out";
+"profile.signout.confirm_title" = "Sign out?";
+"profile.signout.confirm_action" = "Sign Out";
+"profile.signout.confirm_cancel" = "Cancel";
+
+"profile.itinerary.title" = "My itinerary";
+"profile.itinerary.subtitle" = "Registrations, waitlists, and tickets";
+
+"profile.stats.points" = "Points";
+"profile.stats.achievements" = "Achievements";
+
+"profile.section.mine" = "My Spott";
+"profile.section.trust" = "Trust & settings";
+"profile.row.favorites" = "Favorites";
+"profile.row.favorites_subtitle" = "Events to decide on later";
+"profile.row.wallet" = "Points wallet";
+"profile.row.wallet_subtitle" = "Check-in, history, and purchases";
+"profile.row.notifications" = "Notifications";
+"profile.row.notifications_subtitle" = "Waitlist, changes, and safety updates";
+"profile.row.achievements" = "Achievements";
+"profile.row.achievements_subtitle" = "Built from real attendance";
+"profile.row.host_studio" = "Host studio";
+"profile.row.host_studio_subtitle" = "Events, rosters, and on-site check-in";
+"profile.row.safety" = "Safety center";
+"profile.row.safety_subtitle" = "Reports, blocks, and meetup guidelines";
+"profile.row.settings" = "Settings";
+"profile.row.settings_subtitle" = "Language, notifications, and account";
+
+"profile.common.close" = "Close";
+"profile.common.cancel" = "Cancel";
+
+"profile.wallet.title" = "Points Wallet";
+"profile.wallet.error_title" = "Couldn't load your wallet";
+"profile.wallet.total" = "Total points";
+"profile.wallet.paid" = "Paid points";
+"profile.wallet.free" = "Free points";
+"profile.wallet.buy" = "Buy points";
+"profile.wallet.transactions" = "Recent activity";
+"profile.wallet.transactions_empty" = "Points you earn and spend will be recorded here.";
+"profile.wallet.spend_order" = "Expiring free points are spent first, then other free points, then paid points. Paid points never expire.";
+"profile.wallet.rules_title" = "Points rules";
+"profile.wallet.rules_error" = "Couldn't load points rules";
+
+"profile.checkin.title" = "Daily check-in";
+"profile.checkin.subtitle" = "Keep a streak for bonus points";
+"profile.checkin.action" = "Check in today";
+"profile.checkin.already" = "Already checked in today";
+"profile.checkin.done" = "Checked in";
+
+"profile.tx.phone_verified" = "Phone verification reward";
+"profile.tx.attendance_reward" = "Attendance reward";
+"profile.tx.registration_fee" = "Event registration";
+"profile.tx.event_publish" = "Event published";
+"profile.tx.group_create" = "Group created";
+"profile.tx.daily_checkin_reward" = "Daily check-in reward";
+"profile.tx.streak_7_reward" = "7-day streak reward";
+"profile.tx.streak_30_reward" = "30-day streak reward";
+"profile.tx.storekit_purchase" = "App Store purchase";
+"profile.tx.storekit_bonus" = "Purchase bonus points";
+"profile.tx.storekit_refund" = "App Store refund";
+"profile.tx.point_adjustment" = "Points adjustment";
+
+"profile.notifications.title" = "Notifications";
+"profile.notifications.error_title" = "Couldn't load notifications";
+"profile.notifications.empty_title" = "No notifications";
+"profile.notifications.empty_message" = "Waitlist, cancellation, and safety updates will appear here.";
+"profile.notifications.unread" = "Unread";
+"profile.notifications.generic" = "You have a new update";
+
+"profile.notification.waitlist_offered" = "A waitlist spot opened up";
+"profile.notification.registration_hold_expired" = "Your waitlist offer expired";
+"profile.notification.registration_changed" = "Your registration changed";
+"profile.notification.event_reminder" = "Your event is coming up";
+"profile.notification.event_cancelled" = "An event was cancelled";
+"profile.notification.event_key_fields_changed" = "Key event details changed";
+"profile.notification.event_reviewed" = "Your event was reviewed";
+"profile.notification.event_removed" = "An event was removed";
+"profile.notification.event_host_announcement" = "Message from the host";
+"profile.notification.group_announcement" = "New group announcement";
+"profile.notification.group_dissolution_scheduled" = "A group is scheduled to dissolve";
+"profile.notification.achievements_awarded" = "You earned a new achievement";
+"profile.notification.moderation_decided" = "A report you filed was resolved";
+"profile.notification.account_restricted" = "Your account status changed";
+"profile.notification.safety_case" = "Safety update";
+
+"profile.achievements.title" = "Achievements";
+"profile.achievements.error_title" = "Couldn't load achievements";
+"profile.achievements.empty_title" = "Achievements start with showing up";
+"profile.achievements.empty_message" = "Checking in, hosting well, and building groups all earn achievements.";
+"profile.achievements.new_title" = "Newly earned";
+"profile.achievements.hidden_tag" = "Hidden";
+"profile.achievements.share" = "Share achievement card";
+"profile.achievements.hide" = "Hide from profile";
+"profile.achievements.unhide" = "Show on profile";
+"profile.achievements.actions" = "Achievement actions";
+"profile.achievements.awarded_on" = "Earned on %@";
+"profile.achievements.share_title" = "Share Achievement";
+
+"profile.achievement.first_checkin.name" = "First Meetup";
+"profile.achievement.first_checkin.detail" = "Checked in to your first event.";
+"profile.achievement.city_explorer_5.name" = "City Explorer";
+"profile.achievement.city_explorer_5.detail" = "Checked in to 5 events.";
+"profile.achievement.first_hosted_event.name" = "First Host";
+"profile.achievement.first_hosted_event.detail" = "Hosted your first event to completion.";
+"profile.achievement.community_builder.name" = "Community Builder";
+"profile.achievement.community_builder.detail" = "Your group has 10+ members.";
+"profile.achievement.continuous_participation.name" = "Consistent Participant";
+"profile.achievement.continuous_participation.detail" = "Checked in at least once a month for 3 months.";
+"profile.achievement.reliable_attendee.name" = "Reliable Attendee";
+"profile.achievement.reliable_attendee.detail" = "90% attendance over your last 10 registrations.";
+"profile.achievement.friendly_contributor.name" = "Friendly Contributor";
+"profile.achievement.friendly_contributor.detail" = "Submitted 10 helpful feedback reports.";
+"profile.achievement.continuous_organizer.name" = "Consistent Organizer";
+"profile.achievement.continuous_organizer.detail" = "Hosted events 3 months in a row.";
+
+"profile.favorites.title" = "Favorites";
+"profile.favorites.error_title" = "Couldn't load favorites";
+"profile.favorites.empty_title" = "No favorites yet";
+"profile.favorites.empty_message" = "Save events to decide later — favorites don't take a spot.";
+"profile.favorites.time_tbd" = "Time TBD";
+"profile.favorites.fee_free" = "Free";
+"profile.favorites.fee_onsite" = "¥%ld pay on site";
+
+"profile.settings.title" = "Settings";
+"profile.settings.language" = "Language";
+"profile.settings.language_picker" = "App language";
+"profile.settings.notifications" = "Notifications";
+"profile.settings.push_reminder" = "Allow event reminders";
+"profile.settings.email_reminder" = "Email me event reminders";
+"profile.settings.lockscreen_address" = "Show exact address on lock screen";
+"profile.settings.quiet_start" = "Quiet hours start";
+"profile.settings.quiet_end" = "Quiet hours end";
+"profile.settings.quiet_hint" = "Quiet hours apply in Japan Standard Time (JST).";
+"profile.settings.critical_hint" = "Cancellations, waitlist offers, and safety alerts are never silenced.";
+"profile.settings.sync_after_login" = "Sign in to sync notification preferences";
+"profile.settings.privacy" = "Privacy";
+"profile.settings.analytics" = "Anonymous product analytics";
+"profile.settings.privacy_summary" = "Data & privacy";
+"profile.settings.deletion_date" = "Account deletion scheduled";
+"profile.settings.deletion_cancel" = "Cancel deletion request";
+"profile.settings.deletion_request" = "Request account deletion";
+"profile.settings.deletion_confirm_title" = "Request account deletion?";
+"profile.settings.deletion_confirm_action" = "Request Deletion";
+"profile.settings.deletion_confirm_message" = "There is a 14-day cooling-off period. Unfinished events, groups you manage, or a negative balance will block deletion.";
+"profile.settings.account" = "Account";
+"profile.settings.merge" = "Merge another account";
+"profile.settings.merge_hint" = "You must re-verify the other account; Spott never merges based on the current sign-in alone.";
+"profile.settings.revoke_all" = "Sign out of all devices";
+"profile.settings.revoke_hint" = "Revokes sessions on every device, including this one.";
+"profile.settings.revoke_confirm_title" = "Sign out of all devices?";
+"profile.settings.revoke_confirm_action" = "Sign Out Everywhere";
+"profile.settings.revoke_confirm_message" = "Every session is revoked immediately; you'll need to sign in again.";
+"profile.settings.error_section" = "Something went wrong";
+"profile.settings.retry_sync" = "Retry notification sync";
+
+"profile.public.title" = "Public Profile";
+"profile.public.about" = "About";
+"profile.public.no_bio" = "This user hasn't written a public bio yet.";
+"profile.public.privacy_note" = "Public profiles never include phone numbers or safety records";
+"profile.public.error_title" = "Can't view this profile";
+"profile.public.error_message" = "The user may have disabled their public profile.";
+"profile.public.report" = "Report user";
+"profile.public.block" = "Block user";
+"profile.public.more_actions" = "More actions";
+"profile.public.block_confirm_title" = "Block this user?";
+"profile.public.block_confirm_action" = "Block";
+"profile.public.block_confirm_message" = "Blocking removes mutual follows and limits shared interaction spaces.";
+"profile.public.hosted_events" = "Public hosted events";
+"profile.public.more_events" = "Show more events";
+"profile.public.followers" = "%ld followers";
+"profile.public.edit" = "Edit my profile";
+"profile.public.following" = "Following";
+"profile.public.follow" = "Follow";
+"profile.public.blocked_banner" = "Blocked @%@";
+"profile.public.no_languages" = "No content languages set";
+
+"profile.region.tokyo" = "Tokyo";
+"profile.region.kanagawa" = "Kanagawa";
+"profile.region.osaka" = "Osaka";
+"profile.region.kyoto" = "Kyoto";
+"profile.region.nationwide" = "All Japan";
+"profile.region.unknown" = "Region not shared";
+
+"profile.language.zh" = "Chinese";
+"profile.language.ja" = "Japanese";
+"profile.language.en" = "English";
+
+/* Account merge preview + errors */
+"profile.merge.stat_events" = "Events to migrate";
+"profile.merge.stat_groups" = "Groups to migrate";
+"profile.merge.stat_points" = "Points to migrate";
+"profile.merge.conflict.phone" = "Both accounts have a phone number bound";
+"profile.merge.conflict.event" = "Both accounts registered for the same event";
+"profile.merge.conflict.group" = "Both accounts joined the same group";
+"profile.merge.conflict.operator" = "The source account has operations-console access";
+"profile.merge.apple_credential_invalid" = "Apple did not return a valid credential for the second account.";
+"profile.edit.image_unreadable" = "This image could not be read.";
+"profile.edit.load_failed" = "Your profile could not be loaded right now.";
+"profile.edit.reload" = "Reload";

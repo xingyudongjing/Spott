@@ -5,31 +5,27 @@ struct AppRootView: View {
 
     var body: some View {
         @Bindable var router = model.router
-        Group {
-            if #available(iOS 26.0, *) {
-                appTabs(selection: $router.selectedTab)
-                    .tabBarMinimizeBehavior(.onScrollDown)
-            } else {
-                appTabs(selection: $router.selectedTab)
+        appTabs(selection: $router.selectedTab)
+            .tint(SpottColor.twilight)
+            .sheet(isPresented: rootGateBinding) {
+                GatePresentationView()
+                    .presentationDetents([.medium, .large])
             }
-        }
-        .tint(SpottColor.twilight)
-        .sheet(isPresented: presentedGateBinding) {
-            GatePresentationView()
-                .presentationDetents([.medium, .large])
-        }
-        .overlay(alignment: .top) {
-            if let banner = model.banner {
-                SyncBanner(banner: banner)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .padding(.top, 8)
+            .fullScreenCover(isPresented: composerBinding) {
+                ComposerPresentationHost()
             }
-        }
+            .overlay(alignment: .top) {
+                if let banner = model.banner {
+                    SyncBanner(banner: banner)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .padding(.top, 8)
+                }
+            }
     }
 
-    private var presentedGateBinding: Binding<Bool> {
+    private var rootGateBinding: Binding<Bool> {
         Binding(
-            get: { model.presentedGate != nil },
+            get: { model.presentedGate != nil && !model.router.presentedComposer },
             set: { isPresented in
                 if !isPresented, model.presentedGate != nil {
                     model.cancelPresentedGate()
@@ -38,8 +34,21 @@ struct AppRootView: View {
         )
     }
 
+    private var composerBinding: Binding<Bool> {
+        Binding(
+            get: { model.router.presentedComposer },
+            set: { isPresented in
+                if isPresented {
+                    model.router.presentComposer()
+                } else {
+                    model.router.dismissComposer()
+                }
+            }
+        )
+    }
+
     private func appTabs(selection: Binding<AppTab>) -> some View {
-        return TabView(selection: selection) {
+        TabView(selection: selection) {
             NavigationStack(path: model.router.binding(for: .discovery)) {
                 DiscoveryView(store: model.discovery)
                     .appRouteDestinations(in: .discovery)
@@ -54,20 +63,6 @@ struct AppRootView: View {
             .tabItem { Label("社群", systemImage: "person.2") }
             .tag(AppTab.groups)
 
-            NavigationStack(path: model.router.binding(for: .create)) {
-                EventComposerView()
-                    .appRouteDestinations(in: .create)
-            }
-            .tabItem { Label("创建", systemImage: "plus") }
-            .tag(AppTab.create)
-
-            NavigationStack(path: model.router.binding(for: .activities)) {
-                MyActivitiesView()
-                    .appRouteDestinations(in: .activities)
-            }
-            .tabItem { Label("行程", systemImage: "calendar") }
-            .tag(AppTab.activities)
-
             NavigationStack(path: model.router.binding(for: .profile)) {
                 ProfileHomeView()
                     .appRouteDestinations(in: .profile)
@@ -75,6 +70,65 @@ struct AppRootView: View {
             .tabItem { Label("我的", systemImage: "person") }
             .tag(AppTab.profile)
         }
+    }
+}
+
+/// Floating create entry. Lives in DiscoveryView's own overlay (not the app
+/// shell) so it can hide in MAP mode, where the bottom-trailing corner belongs
+/// to the map results pill and the selected-pin mini card. Shown only at the
+/// Discovery navigation root.
+struct DiscoveryCreateButton: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.locale) private var locale
+
+    var body: some View {
+        SpottGlassGroup {
+            Button {
+                model.router.presentComposer()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 56, height: 56)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.tint(SpottColor.twilight).interactive(), in: Circle())
+            .spottPressable()
+            .sensoryFeedback(.impact, trigger: model.router.presentedComposer) { _, isPresented in
+                isPresented
+            }
+            .accessibilityLabel(
+                AppShellLocalization.text("appshell.create.accessibility_label", locale: locale)
+            )
+            .accessibilityIdentifier("discovery.create-button")
+        }
+    }
+}
+
+private struct ComposerPresentationHost: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        NavigationStack {
+            EventComposerView()
+        }
+        .tint(SpottColor.twilight)
+        .sheet(isPresented: coverGateBinding) {
+            GatePresentationView()
+                .presentationDetents([.medium, .large])
+        }
+    }
+
+    private var coverGateBinding: Binding<Bool> {
+        Binding(
+            get: { model.presentedGate != nil && model.router.presentedComposer },
+            set: { isPresented in
+                if !isPresented, model.presentedGate != nil {
+                    model.cancelPresentedGate()
+                }
+            }
+        )
     }
 }
 
@@ -101,6 +155,7 @@ private struct RouteView: View {
         case .settings: SettingsView()
         case .group(let id): GroupDetailView(groupID: id)
         case .profile(let identifier): PublicProfileView(identifier: identifier)
+        case .itinerary: MyActivitiesView()
         }
     }
 }

@@ -23,7 +23,7 @@
 .heading h1 {
   margin: 0;
   font-size: clamp(42px, 5.5vw, 70px);
-  letter-spacing: -.055em;
+  letter-spacing: -.02em;
   line-height: .98;
 }
 
@@ -127,7 +127,7 @@
   background: color-mix(in srgb, var(--spott-coral) 6%, var(--spott-surface));
   color: var(--spott-ink);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .list {
@@ -170,7 +170,7 @@
 .cardMeta time {
   color: var(--spott-twilight);
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 800;
   letter-spacing: .09em;
   text-transform: uppercase;
 }
@@ -191,7 +191,7 @@
 .card h2 {
   margin: 13px 0 11px;
   font-size: clamp(23px, 2.7vw, 34px);
-  letter-spacing: -.035em;
+  letter-spacing: -.02em;
   line-height: 1.12;
 }
 
@@ -220,6 +220,34 @@
   border-radius: 50%;
   background: var(--spott-divider);
   content: "";
+}
+
+.facts .paymentReported,
+.facts .paymentConfirmed {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.facts .paymentReported {
+  border: 1px solid color-mix(in srgb, var(--spott-amber) 40%, var(--spott-divider));
+  background: color-mix(in srgb, var(--spott-amber) 10%, var(--spott-surface));
+  color: color-mix(in srgb, var(--spott-amber) 58%, var(--spott-ink));
+}
+
+.facts .paymentConfirmed {
+  border: 1px solid color-mix(in srgb, var(--spott-mint) 42%, var(--spott-divider));
+  background: color-mix(in srgb, var(--spott-mint) 10%, var(--spott-surface));
+  color: color-mix(in srgb, var(--spott-mint) 48%, var(--spott-ink));
+}
+
+.facts .paymentReported::after,
+.facts .paymentConfirmed::after {
+  display: none;
 }
 
 .actions {
@@ -308,18 +336,19 @@
 .loading,
 .empty {
   display: grid;
-  min-height: 300px;
+  min-height: 0;
   place-items: center;
-  padding: 42px;
+  padding: 34px 24px;
   border: 1px solid var(--spott-divider);
   border-radius: 24px;
   background: var(--spott-surface);
   text-align: center;
 }
 
-.loading { color: var(--spott-muted); font-weight: 700; }
+.loading { min-height: 160px; color: var(--spott-muted); font-weight: 700; }
 
-.empty h2 { margin: 0; font-size: clamp(25px, 4vw, 38px); letter-spacing: -.035em; }
+/* Matches the shared in-page empty state: the headline stays below the page h1. */
+.empty h2 { margin: 0; font-size: 19px; letter-spacing: -.01em; }
 .empty p { max-width: 42ch; margin: 10px auto 22px; color: var(--spott-muted); line-height: 1.65; }
 .empty a { display: inline-flex; min-height: 46px; align-items: center; padding: 10px 18px; border-radius: var(--spott-radius-control); background: var(--spott-twilight); color: white; font-weight: 800; }
 
@@ -374,7 +403,7 @@
   margin-bottom: 8px;
   color: var(--spott-twilight);
   font-size: 11px;
-  font-weight: 850;
+  font-weight: 800;
   letter-spacing: .11em;
   text-transform: uppercase;
 }
@@ -382,7 +411,7 @@
 .waitlistDialogHeader h2 {
   margin: 0;
   font-size: clamp(26px, 4vw, 38px);
-  letter-spacing: -.045em;
+  letter-spacing: -.02em;
   line-height: 1.08;
 }
 
@@ -450,7 +479,7 @@
   margin-bottom: 5px;
   color: var(--spott-muted);
   font-size: 10px;
-  font-weight: 820;
+  font-weight: 800;
   letter-spacing: .08em;
   text-transform: uppercase;
 }
@@ -460,7 +489,7 @@
   margin: 0;
   overflow-wrap: anywhere;
   font-size: 14px;
-  font-weight: 760;
+  font-weight: 700;
   line-height: 1.45;
 }
 
@@ -471,7 +500,7 @@
 .waitlistPointsFact strong {
   color: color-mix(in srgb, var(--spott-ink) 82%, var(--spott-mint));
   font-size: 20px;
-  letter-spacing: -.025em;
+  letter-spacing: -.02em;
 }
 
 .waitlistExpiry {
@@ -481,7 +510,7 @@
   margin: 13px 2px 0;
   color: var(--spott-muted);
   font-size: 12px;
-  font-weight: 720;
+  font-weight: 700;
 }
 
 .waitlistExpiry svg {
@@ -540,7 +569,7 @@
   background: color-mix(in srgb, var(--spott-coral) 8%, var(--spott-surface));
   color: var(--spott-ink);
   font-size: 13px;
-  font-weight: 680;
+  font-weight: 600;
   line-height: 1.5;
 }
 
@@ -564,7 +593,7 @@
   background: var(--spott-surface);
   color: var(--spott-ink);
   font-size: 13px;
-  font-weight: 820;
+  font-weight: 800;
 }
 
 .waitlistDialogActions button:last-child {

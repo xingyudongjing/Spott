@@ -1,0 +1,6 @@
+"appshell.create.accessibility_label" = "Create event";
+"appshell.composer.close" = "Close";
+"appshell.composer.discard_title" = "Discard this editing session?";
+"appshell.composer.discard_message" = "Unsaved changes will be lost. Your synced cloud draft is kept.";
+"appshell.composer.discard_confirm" = "Discard and Close";
+"appshell.composer.discard_cancel" = "Keep Editing";

@@ -8,7 +8,7 @@
   padding-inline: max(32px, calc((100vw - 1460px) / 2));
   border-bottom: 1px solid var(--spott-divider);
   background: color-mix(in srgb, var(--spott-canvas) 94%, transparent);
-  backdrop-filter: blur(16px) saturate(130%);
+  backdrop-filter: blur(16px);
 }
 
 .identity,
@@ -26,8 +26,8 @@
   align-items: center;
   color: var(--spott-twilight);
   font-size: 31px;
-  font-weight: 850;
-  letter-spacing: -.055em;
+  font-weight: 800;
+  letter-spacing: -.02em;
   line-height: 1;
 }
 
@@ -115,7 +115,7 @@
   background: var(--spott-twilight);
   color: white;
   font-size: 14px;
-  font-weight: 750;
+  font-weight: 700;
   box-shadow: 0 10px 24px color-mix(in srgb, var(--spott-twilight) 22%, transparent);
 }
 
@@ -193,7 +193,7 @@
     border-top: 1px solid var(--spott-divider);
     background: color-mix(in srgb, var(--spott-surface) 94%, transparent);
     box-shadow: 0 -12px 32px rgb(14 16 20 / 7%);
-    backdrop-filter: blur(20px) saturate(140%);
+    backdrop-filter: blur(20px);
   }
   .mobileDockReadonly { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .previewBanner {
@@ -212,12 +212,12 @@
     gap: 3px;
     color: var(--spott-muted);
     font-size: 11px;
-    font-weight: 650;
+    font-weight: 600;
     line-height: 1.15;
   }
   .mobileDock > a[aria-current="page"] {
     color: var(--spott-twilight);
-    font-weight: 780;
+    font-weight: 700;
   }
   .mobileDock svg { width: 21px; height: 21px; }
   .mobileCreate { color: var(--spott-coral-strong) !important; }
@@ -232,7 +232,7 @@
     background: var(--spott-coral-strong);
     color: white;
     font-size: 25px;
-    font-weight: 450;
+    font-weight: 500;
     line-height: 1;
     box-shadow: 0 8px 18px color-mix(in srgb, var(--spott-coral) 28%, transparent);
   }

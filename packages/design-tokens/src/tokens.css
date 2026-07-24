@@ -58,3 +58,43 @@
     --spott-motion-narrative: 1ms;
   }
 }
+
+/*
+ * Dark theme — system-following by default, with an explicit [data-theme]
+ * override hook so a manual toggle can be layered on later without a repaint.
+ * Values are hand-tuned for a layered near-black canvas (never pure #000):
+ * surface sits above canvas, muted text is lifted well clear of the AA floor,
+ * and the twilight accent is lightened so it stays legible on dark chrome.
+ * Cover art and photography are untouched — only chrome tokens change.
+ */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --spott-canvas: #0d0f13;
+  --spott-surface: #171a21;
+  --spott-ink: #f3f4f7;
+  --spott-muted: #a2a8b4;
+  --spott-twilight: #9d8eff;
+  --spott-coral: #ff8a73;
+  --spott-coral-strong: #ff9d88;
+  --spott-mint: #52d3a4;
+  --spott-amber: #ecb552;
+  --spott-danger: #ff6b79;
+  --spott-divider: #2a2f39;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --spott-canvas: #0d0f13;
+    --spott-surface: #171a21;
+    --spott-ink: #f3f4f7;
+    --spott-muted: #a2a8b4;
+    --spott-twilight: #9d8eff;
+    --spott-coral: #ff8a73;
+    --spott-coral-strong: #ff9d88;
+    --spott-mint: #52d3a4;
+    --spott-amber: #ecb552;
+    --spott-danger: #ff6b79;
+    --spott-divider: #2a2f39;
+  }
+}

@@ -122,6 +122,8 @@ export interface RegistrationView {
   waitlistPosition?: number | null;
   event?: EventView;
   createdAt?: string;
+  paymentSelfReportedAt?: string | null;
+  paymentConfirmedAt?: string | null;
 }
 
 export interface NotificationView {

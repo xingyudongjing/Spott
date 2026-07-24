@@ -61,7 +61,7 @@
 
 .error {
   margin: 4px 0 0;
-  color: #b3261e;
+  color: var(--spott-danger);
   font-size: 12px;
 }
 

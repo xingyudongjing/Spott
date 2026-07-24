@@ -30,6 +30,8 @@ interface AttendeeRegistration {
   answers: Record<string, unknown>;
   attendee: { id: string; nickname: string; publicHandle: string };
   createdAt?: string;
+  paymentSelfReportedAt?: string | null;
+  paymentConfirmedAt?: string | null;
 }
 
 interface TicketTypeSummary {
@@ -84,9 +86,6 @@ export function AttendeeManager({ eventId }: { eventId: string }) {
   const [busyId, setBusyId] = useState("");
   const [message, setMessage] = useState("");
   const [ticketTypes, setTicketTypes] = useState<TicketTypeSummary[]>([]);
-  // The attendee list does not expose stored payment state, so a confirmation is
-  // only reflected for the rest of this session — never claimed as a saved flag.
-  const [paymentConfirmed, setPaymentConfirmed] = useState<string[]>([]);
 
   const load = useCallback(
     async (selected: Status, cursor?: string) => {
@@ -244,13 +243,21 @@ export function AttendeeManager({ eventId }: { eventId: string }) {
         setBusyId(registration.id);
         setMessage("");
         try {
-          await apiRequest(`/registrations/${registration.id}/payment-confirmation`, {
-            method: "POST",
-            authenticated: true,
-            idempotent: true,
-          });
-          setPaymentConfirmed((current) =>
-            current.includes(registration.id) ? current : [...current, registration.id],
+          const confirmed = await apiRequest<{ confirmedAt?: string | null }>(
+            `/registrations/${registration.id}/payment-confirmation`,
+            {
+              method: "POST",
+              authenticated: true,
+              idempotent: true,
+            },
+          );
+          const confirmedAt = confirmed?.confirmedAt ?? new Date().toISOString();
+          setItems((current) =>
+            current.map((entry) =>
+              entry.id === registration.id
+                ? { ...entry, paymentConfirmedAt: confirmedAt }
+                : entry,
+            ),
           );
         } catch (error) {
           setMessage(errorMessage(error));
@@ -518,17 +525,26 @@ export function AttendeeManager({ eventId }: { eventId: string }) {
                     )}
                     {["pending", "confirmed", "checked_in"].includes(item.status)
                       && owesOfflinePayment(item)
-                      && (paymentConfirmed.includes(item.id) ? (
+                      && (item.paymentConfirmedAt ? (
                         <span className="payment-recorded-chip">
                           ✓ {t("studio.attendees.paymentRecorded")}
                         </span>
+                      ) : item.paymentSelfReportedAt ? (
+                        <>
+                          <span className="payment-pending-chip">
+                            {t("studio.attendees.paymentSelfReported")}
+                          </span>
+                          <button
+                            disabled={busyId === item.id}
+                            onClick={() => void confirmPayment(item)}
+                          >
+                            {t("studio.attendees.confirmPayment")}
+                          </button>
+                        </>
                       ) : (
-                        <button
-                          disabled={busyId === item.id}
-                          onClick={() => void confirmPayment(item)}
-                        >
-                          {t("studio.attendees.confirmPayment")}
-                        </button>
+                        <span className="payment-awaiting-chip">
+                          {t("studio.attendees.paymentAwaiting")}
+                        </span>
                       ))}
                   </div>
                 </article>

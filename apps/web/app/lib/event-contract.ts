@@ -188,6 +188,11 @@ const registrationSchema = z.object({
   // strict schema has to know about it or the whole itinerary fails to parse.
   ticketTypeId: uuid.nullable().optional(),
   offerExpiresAt: nullableDateTime.optional(),
+  // Off-platform payment state persisted by the API so the itinerary can show
+  // the reported / confirmed record after a reload. Both null when nothing owed
+  // or nothing reported yet. Strict schema must know them or parsing rejects.
+  paymentSelfReportedAt: nullableDateTime.optional(),
+  paymentConfirmedAt: nullableDateTime.optional(),
   availableActions: z.array(availableAction),
   version: z.number().int().min(1),
   updatedAt: dateTime,

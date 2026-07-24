@@ -69,6 +69,7 @@
 .paymentReport button:disabled { opacity: .55; }
 .paymentReport small { color: var(--spott-muted); font-size: 12px; line-height: 1.6; }
 .paymentReported { display: inline-flex; min-height: 34px; align-items: center; padding-inline: 14px; border: 1px solid color-mix(in srgb, var(--spott-amber) 40%, var(--spott-divider)); border-radius: 999px; background: color-mix(in srgb, var(--spott-amber) 9%, var(--spott-surface)); font-size: 13px; font-weight: 700; }
+.paymentConfirmed { display: inline-flex; min-height: 34px; align-items: center; gap: 6px; padding-inline: 14px; border: 1px solid color-mix(in srgb, var(--spott-mint) 42%, var(--spott-divider)); border-radius: 999px; background: color-mix(in srgb, var(--spott-mint) 10%, var(--spott-surface)); color: color-mix(in srgb, var(--spott-mint) 48%, var(--spott-ink)); font-size: 13px; font-weight: 700; }
 .paymentError { margin: 0; color: var(--spott-danger); font-size: 13px; font-weight: 700; }
 
 .terms,

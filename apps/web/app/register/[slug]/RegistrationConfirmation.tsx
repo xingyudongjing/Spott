@@ -22,7 +22,12 @@ export function RegistrationConfirmation({
 }) {
   const { t } = useI18n();
   const [shareNotice, setShareNotice] = useState<{ message: string; error: boolean } | null>(null);
-  const [paymentReported, setPaymentReported] = useState(false);
+  // Rehydrate the off-platform payment claim from the persisted registration so
+  // the "reported / confirmed" state survives a reload instead of resetting.
+  const [paymentReported, setPaymentReported] = useState(
+    Boolean(registration.paymentSelfReportedAt),
+  );
+  const paymentConfirmed = Boolean(registration.paymentConfirmedAt);
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [paymentError, setPaymentError] = useState("");
   const status = registration.status === "pending" ? "pending" : registration.status === "waitlisted" ? "waitlisted" : "confirmed";
@@ -140,7 +145,9 @@ export function RegistrationConfirmation({
         ) : null}
         {paymentReportable ? (
           <section className={styles.paymentReport}>
-            {paymentReported ? (
+            {paymentConfirmed ? (
+              <span className={styles.paymentConfirmed}>✓ {t("payment.confirmed")}</span>
+            ) : paymentReported ? (
               <span className={styles.paymentReported}>{t("payment.reported")}</span>
             ) : (
               <>

@@ -226,27 +226,46 @@ test("deindexes the safety surface in both metadata and the response header", as
   assert.match(await response.text(), /name="robots" content="noindex, nofollow"/);
 });
 
-test("keeps Web and shared Web/Ops tokens light-only", async () => {
+test("follows the system colour scheme with a refined dark theme", async () => {
   const [layout, globals, tokens, itinerary] = await Promise.all([
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../../../packages/design-tokens/src/tokens.css", import.meta.url), "utf8"),
     readFile(new URL("../app/me/events/MyEvents.module.css", import.meta.url), "utf8"),
   ]);
-  assert.match(layout, /colorScheme:\s*"light"/);
-  assert.match(layout, /themeColor:\s*"#F7F5F0"/);
-  for (const source of [layout, globals, tokens, itinerary]) {
-    assert.doesNotMatch(source, /prefers-color-scheme:\s*dark|color-scheme:\s*light dark|color-scheme:\s*dark/);
-  }
+  // The app defaults to the OS scheme (no hardcoded light lock) and paints the
+  // correct browser chrome in each mode.
+  assert.match(layout, /colorScheme:\s*"light dark"/);
+  assert.match(layout, /#F7F5F0/);
+  assert.match(layout, /#0D0F13/i);
+  // Dark values live behind the media query with an explicit [data-theme] hook.
+  assert.match(tokens, /prefers-color-scheme:\s*dark/);
+  assert.match(tokens, /:root\[data-theme="dark"\]/);
+  assert.match(tokens, /color-scheme:\s*dark/);
+  // Accessibility guards are still present.
   assert.match(`${globals}\n${itinerary}`, /prefers-contrast:\s*more/);
   assert.match(`${globals}\n${itinerary}`, /forced-colors:\s*active/);
   assert.match(tokens, /prefers-reduced-motion:\s*reduce/);
 
-  const colors = Object.fromEntries([...tokens.matchAll(/--([\w-]+):\s*(#[\da-f]{6})/gi)].map((match) => [match[1], match[2]]));
-  assert.ok(contrastRatio(colors["spott-muted"], colors["spott-canvas"]) >= 4.5);
-  assert.ok(contrastRatio(colors["spott-danger"], colors["spott-canvas"]) >= 4.5);
-  assert.ok(contrastRatio(colors["spott-coral-strong"], colors["spott-canvas"]) >= 4.5);
-  assert.ok(contrastRatio(colors["spott-coral-strong"], colors["spott-surface"]) >= 4.5);
+  // Parse each named token's light (first) and dark (last) value.
+  const byName = new Map();
+  for (const match of tokens.matchAll(/--([\w-]+):\s*(#[\da-f]{6})/gi)) {
+    if (!byName.has(match[1])) byName.set(match[1], { light: match[2], dark: match[2] });
+    byName.get(match[1]).dark = match[2];
+  }
+  const light = (name) => byName.get(name).light;
+  const dark = (name) => byName.get(name).dark;
+  // A distinct dark palette actually exists.
+  assert.notEqual(light("spott-canvas"), dark("spott-canvas"));
+  assert.notEqual(light("spott-ink"), dark("spott-ink"));
+  // Muted/danger clear AA against their own canvas in BOTH themes.
+  assert.ok(contrastRatio(light("spott-muted"), light("spott-canvas")) >= 4.5);
+  assert.ok(contrastRatio(light("spott-danger"), light("spott-canvas")) >= 4.5);
+  assert.ok(contrastRatio(light("spott-coral-strong"), light("spott-canvas")) >= 4.5);
+  assert.ok(contrastRatio(light("spott-coral-strong"), light("spott-surface")) >= 4.5);
+  assert.ok(contrastRatio(dark("spott-muted"), dark("spott-canvas")) >= 4.5);
+  assert.ok(contrastRatio(dark("spott-muted"), dark("spott-surface")) >= 4.5);
+  assert.ok(contrastRatio(dark("spott-danger"), dark("spott-canvas")) >= 4.5);
 });
 
 function contrastRatio(first, second) {

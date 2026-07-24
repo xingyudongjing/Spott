@@ -312,6 +312,10 @@ describe("studio attendee list", () => {
       ticketTypeId: "ticket-1",
       answers: {},
       attendee: { id: "attendee-1", nickname: "小林", publicHandle: "kobayashi" },
+      // The attendee has already reported paying off-platform, so the host sees
+      // the confirm action gated behind that self-report.
+      paymentSelfReportedAt: "2026-07-20T09:00:00.000Z",
+      paymentConfirmedAt: null,
     };
     apiRequestMock.mockImplementation(async (path, init) => {
       if (path === `/events/${eventId}`) return organizerEvent();
@@ -326,7 +330,11 @@ describe("studio attendee list", () => {
         path === `/registrations/${registration.id}/payment-confirmation`
         && init?.method === "POST"
       ) {
-        return { registrationId: registration.id, paymentStatus: "confirmed" };
+        return {
+          registrationId: registration.id,
+          paymentStatus: "confirmed",
+          confirmedAt: "2026-07-20T10:00:00.000Z",
+        };
       }
       throw new Error(`unexpected request ${path}`);
     });
@@ -338,6 +346,8 @@ describe("studio attendee list", () => {
     );
 
     expect(await screen.findByText(/票种: 支持票/)).toBeInTheDocument();
+    // The persisted self-reported state is surfaced before any host action.
+    expect(await screen.findByText("参加者已上报付款")).toBeInTheDocument();
     const triggers = await screen.findAllByRole("button", { name: "记录已收款" });
     await user.click(triggers[0]!);
     const dialogButtons = await screen.findAllByRole("button", { name: "记录已收款" });
@@ -385,6 +395,60 @@ describe("studio attendee list", () => {
     );
 
     await screen.findByRole("heading", { name: "阿海" });
+    expect(screen.queryByRole("button", { name: "记录已收款" })).not.toBeInTheDocument();
+  });
+
+  test("rehydrates persisted payment state without a session action", async () => {
+    apiRequestMock.mockImplementation(async (path) => {
+      if (path === `/events/${eventId}`) return organizerEvent();
+      if (String(path).startsWith(`/events/${eventId}/attendees`)) {
+        return {
+          items: [
+            {
+              id: "019b0000-0000-7000-8100-0000000000e1",
+              eventId,
+              status: "confirmed",
+              partySize: 1,
+              ticketTypeId: "ticket-1",
+              answers: {},
+              attendee: { id: "a-1", nickname: "已收款者", publicHandle: "paid" },
+              paymentSelfReportedAt: "2026-07-20T09:00:00.000Z",
+              paymentConfirmedAt: "2026-07-20T10:00:00.000Z",
+            },
+            {
+              id: "019b0000-0000-7000-8100-0000000000e2",
+              eventId,
+              status: "confirmed",
+              partySize: 1,
+              ticketTypeId: "ticket-1",
+              answers: {},
+              attendee: { id: "a-2", nickname: "待收款者", publicHandle: "unpaid" },
+              paymentSelfReportedAt: null,
+              paymentConfirmedAt: null,
+            },
+          ],
+          hasMore: false,
+          nextCursor: null,
+        };
+      }
+      if (String(path).startsWith(`/events/${eventId}/checkin-corrections`)) return { items: [] };
+      if (path === `/events/${eventId}/ticket-types`) {
+        return { items: [{ id: "ticket-1", name: "支持票", isFree: false }] };
+      }
+      throw new Error(`unexpected request ${path}`);
+    });
+
+    renderWithI18n(
+      <AppDialogProvider>
+        <AttendeeManager eventId={eventId} />
+      </AppDialogProvider>,
+    );
+
+    await screen.findByRole("heading", { name: "已收款者" });
+    // Confirmed survives reload as a recorded chip; the unpaid attendee shows the
+    // awaiting state and neither exposes the confirm action.
+    expect(screen.getByText("✓ 已记录收款")).toBeInTheDocument();
+    expect(screen.getByText("待收款")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "记录已收款" })).not.toBeInTheDocument();
   });
 });

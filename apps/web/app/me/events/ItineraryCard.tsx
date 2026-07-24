@@ -337,6 +337,7 @@ export function ItineraryCard({
               <span>{eventTime(event.startsAt, event.endsAt, locale, event.displayTimeZone)}</span>
               <span>{location}</span>
               <span>{copy.partySize.replace("{count}", String(item.registration.partySize))}</span>
+              <PaymentRecord registration={item.registration} copy={copy} />
             </div>
           </>
         ) : (
@@ -344,6 +345,7 @@ export function ItineraryCard({
             <h2 id={`itinerary-registration-title-${item.registration.id}`}>{copy.unavailable}</h2>
             <div className={styles.facts}>
               <span>{copy.partySize.replace("{count}", String(item.registration.partySize))}</span>
+              <PaymentRecord registration={item.registration} copy={copy} />
             </div>
           </>
         )}
@@ -402,6 +404,27 @@ export function ItineraryCard({
       ) : null}
     </>
   );
+}
+
+/**
+ * Persisted off-platform payment record for the attendee's own itinerary. The
+ * host confirms outside Spott; we only surface the stored claim so it survives a
+ * reload (confirmed wins over self-reported; nothing renders until reported).
+ */
+function PaymentRecord({
+  registration,
+  copy,
+}: {
+  registration: RegistrationItineraryItem["registration"];
+  copy: ItineraryCopy;
+}) {
+  if (registration.paymentConfirmedAt) {
+    return <span className={styles.paymentConfirmed}>✓ {copy.paymentConfirmed}</span>;
+  }
+  if (registration.paymentSelfReportedAt) {
+    return <span className={styles.paymentReported}>{copy.paymentReported}</span>;
+  }
+  return null;
 }
 
 function ItineraryAction({

@@ -56,6 +56,8 @@ export function itineraryCopy(locale: Locale) {
     correction: text("itinerary.correction"),
     correctionPrompt: text("itinerary.correctionPrompt"),
     correctionSent: text("itinerary.correctionSent"),
+    paymentReported: text("payment.reported"),
+    paymentConfirmed: text("payment.confirmed"),
     tabs: {
       upcoming: text("itinerary.tabUpcoming"),
       waitlist: text("itinerary.tabWaitlist"),

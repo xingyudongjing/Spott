@@ -222,6 +222,34 @@
   content: "";
 }
 
+.facts .paymentReported,
+.facts .paymentConfirmed {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.facts .paymentReported {
+  border: 1px solid color-mix(in srgb, var(--spott-amber) 40%, var(--spott-divider));
+  background: color-mix(in srgb, var(--spott-amber) 10%, var(--spott-surface));
+  color: color-mix(in srgb, var(--spott-amber) 58%, var(--spott-ink));
+}
+
+.facts .paymentConfirmed {
+  border: 1px solid color-mix(in srgb, var(--spott-mint) 42%, var(--spott-divider));
+  background: color-mix(in srgb, var(--spott-mint) 10%, var(--spott-surface));
+  color: color-mix(in srgb, var(--spott-mint) 48%, var(--spott-ink));
+}
+
+.facts .paymentReported::after,
+.facts .paymentConfirmed::after {
+  display: none;
+}
+
 .actions {
   display: flex;
   min-width: 180px;

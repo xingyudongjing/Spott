@@ -197,9 +197,10 @@ final class MyActivitiesStore {
             case .reportPayment(let id):
                 _ = try await service.reportPayment(registrationID: id)
                 try Task.checkCancellation()
+                // Optimistic overlay so the chip flips immediately; the persisted
+                // `paymentSelfReportedAt` field reconciles it on the next refresh.
                 reportedPaymentRegistrationIDs.insert(id)
-                // The itinerary payload carries no payment state yet, so the
-                // reported chip is session-local; no refresh is needed.
+                await refresh()
                 return
             case .checkIn, .correctAttendance, .leaveFeedback, .viewStatus, .viewEvent, .none:
                 return

@@ -171,7 +171,9 @@ struct RegistrationFlowView: View {
                 offerExpiresAt: nil,
                 updatedAt: .now,
                 rewardPoints: nil,
-                checkinMethod: nil
+                checkinMethod: nil,
+                paymentSelfReportedAt: nil,
+                paymentConfirmedAt: nil
             ),
             event: event
         )
@@ -266,6 +268,7 @@ private struct RegistrationFlowScreen: View {
                                 ? RegistrationPaymentReportUI(
                                     isBusy: store.isReportingPayment,
                                     reported: store.paymentReported,
+                                    confirmed: store.paymentConfirmed,
                                     errorMessage: store.paymentReportError,
                                     report: reportPayment
                                 )

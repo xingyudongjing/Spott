@@ -1146,7 +1146,9 @@ final class RegistrationStoreTests: XCTestCase {
             offerExpiresAt: nil,
             updatedAt: now,
             rewardPoints: nil,
-            checkinMethod: nil
+            checkinMethod: nil,
+            paymentSelfReportedAt: nil,
+            paymentConfirmedAt: nil
         )
     }
 }

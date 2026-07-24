@@ -91,8 +91,24 @@ final class RegistrationStore {
     private(set) var ticketTypesUnavailable = false
     private(set) var selectedTicketTypeID: UUID?
     private(set) var isReportingPayment = false
-    private(set) var paymentReported = false
+    /// Optimistic flag flipped the moment the attendee taps "我已线下支付", before
+    /// the server round-trip lands. The persisted `paymentSelfReportedAt` field on
+    /// the registration is the source of truth once it arrives.
+    private var paymentReportedOptimistic = false
     private(set) var paymentReportError: String?
+
+    /// True once the attendee has self-reported offline payment — either
+    /// optimistically this session or reconciled from the persisted
+    /// `paymentSelfReportedAt` field so the chip survives a reload.
+    var paymentReported: Bool {
+        paymentReportedOptimistic || confirmation?.registration.paymentSelfReportedAt != nil
+    }
+
+    /// True once the organizer has confirmed receipt (persisted
+    /// `paymentConfirmedAt`). Takes precedence over `paymentReported`.
+    var paymentConfirmed: Bool {
+        confirmation?.registration.paymentConfirmedAt != nil
+    }
     private(set) var inviteURL: URL?
 
     @ObservationIgnored private let service: any RegistrationServing
@@ -252,6 +268,7 @@ final class RegistrationStore {
               confirmation.kind == .confirmed,
               isPaidShell,
               !paymentReported,
+              !paymentConfirmed,
               !isReportingPayment else { return }
         let generation = lifecycleGeneration
         isReportingPayment = true
@@ -267,7 +284,7 @@ final class RegistrationStore {
             )
             try Task.checkCancellation()
             guard generation == lifecycleGeneration else { return }
-            paymentReported = true
+            paymentReportedOptimistic = true
         } catch is CancellationError {
             return
         } catch {
@@ -486,7 +503,7 @@ final class RegistrationStore {
         isPreparingQuote = false
         isSubmitting = false
         isReportingPayment = false
-        paymentReported = false
+        paymentReportedOptimistic = false
         paymentReportError = nil
         inviteURL = nil
         isPreparingInvite = false

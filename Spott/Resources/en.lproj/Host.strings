@@ -159,6 +159,8 @@
 "host.attendees.reject" = "Reject";
 "host.attendees.manual_checkin" = "Manual check-in";
 "host.attendees.verified" = "Verified on site";
+"host.attendees.confirm_payment" = "Confirm payment received";
+"host.attendees.payment_confirmed" = "Payment confirmed";
 "host.attendees.correction_approve" = "Approve correction";
 "host.attendees.correction_reject" = "Reject";
 "host.attendees.correction_submitted_at" = "Submitted %1$@";

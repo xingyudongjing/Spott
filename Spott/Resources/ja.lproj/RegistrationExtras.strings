@@ -10,6 +10,7 @@
 "regextras.error.ticket_sold_out" = "このチケットは完売しました。別のチケットをお選びください。";
 "regextras.payment.report_action" = "現地で支払いました";
 "regextras.payment.reported_chip" = "主催者に連絡済み · 確認待ち";
+"regextras.payment.confirmed_chip" = "主催者が入金を確認しました";
 "regextras.payment.report_hint" = "現地で支払ったら、ここから主催者に知らせてください。最終確認は主催者が行います。";
 "regextras.payment.report_failed" = "送信できませんでした。しばらくしてからもう一度お試しください。";
 "regextras.payment.not_applicable" = "この申し込みに支払い確認は不要です。";

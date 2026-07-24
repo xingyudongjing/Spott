@@ -425,12 +425,13 @@ private struct MyActivitiesNativeSection: View {
     private var rows: some View {
         LazyVStack(spacing: 14) {
             ForEach(section.items) { item in
+                let paymentState = paymentState(for: item)
                 MyActivityNativeRow(
                     item: item,
                     locale: locale,
                     isBusy: actionInFlight == item.registration.id,
                     isFocused: focusedRegistrationID == item.registration.id,
-                    paymentReported: reportedPaymentIDs.contains(item.registration.id),
+                    paymentState: paymentState,
                     open: {
                         if let event = item.event {
                             action(
@@ -443,7 +444,7 @@ private struct MyActivitiesNativeSection: View {
                     },
                     primaryAction: { action(item.nextAction, item) },
                     reportPayment: item.registration.status == "confirmed"
-                        && !reportedPaymentIDs.contains(item.registration.id)
+                        && paymentState == .none
                         ? { action(.reportPayment(item.registration.id), item) }
                         : nil,
                     cancel: item.cancellationAction.map { cancellationAction in
@@ -454,6 +455,24 @@ private struct MyActivitiesNativeSection: View {
             }
         }
     }
+
+    /// Derives the offline-payment chip state from the persisted registration
+    /// fields, falling back to the session-local optimistic set so a just-tapped
+    /// report shows immediately before the itinerary refresh lands.
+    private func paymentState(for item: MyActivityItem) -> MyActivityPaymentState {
+        if item.registration.paymentConfirmedAt != nil { return .confirmed }
+        if item.registration.paymentSelfReportedAt != nil
+            || reportedPaymentIDs.contains(item.registration.id) {
+            return .reported
+        }
+        return .none
+    }
+}
+
+enum MyActivityPaymentState: Equatable, Sendable {
+    case none
+    case reported
+    case confirmed
 }
 
 private struct MyActivityNativeRow: View {
@@ -461,7 +480,7 @@ private struct MyActivityNativeRow: View {
     let locale: Locale
     let isBusy: Bool
     let isFocused: Bool
-    let paymentReported: Bool
+    let paymentState: MyActivityPaymentState
     let open: () -> Void
     let primaryAction: () -> Void
     let reportPayment: (() -> Void)?
@@ -513,8 +532,13 @@ private struct MyActivityNativeRow: View {
                 "itinerary.item.\(item.registration.id.uuidString.lowercased()).open"
             )
 
-            if paymentReported {
+            switch paymentState {
+            case .confirmed:
+                paymentConfirmedChip
+            case .reported:
                 paymentReportedChip
+            case .none:
+                EmptyView()
             }
 
             ViewThatFits(in: .horizontal) {
@@ -545,6 +569,20 @@ private struct MyActivityNativeRow: View {
         )
         .accessibilityIdentifier(
             "itinerary.item.\(item.registration.id.uuidString.lowercased()).payment_chip"
+        )
+    }
+
+    private var paymentConfirmedChip: some View {
+        GlassPill(
+            text: RegistrationExtrasLocalization.text(
+                "regextras.payment.confirmed_chip",
+                locale: locale
+            ),
+            systemImage: "checkmark.seal.fill",
+            tint: SpottColor.mint
+        )
+        .accessibilityIdentifier(
+            "itinerary.item.\(item.registration.id.uuidString.lowercased()).payment_confirmed_chip"
         )
     }
 

@@ -43,6 +43,7 @@ struct RegistrationConfirmationPresentation: Equatable, Sendable {
 struct RegistrationPaymentReportUI {
     let isBusy: Bool
     let reported: Bool
+    let confirmed: Bool
     let errorMessage: String?
     let report: () -> Void
 }
@@ -258,7 +259,16 @@ struct RegistrationConfirmationView: View {
     private var paymentReportSection: some View {
         if let paymentReport {
             VStack(alignment: .leading, spacing: 10) {
-                if paymentReport.reported {
+                if paymentReport.confirmed {
+                    GlassPill(
+                        text: extras("regextras.payment.confirmed_chip"),
+                        systemImage: "checkmark.seal.fill",
+                        tint: SpottColor.mint
+                    )
+                    .accessibilityIdentifier(
+                        "registration.confirmation.payment_confirmed_chip"
+                    )
+                } else if paymentReport.reported {
                     GlassPill(
                         text: extras("regextras.payment.reported_chip"),
                         systemImage: "clock.badge.checkmark",

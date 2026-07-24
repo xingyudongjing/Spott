@@ -159,6 +159,8 @@
 "host.attendees.reject" = "拒绝";
 "host.attendees.manual_checkin" = "人工签到";
 "host.attendees.verified" = "已完成现场核验";
+"host.attendees.confirm_payment" = "确认已收款";
+"host.attendees.payment_confirmed" = "已确认收款";
 "host.attendees.correction_approve" = "确认补签";
 "host.attendees.correction_reject" = "拒绝";
 "host.attendees.correction_submitted_at" = "提交于 %1$@";

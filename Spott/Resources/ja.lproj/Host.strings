@@ -159,6 +159,8 @@
 "host.attendees.reject" = "却下";
 "host.attendees.manual_checkin" = "手動チェックイン";
 "host.attendees.verified" = "現地確認済み";
+"host.attendees.confirm_payment" = "入金を確認する";
+"host.attendees.payment_confirmed" = "入金確認済み";
 "host.attendees.correction_approve" = "事後申請を承認";
 "host.attendees.correction_reject" = "却下";
 "host.attendees.correction_submitted_at" = "提出：%1$@";

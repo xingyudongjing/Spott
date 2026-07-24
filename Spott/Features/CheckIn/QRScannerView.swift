@@ -756,29 +756,53 @@ struct HostAttendeeManagerView: View {
 
     @ViewBuilder
     private func actionButtons(_ attendee: EventAttendee) -> some View {
-        HStack(spacing: 10) {
-            if attendee.status == "pending" {
-                Button(text("host.attendees.approve")) { mutate(attendee, action: .approve) }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                if attendee.status == "pending" {
+                    Button(text("host.attendees.approve")) { mutate(attendee, action: .approve) }
+                        .buttonStyle(.glassProminent)
+                        .tint(SpottColor.twilight)
+                    Button(text("host.attendees.reject")) { mutate(attendee, action: .reject) }
+                        .buttonStyle(.glass)
+                        .tint(SpottColor.danger)
+                } else if attendee.status == "confirmed" {
+                    Button { mutate(attendee, action: .manualCheckIn) } label: {
+                        Label(text("host.attendees.manual_checkin"), systemImage: "checkmark.seal")
+                    }
                     .buttonStyle(.glassProminent)
-                    .tint(SpottColor.twilight)
-                Button(text("host.attendees.reject")) { mutate(attendee, action: .reject) }
-                    .buttonStyle(.glass)
-                    .tint(SpottColor.danger)
-            } else if attendee.status == "confirmed" {
-                Button { mutate(attendee, action: .manualCheckIn) } label: {
-                    Label(text("host.attendees.manual_checkin"), systemImage: "checkmark.seal")
+                    .tint(SpottColor.mint)
+                } else if attendee.status == "checked_in" {
+                    Label(text("host.attendees.verified"), systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(SpottColor.mint)
                 }
-                .buttonStyle(.glassProminent)
-                .tint(SpottColor.mint)
-            } else if attendee.status == "checked_in" {
-                Label(text("host.attendees.verified"), systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(SpottColor.mint)
             }
+            paymentControl(attendee)
         }
         .disabled(workingID != nil)
     }
 
-    private enum Mutation { case approve, reject, manualCheckIn }
+    @ViewBuilder
+    private func paymentControl(_ attendee: EventAttendee) -> some View {
+        if attendee.paymentConfirmedAt != nil {
+            Label(text("host.attendees.payment_confirmed"), systemImage: "checkmark.seal.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(SpottColor.mint)
+                .accessibilityIdentifier(
+                    "host.attendees.\(attendee.id.uuidString.lowercased()).payment_confirmed"
+                )
+        } else if attendee.paymentSelfReportedAt != nil {
+            Button { mutate(attendee, action: .confirmPayment) } label: {
+                Label(text("host.attendees.confirm_payment"), systemImage: "yensign.circle")
+            }
+            .buttonStyle(.glass)
+            .tint(SpottColor.mint)
+            .accessibilityIdentifier(
+                "host.attendees.\(attendee.id.uuidString.lowercased()).confirm_payment"
+            )
+        }
+    }
+
+    private enum Mutation { case approve, reject, manualCheckIn, confirmPayment }
 
     private func mutate(_ attendee: EventAttendee, action: Mutation) {
         workingID = attendee.id
@@ -793,6 +817,8 @@ struct HostAttendeeManagerView: View {
                     _ = try await model.api.decideRegistration(registrationID: attendee.id, approve: false)
                 case .manualCheckIn:
                     _ = try await model.api.manualCheckIn(eventID: event.id, registrationID: attendee.id)
+                case .confirmPayment:
+                    _ = try await model.api.confirmPayment(registrationID: attendee.id)
                 }
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 await load()

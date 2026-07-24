@@ -965,6 +965,12 @@ struct Registration: Codable, Identifiable, Sendable {
     let updatedAt: Date?
     let rewardPoints: Int?
     let checkinMethod: String?
+    /// Persisted offline-payment state (ISO-8601 | null). `paymentSelfReportedAt`
+    /// is set when the attendee taps "我已线下支付"; `paymentConfirmedAt` when the
+    /// organizer confirms receipt. Optional so decoding stays tolerant of older
+    /// payloads that omit the keys entirely.
+    let paymentSelfReportedAt: Date?
+    let paymentConfirmedAt: Date?
 }
 
 struct ItineraryEventSummary: Codable, Identifiable, Hashable, Sendable {
@@ -1095,6 +1101,11 @@ struct EventAttendee: Codable, Identifiable, Sendable {
     let updatedAt: Date
     let attendee: Identity
     let answers: [String: JSONValue]
+    /// Persisted offline-payment state (ISO-8601 | null), mirrored from the
+    /// RegistrationView serializer so the organizer can see whether the attendee
+    /// self-reported payment and whether it has been confirmed.
+    let paymentSelfReportedAt: Date?
+    let paymentConfirmedAt: Date?
 }
 
 /// "Who's coming" social proof (Luma signature). Public, unauthenticated payload

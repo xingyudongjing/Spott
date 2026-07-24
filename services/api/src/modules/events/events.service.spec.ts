@@ -49,6 +49,8 @@ function eventRow(overrides: Record<string, unknown> = {}) {
     registration_status: 'offered',
     registration_party_size: 2,
     offer_expires_at: new Date('2026-08-01T01:00:00.000Z'),
+    payment_self_reported_at: new Date('2026-08-01T02:00:00.000Z'),
+    payment_confirmed_at: new Date('2026-08-01T02:30:00.000Z'),
     organizer_name: '主办方',
     organizer_handle: 'host',
     phone_verified: true,
@@ -166,6 +168,8 @@ describe('EventsService event contract', () => {
         status: 'offered',
         partySize: 2,
         offerExpiresAt: '2026-08-01T01:00:00.000Z',
+        paymentSelfReportedAt: '2026-08-01T02:00:00.000Z',
+        paymentConfirmedAt: '2026-08-01T02:30:00.000Z',
       },
       organizer: {
         trust: {

@@ -157,6 +157,8 @@ interface EventRow {
   registration_status: string | null;
   registration_party_size: number | null;
   offer_expires_at: Date | null;
+  payment_self_reported_at: Date | null;
+  payment_confirmed_at: Date | null;
   organizer_name: string | null;
   organizer_handle: string;
   phone_verified: boolean;
@@ -575,6 +577,7 @@ export class EventsService {
            - COALESCE(c.pending_count, 0) - COALESCE(c.offered_count, 0))::int AS available_capacity,
          NULL::uuid AS registration_id, NULL::text AS registration_status,
          NULL::int AS registration_party_size, NULL::timestamptz AS offer_expires_at,
+         NULL::timestamptz AS payment_self_reported_at, NULL::timestamptz AS payment_confirmed_at,
          p.nickname AS organizer_name,
          u.public_handle AS organizer_handle, u.phone_verified_at IS NOT NULL AS phone_verified,
          COALESCE(trust.completed_event_count, 0)::int AS completed_event_count,
@@ -638,6 +641,7 @@ export class EventsService {
            - COALESCE(c.pending_count, 0) - COALESCE(c.offered_count, 0))::int AS available_capacity,
          r.id AS registration_id, r.status::text AS registration_status,
          r.party_size::int AS registration_party_size, promotion.expires_at AS offer_expires_at,
+         r.payment_self_reported_at, r.payment_confirmed_at,
          p.nickname AS organizer_name,
          u.public_handle AS organizer_handle, u.phone_verified_at IS NOT NULL AS phone_verified,
          COALESCE(trust.completed_event_count, 0)::int AS completed_event_count,
@@ -1349,6 +1353,7 @@ export class EventsService {
          r.id AS registration_id, r.status::text AS registration_status,
          r.party_size::int AS registration_party_size,
          promotion.expires_at AS offer_expires_at,
+         r.payment_self_reported_at, r.payment_confirmed_at,
          p.nickname AS organizer_name,
          u.public_handle AS organizer_handle, u.phone_verified_at IS NOT NULL AS phone_verified,
          COALESCE(trust.completed_event_count, 0)::int AS completed_event_count,
@@ -1527,6 +1532,8 @@ export class EventsService {
             status: row.registration_status,
             partySize: row.registration_party_size,
             offerExpiresAt: row.offer_expires_at?.toISOString() ?? null,
+            paymentSelfReportedAt: row.payment_self_reported_at?.toISOString() ?? null,
+            paymentConfirmedAt: row.payment_confirmed_at?.toISOString() ?? null,
           }
         : null,
       registrationMode: row.registration_mode,

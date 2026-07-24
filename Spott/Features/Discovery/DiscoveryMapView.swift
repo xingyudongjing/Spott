@@ -4,46 +4,78 @@ import SwiftUI
 struct DiscoveryMap: View {
     @Environment(\.locale) private var locale
     let store: DiscoveryStore
+    let locationAuthorized: Bool
     @Binding var selectedEventID: UUID?
     @Binding var showsResults: Bool
+    let openEvent: (EventSummary) -> Void
     @State private var cameraPosition: MapCameraPosition
 
     init(
         store: DiscoveryStore,
+        locationAuthorized: Bool,
         selectedEventID: Binding<UUID?>,
-        showsResults: Binding<Bool>
+        showsResults: Binding<Bool>,
+        openEvent: @escaping (EventSummary) -> Void
     ) {
         self.store = store
+        self.locationAuthorized = locationAuthorized
         _selectedEventID = selectedEventID
         _showsResults = showsResults
+        self.openEvent = openEvent
         _cameraPosition = State(initialValue: .fitting(store.mapEvents))
     }
 
+    private var selectedEvent: EventSummary? {
+        guard let selectedEventID else { return nil }
+        return store.mapEvents.first { $0.id == selectedEventID }
+    }
+
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack(alignment: .bottom) {
             Map(position: $cameraPosition, selection: $selectedEventID) {
+                if locationAuthorized {
+                    UserAnnotation()
+                }
                 ForEach(store.mapEvents) { event in
                     DiscoveryMapMarker(event: event, locale: locale)
                 }
             }
             .mapStyle(.standard)
             .mapControls {
+                if locationAuthorized {
+                    MapUserLocationButton()
+                }
                 MapCompass()
                 MapScaleView()
             }
             .onMapCameraChange(frequency: .onEnd, cameraSettled)
-            .onChange(of: selectedEventID, selectionChanged)
             .onChange(of: store.mapCameraRevision, cameraRefitRequested)
-            .accessibilityLabel("活动地图")
-            .accessibilityHint("地图位置均为主办方公开的约略位置；结果也可在列表中浏览。")
+            .accessibilityLabel(Text(verbatim: DiscoveryHomeLocalization.text(
+                "discovery.map.a11y.label", locale: locale
+            )))
+            .accessibilityHint(Text(verbatim: DiscoveryHomeLocalization.text(
+                "discovery.map.a11y.hint", locale: locale
+            )))
             .accessibilityIdentifier("discovery.map")
 
             if store.mapEvents.isEmpty {
                 NoMapLocationsView()
+                    .frame(maxHeight: .infinity, alignment: .center)
             }
 
-            MapResultsControl(count: store.mapEvents.count, action: showResults)
-                .padding(16)
+            VStack(spacing: 12) {
+                if let selectedEvent {
+                    DiscoveryMapMiniCard(event: selectedEvent) {
+                        openEvent(selectedEvent)
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                HStack {
+                    Spacer()
+                    MapResultsControl(count: store.mapEvents.count, action: showResults)
+                }
+            }
+            .padding(16)
         }
     }
 
@@ -51,10 +83,6 @@ struct DiscoveryMap: View {
         guard cameraPosition.positionedByUser else { return }
         guard let bounds = MapBounds(region: context.region) else { return }
         store.mapBoundsDidSettle(bounds)
-    }
-
-    private func selectionChanged(oldValue: UUID?, newValue: UUID?) {
-        if newValue != nil { showsResults = true }
     }
 
     private func cameraRefitRequested(oldValue: Int, newValue: Int) {
@@ -97,11 +125,13 @@ private struct DiscoveryMapMarker: MapContent {
                     longitude: coordinate.longitude
                 )
             ) {
-                Image(systemName: event.remaining > 0 ? "calendar.badge.plus" : "calendar")
-                    .font(.callout.weight(.semibold))
+                Image(systemName: EventCoverStyle.style(for: event.category).symbol)
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 36, height: 36)
                     .background(SpottColor.twilight, in: Circle())
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
                     .accessibilityLabel(accessibilityLabel)
             }
             .tag(event.id)
@@ -116,13 +146,84 @@ private struct DiscoveryMapMarker: MapContent {
     }
 }
 
-private struct NoMapLocationsView: View {
+private struct DiscoveryMapMiniCard: View {
+    @Environment(\.locale) private var locale
+    let event: EventSummary
+    let open: () -> Void
+
+    private var presentation: DiscoveryCardPresentation {
+        DiscoveryCardPresentation(event: event, locale: locale)
+    }
+
     var body: some View {
-        ContentUnavailableView(
-            "没有可显示的位置",
-            systemImage: "map",
-            description: Text("这些活动尚未发布公共地图位置，请使用列表查看。")
+        Button(action: open) {
+            HStack(spacing: 12) {
+                EventCoverView(url: event.coverURL, category: event.category, cornerRadius: 12)
+                    .frame(width: 64, height: 64)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(verbatim: event.title)
+                        .font(.headline)
+                        .foregroundStyle(SpottColor.ink)
+                        .lineLimit(1)
+                    (
+                        Text(verbatim: "\(presentation.startText) · ")
+                            .foregroundStyle(SpottColor.muted)
+                        + Text(verbatim: presentation.capacityText)
+                            .foregroundStyle(
+                                presentation.isCapacityUrgent
+                                    ? SpottColor.coral
+                                    : SpottColor.muted
+                            )
+                    )
+                    .font(.caption.weight(.medium))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(SpottColor.muted)
+            }
+            .padding(16)
+            .frame(minHeight: 96)
+            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .glassEffect(
+            .regular.interactive(),
+            in: RoundedRectangle(cornerRadius: 22, style: .continuous)
         )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: "\(event.title), \(miniCardSubtitle)"))
+        .accessibilityHint(Text(verbatim: DiscoveryHomeLocalization.text(
+            "discovery.map.minicard.hint", locale: locale
+        )))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("discovery.map-mini-card")
+    }
+
+    private var miniCardSubtitle: String {
+        "\(presentation.startText) · \(presentation.capacityText)"
+    }
+}
+
+private struct NoMapLocationsView: View {
+    @Environment(\.locale) private var locale
+
+    var body: some View {
+        ContentUnavailableView {
+            Label {
+                Text(verbatim: DiscoveryHomeLocalization.text(
+                    "discovery.map.no_locations.title", locale: locale
+                ))
+            } icon: {
+                Image(systemName: "map")
+            }
+        } description: {
+            Text(verbatim: DiscoveryHomeLocalization.text(
+                "discovery.map.no_locations.message", locale: locale
+            ))
+        }
         .padding()
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
         .padding()
@@ -130,34 +231,34 @@ private struct NoMapLocationsView: View {
 }
 
 private struct MapResultsControl: View {
+    @Environment(\.locale) private var locale
     let count: Int
     let action: () -> Void
 
     var body: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 8) {
-                button.buttonStyle(.glassProminent)
-            }
-        } else {
-            button
-                .buttonStyle(.borderedProminent)
-                .background(.regularMaterial, in: Capsule())
-        }
-    }
-
-    private var button: some View {
-        Button(action: action) {
-            Label("\(count) 个地图结果", systemImage: "list.bullet")
+        SpottGlassGroup(spacing: 8) {
+            Button(action: action) {
+                Label(
+                    DiscoveryHomeLocalization.format(
+                        "discovery.map.results", locale: locale, count
+                    ),
+                    systemImage: "list.bullet"
+                )
                 .font(.subheadline.weight(.semibold))
                 .frame(minHeight: 44)
+            }
+            .buttonStyle(.glassProminent)
+            .buttonBorderShape(.capsule)
+            .tint(SpottColor.twilight)
+            .accessibilityIdentifier("discovery.map-results")
         }
-        .accessibilityIdentifier("discovery.map-results")
     }
 }
 
 struct MapResultsSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.locale) private var locale
     let events: [EventSummary]
     @Binding var selectedEventID: UUID?
 
@@ -178,11 +279,16 @@ struct MapResultsSheet: View {
             }
             .listStyle(.plain)
             .overlay { if events.isEmpty { NoMapLocationsView() } }
-            .navigationTitle("地图结果")
+            .navigationTitle(DiscoveryHomeLocalization.text(
+                "discovery.map.results_title", locale: locale
+            ))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("关闭", action: dismiss.callAsFunction)
+                    Button(
+                        DiscoveryHomeLocalization.text("discovery.map.close", locale: locale),
+                        action: dismiss.callAsFunction
+                    )
                 }
             }
         }

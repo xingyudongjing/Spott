@@ -1,0 +1,216 @@
+"composer.step.content" = "Content";
+"composer.step.schedule" = "Time & place";
+"composer.step.registration" = "Registration";
+"composer.step.fee_risk" = "Fees & risk";
+"composer.step.community" = "Community";
+"composer.step.preview" = "Preview";
+"composer.step_progress" = "Step %1$d of %2$d";
+
+"composer.category.family" = "Family";
+"composer.category.outdoor" = "Outdoor";
+"composer.category.sports" = "Sports";
+"composer.category.city_walk" = "City walks";
+"composer.category.food" = "Food";
+"composer.category.games" = "Games";
+"composer.category.art" = "Art & culture";
+"composer.category.learning" = "Skills";
+"composer.category.networking" = "Career";
+
+"composer.region.tokyo" = "Tokyo";
+"composer.region.kanagawa" = "Kanagawa";
+"composer.region.osaka" = "Osaka";
+"composer.region.kyoto" = "Kyoto";
+
+"composer.gate.signed_out_title" = "Sign in to create events";
+"composer.gate.signed_out_message" = "Drafts save automatically and stay editable in the Web studio.";
+"composer.gate.signed_out_action" = "Sign in";
+"composer.gate.phone_title" = "Verify your phone number first";
+"composer.gate.phone_message" = "Publishing events is a high-trust action. Verifying also unlocks a first-time reward.";
+"composer.gate.phone_action" = "Continue verification";
+
+"composer.submitted.review_title" = "Submitted for review";
+"composer.submitted.review_message" = "Review results, change requests, and publish status stay in sync across iOS and Web.";
+"composer.submitted.published_title" = "Published";
+"composer.submitted.published_message" = "Your event passed automatic review and is live. Share it with participants now.";
+"composer.submitted.view_event" = "View event";
+"composer.submitted.share" = "Share event";
+"composer.submitted.share_after_review" = "You can share the event link once it passes review.";
+"composer.submitted.create_another" = "Create another";
+
+"composer.edit_saved.title" = "Changes saved";
+"composer.edit_saved.message" = "Changes to key details like time, place, or fees notify registered participants.";
+"composer.edit_saved.done" = "Done";
+
+"composer.header.create_title" = "Create event";
+"composer.header.create_subtitle" = "Six steps, save anytime, and continue editing on the Web.";
+"composer.header.edit_title" = "Edit event";
+"composer.header.edit_subtitle" = "Edits to a published event take effect on save; key changes notify participants.";
+
+"composer.resume.title" = "Resume last draft";
+"composer.resume.updated_at" = "Last edited: %1$@";
+"composer.resume.continue" = "Continue editing";
+"composer.resume.dismiss" = "Dismiss";
+
+"composer.conflict.reloaded" = "A newer version exists in the cloud (possibly from the Web). Synced to the latest version number — your local entries are kept, please review and save again.";
+"composer.saved_status" = "Cloud draft v%1$d · synced at %2$@";
+
+"composer.photos.section_title" = "Cover & album";
+"composer.photos.section_subtitle" = "1–6 images; the first is the cover, drag to reorder";
+"composer.photos.pick" = "Choose images";
+"composer.photos.add_more" = "Add images (%1$d / 6 selected)";
+"composer.photos.cover_badge" = "Cover";
+"composer.photos.remove" = "Remove image";
+"composer.photos.make_cover" = "Make cover";
+"composer.photos.move_forward" = "Move forward";
+"composer.photos.move_backward" = "Move backward";
+"composer.photos.reorder_hint" = "Press and drag to reorder; the first image is the cover.";
+"composer.photos.uploaded_locked" = "Images are uploaded and their order is fixed at save time. Adjust them in the Web studio.";
+"composer.photos.published_locked" = "Images for published events can't be changed in the app yet — use the Web studio.";
+"composer.photos.accessibility_cover" = "Cover image, position %1$d";
+"composer.photos.accessibility_item" = "Image %1$d of %2$d";
+
+"composer.basics.section_title" = "Make it instantly clear";
+"composer.basics.section_subtitle" = "Title 4–40 characters, description 50–3000";
+"composer.basics.title_placeholder" = "Event title";
+"composer.basics.description_placeholder" = "Event description";
+
+"composer.category.section_title" = "Category & tags";
+"composer.category.section_subtitle" = "One main category, up to 5 tags";
+"composer.category.picker_label" = "Main category";
+
+"composer.tags.placeholder" = "Add a tag";
+"composer.tags.add" = "Add";
+"composer.tags.remove" = "Remove tag %1$@";
+
+"composer.schedule.section_title" = "Time";
+"composer.schedule.section_subtitle" = "Shown in the event's local time zone";
+"composer.schedule.starts" = "Starts";
+"composer.schedule.ends" = "Ends";
+"composer.schedule.deadline" = "Registration deadline";
+
+"composer.place.section_title" = "Place";
+"composer.place.section_subtitle" = "The public area and exact address are stored separately";
+"composer.place.region" = "Region";
+"composer.place.public_area_placeholder" = "Public meeting area, e.g. Yoyogi Park entrance";
+"composer.place.exact_address_placeholder" = "Exact address";
+"composer.place.visibility" = "Exact address visibility";
+"composer.place.visibility_confirmed" = "Confirmed participants only";
+"composer.place.visibility_public" = "Public";
+"composer.place.privacy_note" = "By default the exact address is only returned to confirmed participants — never in public pages, waitlists, or caches.";
+
+"composer.registration.section_title" = "Registration rules";
+"composer.registration.section_subtitle" = "Supports automatic confirmation, host approval, and invite-only";
+"composer.registration.capacity" = "Capacity: %1$d";
+"composer.registration.mode" = "Confirmation";
+"composer.registration.mode_automatic" = "Automatic";
+"composer.registration.mode_approval" = "Host approval";
+"composer.registration.mode_invite" = "Invite only";
+"composer.registration.waitlist" = "Open waitlist when full";
+"composer.registration.requirements_placeholder" = "Participation requirements (optional)";
+
+"composer.questions.section_title" = "Registration questions";
+"composer.questions.section_subtitle" = "Up to 10; editable and reorderable, required ones are validated before submission";
+"composer.questions.required_tag" = "Required";
+"composer.questions.option_count" = "%1$d options";
+"composer.questions.move_up" = "Move up";
+"composer.questions.move_down" = "Move down";
+"composer.questions.edit" = "Edit question";
+"composer.questions.delete" = "Delete question";
+"composer.questions.editing_notice" = "Editing an existing question";
+"composer.questions.prompt_placeholder" = "e.g. Why do you want to join?";
+"composer.questions.kind" = "Answer type";
+"composer.questions.kind_text" = "Text";
+"composer.questions.kind_single_choice" = "Single choice";
+"composer.questions.kind_boolean" = "Yes / No";
+"composer.questions.options_placeholder" = "Options, separated by new lines or commas (2–12)";
+"composer.questions.required" = "Participants must answer";
+"composer.questions.add" = "Add question";
+"composer.questions.save_edit" = "Save changes";
+"composer.questions.cancel_edit" = "Cancel editing";
+
+"composer.fee.section_title" = "Event fee";
+"composer.fee.section_subtitle" = "Fees are collected directly by the host outside the app — Spott never handles the money";
+"composer.fee.free" = "Free event";
+"composer.fee.amount_placeholder" = "Amount (JPY)";
+"composer.fee.collector_placeholder" = "Collector name";
+"composer.fee.method_placeholder" = "Collection method";
+"composer.fee.deadline_placeholder" = "Payment deadline";
+"composer.fee.refund_placeholder" = "Refund policy";
+
+"composer.risk.section_title" = "Risk disclosure";
+"composer.risk.section_subtitle" = "High-risk items go to human review — that doesn't mean rejection";
+"composer.risk.note_placeholder" = "Describe the risks and matching safety measures";
+"composer.risk.alcohol" = "Includes alcohol";
+"composer.risk.late_night" = "Late night";
+"composer.risk.family" = "Family event";
+"composer.risk.minors" = "Involves minors";
+"composer.risk.outdoor" = "Outdoor";
+"composer.risk.mountain" = "Mountain activity";
+"composer.risk.water" = "Water activity";
+"composer.risk.high_fee" = "High fee";
+"composer.risk.career" = "Recruiting";
+"composer.risk.investment" = "Investment-related";
+"composer.risk.gender_limited" = "Gender-restricted";
+
+"composer.group.section_title" = "Link a community";
+"composer.group.section_subtitle" = "Optional; the event appears on the community page";
+"composer.group.picker_label" = "Community";
+"composer.group.none" = "No community";
+
+"composer.checkin.section_title" = "On-site check-in";
+"composer.checkin.section_subtitle" = "Dynamic QR is safest; 6-digit codes and manual confirmation also supported";
+"composer.checkin.mode" = "Check-in method";
+"composer.checkin.dynamic_qr" = "Dynamic QR";
+"composer.checkin.six_digit" = "6-digit code";
+"composer.checkin.manual" = "Manual";
+
+"composer.interaction.section_title" = "Event interaction";
+"composer.interaction.section_subtitle" = "Comments open only to people connected to the event";
+"composer.interaction.comments" = "Comment permission";
+"composer.interaction.comments_disabled" = "Comments off";
+"composer.interaction.comments_participants" = "Participants only";
+"composer.interaction.comments_group" = "Community members only";
+"composer.interaction.poster" = "Generate a share poster after review";
+"composer.interaction.guest_list" = "Show guest list";
+
+"composer.preview.section_title" = "Preview before submitting";
+"composer.preview.create_subtitle" = "Completeness, risk terms, and point balance are checked again";
+"composer.preview.edit_subtitle" = "Review your changes before saving; key changes notify participants";
+"composer.preview.event" = "Event";
+"composer.preview.photos" = "Images";
+"composer.preview.photo_count" = "%1$d images";
+"composer.preview.photos_uploaded" = "Uploaded";
+"composer.preview.time" = "Time";
+"composer.preview.place" = "Place";
+"composer.preview.capacity" = "Capacity";
+"composer.preview.mode" = "Confirmation";
+"composer.preview.fee" = "Fee";
+"composer.preview.fee_free" = "Free";
+"composer.preview.fee_onsite" = "¥%1$@ paid on site";
+"composer.preview.points" = "Publish points";
+"composer.preview.points_value" = "100 (held on submission)";
+"composer.preview.missing" = "Not filled in";
+"composer.preview.submit_notice_title" = "What happens after submission";
+"composer.preview.submit_notice_body" = "Regular events are auto-reviewed with spot checks; events involving alcohol, late nights, minors, or investment go to human review. Rejection or withdrawal before review releases the held points.";
+"composer.preview.edit_notice_title" = "Rules for editing published events";
+"composer.preview.edit_notice_body" = "Edits are re-screened: safe changes apply immediately, while changes that would need human review are rejected and the approved content is kept. Time, place, and fee changes notify registered participants.";
+
+"composer.nav.back" = "Back";
+"composer.nav.save_continue" = "Save & continue";
+"composer.nav.submit" = "Confirm & submit";
+"composer.nav.save_edit_continue" = "Save changes & continue";
+"composer.nav.save_finish" = "Save & finish";
+
+"composer.error.review_required" = "This change would send the published event back to manual review, so it can't be saved directly; the original content is unchanged. Adjust it and try again.";
+"composer.error.risk_prohibited" = "The content matches rules that prohibit publishing, so it can't be saved. Revise it and try again.";
+
+"composer.validation.photos" = "Please choose at least 1 event image.";
+"composer.validation.title" = "The title needs 4–40 characters.";
+"composer.validation.description" = "The description needs 50–3000 characters.";
+"composer.validation.ends" = "The end time must be after the start time.";
+"composer.validation.deadline" = "The registration deadline can't be after the event starts.";
+"composer.validation.place" = "Please fill in the public meeting area and exact address.";
+"composer.validation.capacity" = "Capacity must be at least 2 people.";
+"composer.validation.fee_amount" = "Please enter a valid event fee.";
+"composer.validation.fee_fields" = "Paid events must include a collector name and refund policy.";
+"composer.validation.risk_note" = "Please describe the risks and matching safety measures.";

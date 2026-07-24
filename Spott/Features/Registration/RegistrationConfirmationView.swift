@@ -40,6 +40,13 @@ struct RegistrationConfirmationPresentation: Equatable, Sendable {
     }
 }
 
+struct RegistrationPaymentReportUI {
+    let isBusy: Bool
+    let reported: Bool
+    let errorMessage: String?
+    let report: () -> Void
+}
+
 struct RegistrationConfirmationView: View {
     private struct CalendarFeedback: Equatable {
         let message: String
@@ -49,6 +56,8 @@ struct RegistrationConfirmationView: View {
     let confirmation: RegistrationConfirmation
     let locale: Locale
     let refreshMessage: String?
+    let inviteURL: URL?
+    let paymentReport: RegistrationPaymentReportUI?
     let onViewItinerary: () -> Void
     let onDone: () -> Void
 
@@ -59,12 +68,16 @@ struct RegistrationConfirmationView: View {
         confirmation: RegistrationConfirmation,
         locale: Locale,
         refreshMessage: String? = nil,
+        inviteURL: URL? = nil,
+        paymentReport: RegistrationPaymentReportUI? = nil,
         onViewItinerary: @escaping () -> Void,
         onDone: @escaping () -> Void
     ) {
         self.confirmation = confirmation
         self.locale = locale
         self.refreshMessage = refreshMessage
+        self.inviteURL = inviteURL
+        self.paymentReport = paymentReport
         self.onViewItinerary = onViewItinerary
         self.onDone = onDone
     }
@@ -114,6 +127,8 @@ struct RegistrationConfirmationView: View {
                     Color(uiColor: .secondarySystemGroupedBackground),
                     in: RoundedRectangle(cornerRadius: 18, style: .continuous)
                 )
+
+                paymentReportSection
 
                 Label {
                     Text(presentation.nextStep)
@@ -220,19 +235,73 @@ struct RegistrationConfirmationView: View {
             }
             .frame(maxWidth: .infinity, minHeight: 44)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
         .buttonBorderShape(.capsule)
         .disabled(confirmation.event.startsAt == nil || isAddingToCalendar)
         .accessibilityIdentifier("registration.confirmation.add_calendar")
     }
 
     private var shareButton: some View {
-        ShareLink(item: shareURL, subject: Text(confirmation.event.title)) {
-            Label(text("journey.common.share"), systemImage: "square.and.arrow.up")
+        ShareLink(
+            item: inviteURL ?? shareURL,
+            subject: Text(confirmation.event.title)
+        ) {
+            Label(extras("regextras.invite.action"), systemImage: "person.2")
                 .frame(maxWidth: .infinity, minHeight: 44)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
         .buttonBorderShape(.capsule)
+        .accessibilityIdentifier("registration.confirmation.invite")
+    }
+
+    @ViewBuilder
+    private var paymentReportSection: some View {
+        if let paymentReport {
+            VStack(alignment: .leading, spacing: 10) {
+                if paymentReport.reported {
+                    GlassPill(
+                        text: extras("regextras.payment.reported_chip"),
+                        systemImage: "clock.badge.checkmark",
+                        tint: SpottColor.amber
+                    )
+                    .accessibilityIdentifier(
+                        "registration.confirmation.payment_chip"
+                    )
+                } else {
+                    Button(action: paymentReport.report) {
+                        HStack(spacing: 8) {
+                            if paymentReport.isBusy {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "yensign.circle")
+                            }
+                            Text(extras("regextras.payment.report_action"))
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
+                    .disabled(paymentReport.isBusy)
+                    .accessibilityIdentifier(
+                        "registration.confirmation.report_payment"
+                    )
+                    Text(extras("regextras.payment.report_hint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let message = paymentReport.errorMessage {
+                    Label(message, systemImage: "exclamationmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(SpottColor.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier(
+                            "registration.confirmation.payment_error"
+                        )
+                }
+            }
+        }
     }
 
     private var statusTint: Color {
@@ -298,5 +367,9 @@ struct RegistrationConfirmationView: View {
 
     private func text(_ key: String.LocalizationValue) -> String {
         CoreJourneyLocalization.text(key, locale: locale)
+    }
+
+    private func extras(_ key: String.LocalizationValue) -> String {
+        RegistrationExtrasLocalization.text(key, locale: locale)
     }
 }

@@ -15,6 +15,7 @@ protocol MyActivitiesServing: AuthoritativeTimeProviding, Sendable {
         idempotencyKey: UUID
     ) async throws -> Registration
     func cancelRegistration(registrationID: UUID) async throws -> RegistrationCancellation
+    func reportPayment(registrationID: UUID) async throws -> TicketPaymentReport
 }
 
 extension SpottAPIClient: MyActivitiesServing {}
@@ -29,6 +30,7 @@ enum MyActivityGroup: String, CaseIterable, Sendable {
 enum MyActivityNextAction: Equatable, Sendable {
     case acceptWaitlist(registrationID: UUID, expiresAt: Date)
     case cancelRegistration(UUID)
+    case reportPayment(UUID)
     case checkIn(registrationID: UUID, event: EventRouteReference)
     case correctAttendance(registrationID: UUID, event: EventRouteReference)
     case leaveFeedback(registrationID: UUID, event: EventRouteReference)
@@ -78,6 +80,7 @@ final class MyActivitiesStore {
     private(set) var actionInFlight: UUID?
     private(set) var nextTemporalRefreshDate: Date?
     private(set) var waitlistAcceptanceReview: WaitlistAcceptanceReview?
+    private(set) var reportedPaymentRegistrationIDs: Set<UUID> = []
 
     @ObservationIgnored private let service: any MyActivitiesServing
     @ObservationIgnored private let locale: Locale
@@ -155,6 +158,9 @@ final class MyActivitiesStore {
             registrationID = id
         case .cancelRegistration(let id):
             registrationID = id
+        case .reportPayment(let id):
+            guard !reportedPaymentRegistrationIDs.contains(id) else { return }
+            registrationID = id
         case .checkIn, .correctAttendance, .leaveFeedback, .viewStatus, .viewEvent, .none:
             return
         }
@@ -188,6 +194,13 @@ final class MyActivitiesStore {
                 return
             case .cancelRegistration(let id):
                 _ = try await service.cancelRegistration(registrationID: id)
+            case .reportPayment(let id):
+                _ = try await service.reportPayment(registrationID: id)
+                try Task.checkCancellation()
+                reportedPaymentRegistrationIDs.insert(id)
+                // The itinerary payload carries no payment state yet, so the
+                // reported chip is session-local; no refresh is needed.
+                return
             case .checkIn, .correctAttendance, .leaveFeedback, .viewStatus, .viewEvent, .none:
                 return
             }
@@ -253,6 +266,10 @@ final class MyActivitiesStore {
     func dismissWaitlistAcceptanceReview() {
         guard actionInFlight == nil else { return }
         waitlistAcceptanceReview = nil
+    }
+
+    func hasReportedPayment(_ registrationID: UUID) -> Bool {
+        reportedPaymentRegistrationIDs.contains(registrationID)
     }
 
     private var authoritativeNow: Date {
@@ -500,6 +517,16 @@ final class MyActivitiesStore {
 
     private func map(_ error: Error) -> UserFacingError {
         if let apiError = error as? APIError {
+            if apiError.code == "TICKET_PAYMENT_NOT_APPLICABLE" {
+                return .init(
+                    id: apiError.code,
+                    message: RegistrationExtrasLocalization.text(
+                        "regextras.payment.not_applicable",
+                        locale: locale
+                    ),
+                    retryable: false
+                )
+            }
             return .init(
                 id: apiError.code,
                 message: apiError.code == "WAITLIST_OFFER_EXPIRED"

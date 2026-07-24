@@ -778,6 +778,7 @@ private actor MyActivitiesServiceStub: MyActivitiesServing {
     private let failFirstAcceptanceAfterRecording: Bool
     private var didFailAcceptance = false
     private var cancelledIDs: [UUID] = []
+    private var reportedPaymentIDs: [UUID] = []
 
     init(
         pages: [RegistrationItineraryPage],
@@ -871,7 +872,17 @@ private actor MyActivitiesServiceStub: MyActivitiesServing {
         )
     }
 
+    func reportPayment(registrationID: UUID) async throws -> TicketPaymentReport {
+        reportedPaymentIDs.append(registrationID)
+        return TicketPaymentReport(
+            registrationId: registrationID,
+            paymentStatus: "self_reported",
+            selfReportedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+    }
+
     func itineraryRequestCount() -> Int { itineraryRequests }
+    func reportedPaymentRegistrationIDs() -> [UUID] { reportedPaymentIDs }
     func requestedCursors() -> [String?] { cursors }
     func requestedLimits() -> [Int] { limits }
     func acceptedRegistrationIDs() -> [UUID] { acceptedIDs }

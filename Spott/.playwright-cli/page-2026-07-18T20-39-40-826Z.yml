@@ -1,0 +1,122 @@
+- generic [active] [ref=f17e1]:
+  - link "Skip to main content" [ref=f17e2] [cursor=pointer]:
+    - /url: "#spott-main-content"
+  - banner [ref=f17e3]:
+    - generic [ref=f17e4]:
+      - link "Spott" [ref=f17e5] [cursor=pointer]:
+        - /url: /discover
+      - 'link "Region: Japan" [ref=f17e6] [cursor=pointer]':
+        - /url: /discover
+        - text: Japan
+    - navigation "Primary navigation" [ref=f17e7]:
+      - link "Discover" [ref=f17e8] [cursor=pointer]:
+        - /url: /discover
+      - link "Groups" [ref=f17e9] [cursor=pointer]:
+        - /url: /groups
+    - generic [ref=f17e12]:
+      - generic [ref=f17e13]: Language
+      - combobox "Language" [ref=f17e14] [cursor=pointer]:
+        - option "简体中文"
+        - option "日本語"
+        - option "English" [selected]
+  - status [ref=f17e15]:
+    - strong [ref=f17e16]: Public read-only preview
+    - generic [ref=f17e17]: Browse, filters, details, sharing and calendar are available. Use the encrypted internal-test entry for sign-in, registration and publishing.
+  - generic [ref=f17e18]:
+    - main [ref=f17e19]:
+      - generic [ref=f17e21]:
+        - link "← Back to discover" [ref=f17e22] [cursor=pointer]:
+          - /url: /discover
+        - generic [ref=f17e23]:
+          - img "东京余光 · 隅田川蓝调散步" [ref=f17e24]
+          - generic [ref=f17e33]:
+            - generic [ref=f17e34]:
+              - generic [ref=f17e35]: In person
+              - strong [ref=f17e37]: 13 left
+            - heading "东京余光 · 隅田川蓝调散步" [level=1] [ref=f17e38]
+            - paragraph [ref=f17e39]: 日落前在清澄白河集合，沿小名木川走向隅田川。途中会有三次短暂停留，大家交换取景想法，最后在河岸分享当天最喜欢的一张照片。
+            - generic [ref=f17e40]:
+              - generic [ref=f17e41]: 摄影
+              - generic [ref=f17e42]: 城市散步
+              - generic [ref=f17e43]: 初次友好
+        - generic [ref=f17e44]:
+          - region "What to know before joining" [ref=f17e45]:
+            - generic [ref=f17e46]:
+              - text: When
+              - strong [ref=f17e47]: Sat, July 25
+              - generic [ref=f17e48]: 12:00–14:30
+            - generic [ref=f17e49]:
+              - text: Where
+              - strong [ref=f17e50]: 清澄白河站附近
+              - generic [ref=f17e51]: Exact meeting point shown after confirmation
+            - generic [ref=f17e52]:
+              - text: Fee
+              - strong [ref=f17e53]: Free
+            - generic [ref=f17e54]:
+              - text: Availability
+              - strong [ref=f17e55]: 13 left
+              - generic [ref=f17e56]: 11 / 24 confirmed
+            - generic [ref=f17e57]:
+              - text: Format
+              - strong [ref=f17e58]: In person
+            - generic [ref=f17e59]:
+              - text: Event language
+              - strong [ref=f17e60]: Chinese · Japanese · English
+              - generic [ref=f17e61]: Language confirmed
+            - generic [ref=f17e62]:
+              - text: Host
+              - strong [ref=f17e63]: 东京余光散步会
+              - generic [ref=f17e64]: New to hosting on Spott
+          - complementary "Primary event action" [ref=f17e65]:
+            - generic [ref=f17e66]:
+              - button "Register in internal testing" [disabled] [ref=f17e67]
+              - generic [ref=f17e68]:
+                - button "Share" [ref=f17e69] [cursor=pointer]
+                - button "Add to calendar" [ref=f17e70] [cursor=pointer]
+      - generic [ref=f17e71]:
+        - generic [ref=f17e72]:
+          - generic [ref=f17e73]:
+            - heading "About this event" [level=2] [ref=f17e74]
+            - paragraph [ref=f17e75]: 日落前在清澄白河集合，沿小名木川走向隅田川。途中会有三次短暂停留，大家交换取景想法，最后在河岸分享当天最喜欢的一张照片。
+            - complementary [ref=f17e76]:
+              - strong [ref=f17e77]: Participation requirements
+              - paragraph [ref=f17e78]: 全程约 4 公里，请穿适合步行的鞋并自备饮水。手机或相机都可以；中文主持，也可用日语和英语交流。
+          - generic [ref=f17e79]:
+            - generic [ref=f17e80]:
+              - strong [ref=f17e81]: Safety & important changes
+              - paragraph [ref=f17e82]: If time, location, fee, or eligibility changes materially, you can reconfirm or leave.
+              - generic [ref=f17e83]: The exact meeting point is never stored in public listings or offline caches.
+            - link "Report privately" [ref=f17e84] [cursor=pointer]:
+              - /url: /reports/new?targetType=event&targetId=019f1000-0000-7000-8100-000000000001
+        - complementary [ref=f17e85]:
+          - generic [ref=f17e86]: 东
+          - paragraph [ref=f17e87]: Host record
+          - heading "东京余光散步会" [level=2] [ref=f17e88]
+          - generic [ref=f17e89]: "@spott_preview_studio"
+          - list [ref=f17e90]:
+            - listitem [ref=f17e91]: ✓New to hosting on Spott
+          - link "View host profile →" [ref=f17e92] [cursor=pointer]:
+            - /url: /u/spott_preview_studio
+    - contentinfo [ref=f17e93]:
+      - generic [ref=f17e94]:
+        - generic [ref=f17e95]: SPOTT
+        - paragraph [ref=f17e96]: Find events. Meet your people.
+      - generic [ref=f17e97]:
+        - link "Discover" [ref=f17e98] [cursor=pointer]:
+          - /url: /discover
+        - link "Groups" [ref=f17e99] [cursor=pointer]:
+          - /url: /groups
+        - link "Safety" [ref=f17e100] [cursor=pointer]:
+          - /url: /safety
+        - link "Privacy" [ref=f17e101] [cursor=pointer]:
+          - /url: /privacy
+        - link "Terms" [ref=f17e102] [cursor=pointer]:
+          - /url: /terms
+      - generic [ref=f17e103]:
+        - generic [ref=f17e104]:
+          - generic [ref=f17e105]: Language
+          - combobox "Language" [ref=f17e106] [cursor=pointer]:
+            - option "简体中文"
+            - option "日本語"
+            - option "English" [selected]
+        - paragraph [ref=f17e107]: Tokyo · 2026

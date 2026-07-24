@@ -1,178 +1,332 @@
 import SwiftUI
 
-struct DiscoveryFilterStrip: View {
+struct DiscoveryChipBar: View {
+    @Environment(\.locale) private var locale
     let store: DiscoveryStore
-
-    private struct Category: Identifiable {
-        let value: String?
-        let title: LocalizedStringKey
-        let symbol: String
-        var id: String { value ?? "all" }
-    }
-
-    private static let categories: [Category] = [
-        .init(value: nil, title: "全部", symbol: "square.grid.2x2"),
-        .init(value: "family", title: "亲子", symbol: "figure.and.child.holdinghands"),
-        .init(value: "outdoor", title: "户外", symbol: "mountain.2"),
-        .init(value: "sports", title: "运动", symbol: "figure.run"),
-        .init(value: "city-walk", title: "城市探索", symbol: "building.2"),
-        .init(value: "food", title: "美食", symbol: "fork.knife"),
-        .init(value: "art", title: "文化艺术", symbol: "paintpalette"),
-        .init(value: "learning", title: "技能学习", symbol: "book.closed"),
-        .init(value: "networking", title: "职业交流", symbol: "person.2")
-    ]
+    let nearMeActive: Bool
+    let activeFilterCount: Int
+    let onFilterTap: () -> Void
+    let onNearMeTap: () -> Void
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            if #available(iOS 26.0, *) {
-                GlassEffectContainer(spacing: 8) {
-                    FilterOptions(store: store, categories: Self.categories)
+        SpottGlassGroup(spacing: 8) {
+            HStack(spacing: 8) {
+                filterButton
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        nearMeChip
+                        ForEach(DiscoveryCategoryDescriptor.all) { category in
+                            GlassChip(
+                                title: DiscoveryHomeLocalization.text(
+                                    category.titleKey, locale: locale
+                                ),
+                                systemImage: category.symbol,
+                                isSelected: store.category == category.value,
+                                tint: DiscoveryCategoryDescriptor.accent(
+                                    forValue: category.value
+                                )
+                            ) {
+                                select(category.value)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 8)
                 }
-            } else {
-                FilterOptions(store: store, categories: Self.categories)
+                .contentMargins(.trailing, 16, for: .scrollContent)
+                .scrollClipDisabled()
             }
+            .padding(.leading, 16)
         }
-        .contentMargins(.horizontal, 16)
-        .contentMargins(.vertical, 8)
-        .frame(height: 60)
-        .scrollClipDisabled()
-        .background(Color(uiColor: .systemBackground))
+        // minHeight (not a fixed height) so Dynamic Type can grow the bar
+        // instead of clipping chip text at accessibility sizes.
+        .frame(minHeight: 52)
+        .sensoryFeedback(.selection, trigger: store.category)
         .accessibilityIdentifier("discovery.filters")
     }
 
-    private struct FilterOptions: View {
-        let store: DiscoveryStore
-        let categories: [Category]
-
-        var body: some View {
-            LazyHStack(spacing: 8) {
-                ForEach(categories) { category in
-                    CategoryButton(
-                        title: category.title,
-                        symbol: category.symbol,
-                        isSelected: store.category == category.value,
-                        action: { select(category.value) }
-                    )
-                }
-                DiscoveryMoreFiltersMenu(store: store)
+    private var filterButton: some View {
+        GlassIconButton(
+            systemImage: "line.3.horizontal.decrease",
+            accessibilityLabel: DiscoveryHomeLocalization.text(
+                "discovery.chip.filters", locale: locale
+            ),
+            tint: activeFilterCount > 0 ? SpottColor.twilight : nil,
+            action: onFilterTap
+        )
+        .overlay(alignment: .topTrailing) {
+            if activeFilterCount > 0 {
+                Text(verbatim: "\(activeFilterCount)")
+                    .font(.caption2.weight(.bold))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .frame(minWidth: 16, minHeight: 16)
+                    .background(SpottColor.twilight, in: Circle())
+                    .accessibilityHidden(true)
             }
         }
-
-        private func select(_ category: String?) {
-            guard store.category != category else { return }
-            store.category = category
-            store.filtersDidChange()
-        }
-    }
-}
-
-private struct CategoryButton: View {
-    let title: LocalizedStringKey
-    let symbol: String
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        if #available(iOS 26.0, *) {
-            if isSelected {
-                button.buttonStyle(.glassProminent)
-            } else {
-                button.buttonStyle(.glass)
-            }
-        } else if isSelected {
-            button
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
-        } else {
-            button
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-        }
-    }
-
-    private var button: some View {
-        Button(action: action) {
-            Label(title, systemImage: symbol)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .frame(minHeight: 44)
-        }
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-}
-
-private struct DiscoveryMoreFiltersMenu: View {
-    let store: DiscoveryStore
-
-    var body: some View {
-        if #available(iOS 26.0, *) {
-            menu.buttonStyle(.glass)
-        } else {
-            menu
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-        }
-    }
-
-    private var menu: some View {
-        Menu {
-            Button(action: toggleAvailability) {
-                filterLabel("有空位", selected: store.availableOnly == true)
-            }
-            Menu("形式") {
-                valueButton("全部", selected: store.format == nil) { store.format = nil }
-                valueButton("线下", selected: store.format == .inPerson) { store.format = .inPerson }
-                valueButton("线上", selected: store.format == .online) { store.format = .online }
-                valueButton("混合", selected: store.format == .hybrid) { store.format = .hybrid }
-            }
-            Menu("语言") {
-                valueButton("全部", selected: store.language == nil) { store.language = nil }
-                valueButton("简体中文", selected: store.language == .zhHans) { store.language = .zhHans }
-                valueButton("日本語", selected: store.language == .ja) { store.language = .ja }
-                valueButton("English", selected: store.language == .en) { store.language = .en }
-            }
-            Menu("费用") {
-                valueButton("全部", selected: store.price == nil) { store.price = nil }
-                valueButton("免费", selected: store.price == .free) { store.price = .free }
-                valueButton("付费", selected: store.price == .paid) { store.price = .paid }
-            }
-            if store.hasActiveFilters {
-                Divider()
-                Button("清除筛选", role: .destructive, action: store.clearFilters)
-            }
-        } label: {
-            Label(
-                "筛选",
-                systemImage: store.hasActiveFilters
-                    ? "line.3.horizontal.decrease.circle.fill"
-                    : "line.3.horizontal.decrease.circle"
-            )
-            .font(.subheadline.weight(.semibold))
-            .lineLimit(1)
-            .frame(minHeight: 44)
-        }
+        .accessibilityValue(
+            activeFilterCount > 0
+                ? Text(verbatim: DiscoveryHomeLocalization.format(
+                    "discovery.chip.filters.active", locale: locale, activeFilterCount
+                ))
+                : Text(verbatim: "")
+        )
         .accessibilityIdentifier("discovery.more-filters")
     }
 
-    private func valueButton(
-        _ title: LocalizedStringKey,
-        selected: Bool,
-        update: @escaping () -> Void
-    ) -> some View {
-        Button {
-            update()
-            store.filtersDidChange()
-        } label: {
-            filterLabel(title, selected: selected)
+    private var nearMeChip: some View {
+        GlassChip(
+            title: DiscoveryHomeLocalization.text("discovery.chip.nearby", locale: locale),
+            systemImage: "location.fill",
+            isSelected: nearMeActive,
+            action: onNearMeTap
+        )
+    }
+
+    private func select(_ category: String?) {
+        guard store.category != category else { return }
+        store.category = category
+        store.filtersDidChange()
+    }
+}
+
+extension EventDiscoverySort {
+    var titleKey: String.LocalizationValue {
+        switch self {
+        case .recommended: "discovery.sort.recommended"
+        case .time: "discovery.sort.time"
+        case .newest: "discovery.sort.newest"
+        case .almostFull: "discovery.sort.almost_full"
+        case .distance: "discovery.sort.distance"
         }
     }
+}
 
-    private func filterLabel(_ title: LocalizedStringKey, selected: Bool) -> some View {
-        Label(title, systemImage: selected ? "checkmark" : "circle")
+/// Sort menu pill shared by the S5 "全部活动" header, the RESULTS summary row
+/// and the Filter Sheet. Selection is forwarded to the owner so the distance
+/// sort can run the CoreLocation authorization flow before it activates.
+struct DiscoverySortMenu: View {
+    @Environment(\.locale) private var locale
+    let sort: EventDiscoverySort?
+    let select: (EventDiscoverySort?) -> Void
+
+    private var selection: Binding<EventDiscoverySort> {
+        Binding(
+            get: { sort ?? .recommended },
+            set: { select($0 == .recommended ? nil : $0) }
+        )
     }
 
-    private func toggleAvailability() {
-        store.availableOnly = store.availableOnly == true ? nil : true
-        store.filtersDidChange()
+    var body: some View {
+        Menu {
+            Picker(
+                DiscoveryHomeLocalization.text("discovery.sort.title", locale: locale),
+                selection: selection
+            ) {
+                ForEach(EventDiscoverySort.allCases, id: \.self) { option in
+                    Text(verbatim: DiscoveryHomeLocalization.text(
+                        option.titleKey, locale: locale
+                    ))
+                    .tag(option)
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.caption2.weight(.semibold))
+                Text(verbatim: DiscoveryHomeLocalization.text(
+                    (sort ?? .recommended).titleKey, locale: locale
+                ))
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.bold))
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
+            .foregroundStyle(sort == nil ? SpottColor.ink : Color.white)
+            .glassEffect(
+                sort == nil ? .regular.interactive() : .regular.tint(SpottColor.twilight).interactive(),
+                in: Capsule()
+            )
+            .contentShape(Capsule())
+            .frame(minHeight: 44)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(verbatim: DiscoveryHomeLocalization.text(
+            "discovery.sort.title", locale: locale
+        )))
+        .accessibilityValue(Text(verbatim: DiscoveryHomeLocalization.text(
+            (sort ?? .recommended).titleKey, locale: locale
+        )))
+        .accessibilityIdentifier("discovery.sort")
+    }
+}
+
+struct DiscoveryResultsSummaryRow: View {
+    @Environment(\.locale) private var locale
+    let store: DiscoveryStore
+    let nearMeActive: Bool
+    let onClearNearMe: () -> Void
+    let selectSort: (EventDiscoverySort?) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(verbatim: countText)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(SpottColor.muted)
+                    .monospacedDigit()
+                    .accessibilityIdentifier("discovery.result-count")
+                if store.hasActiveFilters {
+                    Button {
+                        onClearNearMe()
+                        store.clearFilters()
+                    } label: {
+                        Text(verbatim: DiscoveryHomeLocalization.text(
+                            "discovery.results.clear", locale: locale
+                        ))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(SpottColor.ink)
+                        .frame(minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer(minLength: 8)
+                DiscoverySortMenu(sort: store.sort, select: selectSort)
+            }
+            if !activeChips.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(activeChips) { chip in
+                            RemovableFilterChip(title: chip.title, remove: chip.remove)
+                        }
+                    }
+                }
+                .scrollClipDisabled()
+            }
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private var countText: String {
+        DiscoveryHomeLocalization.format(
+            store.hasMore ? "discovery.all.count_more" : "discovery.all.count",
+            locale: locale,
+            store.items.count
+        )
+    }
+
+    private struct ActiveChip: Identifiable {
+        let id: String
+        let title: String
+        let remove: () -> Void
+    }
+
+    private var activeChips: [ActiveChip] {
+        var chips: [ActiveChip] = []
+        let engine = DiscoveryDateFilterEngine()
+        if let dateLabel = engine.chipLabel(
+            startsAfter: store.startsAfter,
+            startsBefore: store.startsBefore,
+            locale: locale
+        ) {
+            chips.append(.init(id: "date", title: dateLabel) {
+                store.startsAfter = nil
+                store.startsBefore = nil
+                store.filtersDidChange()
+            })
+        }
+        if let price = store.price {
+            let key: String.LocalizationValue = price == .free
+                ? "discovery.filter.price.free"
+                : "discovery.filter.price.paid"
+            chips.append(.init(
+                id: "price",
+                title: DiscoveryHomeLocalization.text(key, locale: locale)
+            ) {
+                store.price = nil
+                store.filtersDidChange()
+            })
+        }
+        if let format = store.format {
+            let key: String.LocalizationValue = switch format {
+            case .inPerson: "discovery.filter.format.in_person"
+            case .online: "discovery.filter.format.online"
+            case .hybrid: "discovery.filter.format.hybrid"
+            }
+            chips.append(.init(
+                id: "format",
+                title: DiscoveryHomeLocalization.text(key, locale: locale)
+            ) {
+                store.format = nil
+                store.filtersDidChange()
+            })
+        }
+        if let language = store.language {
+            let key: String.LocalizationValue = switch language {
+            case .zhHans: "discovery.filter.language.zh"
+            case .ja: "discovery.filter.language.ja"
+            case .en: "discovery.filter.language.en"
+            }
+            chips.append(.init(
+                id: "language",
+                title: DiscoveryHomeLocalization.text(key, locale: locale)
+            ) {
+                store.language = nil
+                store.filtersDidChange()
+            })
+        }
+        if store.availableOnly == true {
+            chips.append(.init(
+                id: "available",
+                title: DiscoveryHomeLocalization.text("discovery.filter.available", locale: locale)
+            ) {
+                store.availableOnly = nil
+                store.filtersDidChange()
+            })
+        }
+        if store.bounds != nil {
+            let key: String.LocalizationValue = nearMeActive
+                ? "discovery.results.chip.nearby"
+                : "discovery.results.chip.map_area"
+            chips.append(.init(
+                id: "bounds",
+                title: DiscoveryHomeLocalization.text(key, locale: locale)
+            ) {
+                onClearNearMe()
+                store.bounds = nil
+                store.filtersDidChange()
+            })
+        }
+        return chips
+    }
+}
+
+private struct RemovableFilterChip: View {
+    @Environment(\.locale) private var locale
+    let title: String
+    let remove: () -> Void
+
+    var body: some View {
+        Button(action: remove) {
+            HStack(spacing: 5) {
+                Text(verbatim: title)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Image(systemName: "xmark")
+                    .font(.caption2.weight(.bold))
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .foregroundStyle(SpottColor.twilightDeep)
+            .background(SpottColor.twilightPale, in: Capsule())
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(verbatim: DiscoveryHomeLocalization.format(
+            "discovery.results.chip.remove", locale: locale, title
+        )))
     }
 }

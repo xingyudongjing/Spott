@@ -10,12 +10,12 @@ final class AppRouterTests: XCTestCase {
     func testEveryTabKeepsAnIndependentNavigationPath() {
         let router = AppRouter()
 
-        router.selectedTab = .activities
+        router.selectedTab = .groups
         router.show(event: firstEvent)
         router.selectedTab = .profile
         router.show(event: secondEvent)
 
-        XCTAssertEqual(router.path(for: .activities), [.event(.init(event: firstEvent))])
+        XCTAssertEqual(router.path(for: .groups), [.event(.init(event: firstEvent))])
         XCTAssertEqual(router.path(for: .profile), [.event(.init(event: secondEvent))])
         XCTAssertTrue(router.path(for: .discovery).isEmpty)
     }
@@ -23,40 +23,41 @@ final class AppRouterTests: XCTestCase {
     func testBindingWritesOnlyTheRequestedTabPath() {
         let router = AppRouter()
         let discovery = router.binding(for: .discovery)
-        let activities = router.binding(for: .activities)
+        let groups = router.binding(for: .groups)
 
         discovery.wrappedValue = [.notifications]
-        activities.wrappedValue = [.wallet]
+        groups.wrappedValue = [.wallet]
 
         XCTAssertEqual(router.path(for: .discovery), [.notifications])
-        XCTAssertEqual(router.path(for: .activities), [.wallet])
-        XCTAssertTrue(router.path(for: .groups).isEmpty)
+        XCTAssertEqual(router.path(for: .groups), [.wallet])
+        XCTAssertTrue(router.path(for: .profile).isEmpty)
     }
 
     func testExplicitTabPushSelectsThatTabWithoutDestroyingOtherHistory() {
         let router = AppRouter()
         router.setPath([.notifications], for: .discovery)
 
-        router.show(event: firstEvent, in: .activities)
+        router.show(event: firstEvent, in: .groups)
 
-        XCTAssertEqual(router.selectedTab, .activities)
-        XCTAssertEqual(router.path(for: .activities), [.event(.init(event: firstEvent))])
+        XCTAssertEqual(router.selectedTab, .groups)
+        XCTAssertEqual(router.path(for: .groups), [.event(.init(event: firstEvent))])
         XCTAssertEqual(router.path(for: .discovery), [.notifications])
     }
 
     func testTrustedEventDeepLinkSwitchesTabThenAppendsStableReference() async throws {
         let router = AppRouter()
-        router.setPath([.wallet], for: .activities)
+        router.setPath([.notifications], for: .discovery)
         let url = try XCTUnwrap(URL(string: "https://spott.jp/e/summer-night?tab=activities"))
 
         let opened = await router.open(url: url)
         XCTAssertTrue(opened)
 
-        XCTAssertEqual(router.selectedTab, .activities)
+        XCTAssertEqual(router.selectedTab, .profile)
         XCTAssertEqual(
-            router.path(for: .activities),
-            [.wallet, .event(.init(id: nil, slug: "summer-night"))]
+            router.path(for: .profile),
+            [.itinerary, .event(.init(id: nil, slug: "summer-night"))]
         )
+        XCTAssertEqual(router.path(for: .discovery), [.notifications])
     }
 
     func testCustomSchemeGroupAndShareLinksUseTheSameStrictParser() throws {
@@ -131,8 +132,8 @@ final class AppRouterTests: XCTestCase {
 
     func testDeferredRegistrationResumesExactlyOnceAfterMatchingGate() {
         let router = AppRouter()
-        router.selectedTab = .activities
-        router.setPath([.wallet, .event(.init(event: firstEvent))], for: .activities)
+        router.selectedTab = .groups
+        router.setPath([.wallet, .event(.init(event: firstEvent))], for: .groups)
         let draft = DeferredRegistrationDraft(
             partySize: 3,
             joinWaitlistIfFull: true,
@@ -150,7 +151,7 @@ final class AppRouterTests: XCTestCase {
         XCTAssertNil(router.resumeDeferredIntent(after: .phoneVerification))
         let resumed = router.resumeDeferredIntent(after: .login)
         XCTAssertEqual(resumed?.draft, draft)
-        XCTAssertEqual(resumed?.sourceTab, .activities)
+        XCTAssertEqual(resumed?.sourceTab, .groups)
         XCTAssertEqual(resumed?.sourcePath, [.wallet, .event(.init(event: firstEvent))])
         XCTAssertNil(router.resumeDeferredIntent(after: .login))
     }
@@ -181,8 +182,8 @@ final class AppRouterTests: XCTestCase {
 
     func testPendingRegistrationPresentationCanOnlyBeTakenFromItsSourceTab() {
         let router = AppRouter()
-        router.selectedTab = .activities
-        router.setPath([.event(.init(event: firstEvent))], for: .activities)
+        router.selectedTab = .groups
+        router.setPath([.event(.init(event: firstEvent))], for: .groups)
         router.setPath([.event(.init(event: firstEvent))], for: .profile)
         router.deferRegistration(for: firstEvent, action: .register, requiring: .login)
 
@@ -198,7 +199,7 @@ final class AppRouterTests: XCTestCase {
         XCTAssertNotNil(
             router.takeRegistrationPresentation(
                 for: .init(event: firstEvent),
-                in: .activities
+                in: .groups
             )
         )
         XCTAssertNil(router.pendingRegistrationPresentation)
@@ -209,14 +210,14 @@ final class AppRouterTests: XCTestCase {
         let registrationID = UUID(
             uuidString: "019b0000-0000-7000-8100-000000000088"
         )!
-        router.setPath([.event(.init(event: firstEvent))], for: .activities)
+        router.setPath([.event(.init(event: firstEvent))], for: .groups)
         router.setPath([.settings], for: .profile)
 
         router.showItinerary(registrationID: registrationID)
 
-        XCTAssertEqual(router.selectedTab, .activities)
-        XCTAssertTrue(router.path(for: .activities).isEmpty)
-        XCTAssertEqual(router.path(for: .profile), [.settings])
+        XCTAssertEqual(router.selectedTab, .profile)
+        XCTAssertEqual(router.path(for: .profile), [.itinerary])
+        XCTAssertEqual(router.path(for: .groups), [.event(.init(event: firstEvent))])
         XCTAssertEqual(router.pendingItineraryRegistrationID, registrationID)
         XCTAssertFalse(router.completeItineraryFocus(UUID()))
         XCTAssertEqual(router.pendingItineraryRegistrationID, registrationID)
@@ -229,6 +230,7 @@ final class AppRouterTests: XCTestCase {
         router.selectedTab = .profile
         router.setPath([.settings], for: .profile)
         router.deferRegistration(for: firstEvent, action: .register, requiring: .login)
+        router.presentComposer()
 
         router.resetSensitiveNavigation()
 
@@ -237,6 +239,7 @@ final class AppRouterTests: XCTestCase {
         XCTAssertNil(router.deferredRegistrationIntent)
         XCTAssertNil(router.pendingRegistrationPresentation)
         XCTAssertNil(router.pendingItineraryRegistrationID)
+        XCTAssertFalse(router.presentedComposer)
     }
 
     func testPushDeepLinkExtractsServerDecidedURL() throws {

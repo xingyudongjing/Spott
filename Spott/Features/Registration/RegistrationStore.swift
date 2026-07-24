@@ -11,9 +11,19 @@ protocol RegistrationServing: Sendable {
         joinWaitlist: Bool,
         answers: [UUID: RegistrationAnswer],
         attendeeNote: String?,
+        ticketTypeID: UUID?,
         idempotencyKey: UUID
     ) async throws -> Registration
     func event(identifier: String) async throws -> EventSummary
+    func ticketTypes(eventID: UUID) async throws -> EventTicketTypePage
+    func reportPayment(registrationID: UUID) async throws -> TicketPaymentReport
+    func createShareLink(
+        resourceType: String,
+        resourceID: UUID,
+        campaign: String?,
+        channel: String?,
+        purpose: String?
+    ) async throws -> ShareLinkReceipt
 }
 
 extension SpottAPIClient: RegistrationServing {}
@@ -30,10 +40,19 @@ enum RegistrationStep: Equatable, Sendable {
 }
 
 enum RegistrationField: Hashable, Sendable {
+    case ticketType
     case partySize
     case question(UUID)
     case acceptedTerms
     case attendeeNote
+}
+
+struct RegistrationPaymentShell: Equatable, Sendable {
+    let amountJPY: Int?
+    let collectorName: String?
+    let method: String?
+    let paymentDeadlineText: String?
+    let refundPolicy: String?
 }
 
 enum RegistrationConfirmationKind: Equatable, Sendable {
@@ -67,6 +86,14 @@ final class RegistrationStore {
     private(set) var idempotencyKey: UUID?
     private(set) var confirmation: RegistrationConfirmation?
     private(set) var confirmationRefreshError: String?
+    private(set) var ticketTypes: [EventTicketType] = []
+    private(set) var isLoadingTicketTypes = false
+    private(set) var ticketTypesUnavailable = false
+    private(set) var selectedTicketTypeID: UUID?
+    private(set) var isReportingPayment = false
+    private(set) var paymentReported = false
+    private(set) var paymentReportError: String?
+    private(set) var inviteURL: URL?
 
     @ObservationIgnored private let service: any RegistrationServing
     @ObservationIgnored private let itineraryRefresher: any RegistrationItineraryRefreshing
@@ -75,6 +102,7 @@ final class RegistrationStore {
     @ObservationIgnored private var lifecycleGeneration = 0
     @ObservationIgnored private var idempotencyAttempt: StableIdempotencyAttempt?
     @ObservationIgnored private var seedIdempotencyKey: UUID?
+    @ObservationIgnored private var isPreparingInvite = false
 
     init(
         event: EventSummary,
@@ -120,7 +148,161 @@ final class RegistrationStore {
     }
 
     var maximumPartySize: Int {
-        Self.maximumPartySize(for: event)
+        let base = Self.maximumPartySize(for: event)
+        guard let remaining = selectedTicketType?.remaining, remaining > 0 else {
+            return base
+        }
+        return max(1, min(base, remaining))
+    }
+
+    var activeTicketTypes: [EventTicketType] {
+        ticketTypes
+            .filter(\.active)
+            .sorted { ($0.sortOrder, $0.name) < ($1.sortOrder, $1.name) }
+    }
+
+    var requiresTicketSelection: Bool { !activeTicketTypes.isEmpty }
+
+    var selectedTicketType: EventTicketType? {
+        guard let selectedTicketTypeID else { return nil }
+        return activeTicketTypes.first { $0.id == selectedTicketTypeID }
+    }
+
+    var isPaidShell: Bool {
+        if requiresTicketSelection {
+            return selectedTicketType?.isFree == false
+        }
+        return event.fee?.isFree == false
+    }
+
+    var paymentShell: RegistrationPaymentShell? {
+        if requiresTicketSelection {
+            guard let ticket = selectedTicketType, !ticket.isFree else { return nil }
+            return .init(
+                amountJPY: ticket.amountJPY,
+                collectorName: ticket.collectorName,
+                method: ticket.method,
+                paymentDeadlineText: ticket.paymentDeadlineText,
+                refundPolicy: ticket.refundPolicy
+            )
+        }
+        guard let fee = event.fee, !fee.isFree else { return nil }
+        return .init(
+            amountJPY: fee.amountJPY,
+            collectorName: fee.collectorName,
+            method: fee.method,
+            paymentDeadlineText: fee.paymentDeadlineText,
+            refundPolicy: fee.refundPolicy
+        )
+    }
+
+    func loadTicketTypes() async {
+        guard !isLoadingTicketTypes else { return }
+        let generation = lifecycleGeneration
+        isLoadingTicketTypes = true
+        defer {
+            if generation == lifecycleGeneration {
+                isLoadingTicketTypes = false
+            }
+        }
+        do {
+            let page = try await service.ticketTypes(eventID: event.id)
+            try Task.checkCancellation()
+            guard generation == lifecycleGeneration else { return }
+            applyTicketTypes(page.items)
+            ticketTypesUnavailable = false
+        } catch is CancellationError {
+            return
+        } catch {
+            guard generation == lifecycleGeneration else { return }
+            ticketTypesUnavailable = true
+        }
+    }
+
+    func selectTicketType(_ id: UUID) {
+        guard let ticket = activeTicketTypes.first(where: { $0.id == id }),
+              !ticket.soldOut,
+              selectedTicketTypeID != id else { return }
+        selectedTicketTypeID = id
+        acceptedTerms = !isPaidShell
+        partySize = min(max(1, partySize), maximumPartySize)
+        validationErrors[.ticketType] = nil
+        if firstInvalidField == .ticketType {
+            firstInvalidField = nil
+        }
+    }
+
+    private func applyTicketTypes(_ items: [EventTicketType]) {
+        ticketTypes = items
+        if let selectedTicketTypeID,
+           !activeTicketTypes.contains(where: {
+               $0.id == selectedTicketTypeID && !$0.soldOut
+           }) {
+            self.selectedTicketTypeID = nil
+        }
+        partySize = min(max(1, partySize), maximumPartySize)
+    }
+
+    var canReportPayment: Bool {
+        confirmation?.kind == .confirmed && isPaidShell
+    }
+
+    func reportPayment() async {
+        guard let confirmation,
+              confirmation.kind == .confirmed,
+              isPaidShell,
+              !paymentReported,
+              !isReportingPayment else { return }
+        let generation = lifecycleGeneration
+        isReportingPayment = true
+        paymentReportError = nil
+        defer {
+            if generation == lifecycleGeneration {
+                isReportingPayment = false
+            }
+        }
+        do {
+            _ = try await service.reportPayment(
+                registrationID: confirmation.registration.id
+            )
+            try Task.checkCancellation()
+            guard generation == lifecycleGeneration else { return }
+            paymentReported = true
+        } catch is CancellationError {
+            return
+        } catch {
+            guard generation == lifecycleGeneration else { return }
+            if let apiError = error as? APIError,
+               apiError.code == "TICKET_PAYMENT_NOT_APPLICABLE" {
+                paymentReportError = extras("regextras.payment.not_applicable")
+            } else {
+                paymentReportError = extras("regextras.payment.report_failed")
+            }
+        }
+    }
+
+    func prepareInviteLink() async {
+        guard confirmation != nil,
+              inviteURL == nil,
+              !isPreparingInvite else { return }
+        let generation = lifecycleGeneration
+        isPreparingInvite = true
+        defer { isPreparingInvite = false }
+        do {
+            let receipt = try await service.createShareLink(
+                resourceType: "event",
+                resourceID: event.id,
+                campaign: nil,
+                channel: nil,
+                purpose: "invite"
+            )
+            try Task.checkCancellation()
+            guard generation == lifecycleGeneration else { return }
+            inviteURL = receipt.url
+        } catch {
+            // Honest fallback: the confirmation view shares the plain event URL.
+            return
+        }
     }
 
     var resumableDraft: DeferredRegistrationDraft? {
@@ -172,13 +354,15 @@ final class RegistrationStore {
               let quote,
               idempotencyKey != nil else { return }
         let normalizedAnswers = sanitizedAnswers
+        let ticketTypeID = requiresTicketSelection ? selectedTicketTypeID : nil
         let payload = RegistrationRequestPayload(
             partySize: partySize,
             quoteID: quote.id,
             expectedEventVersion: event.version,
             joinWaitlistIfFull: joinWaitlistIfFull,
             answers: normalizedAnswers,
-            attendeeNote: attendeeNote
+            attendeeNote: attendeeNote,
+            ticketTypeID: ticketTypeID
         )
         let idempotencyKey: UUID
         do {
@@ -204,6 +388,7 @@ final class RegistrationStore {
                 joinWaitlist: payload.joinWaitlistIfFull,
                 answers: normalizedAnswers,
                 attendeeNote: payload.attendeeNote,
+                ticketTypeID: ticketTypeID,
                 idempotencyKey: idempotencyKey
             )
             try Task.checkCancellation()
@@ -300,12 +485,26 @@ final class RegistrationStore {
         firstInvalidField = nil
         isPreparingQuote = false
         isSubmitting = false
+        isReportingPayment = false
+        paymentReported = false
+        paymentReportError = nil
+        inviteURL = nil
+        isPreparingInvite = false
         step = .form
     }
 
     @discardableResult
     func validate() -> Bool {
         var errors: [RegistrationField: String] = [:]
+        if requiresTicketSelection {
+            if let ticket = selectedTicketType {
+                if ticket.soldOut {
+                    errors[.ticketType] = extras("regextras.error.ticket_sold_out")
+                }
+            } else {
+                errors[.ticketType] = extras("regextras.ticket.required")
+            }
+        }
         if !(1...maximumPartySize).contains(partySize) {
             errors[.partySize] = localized("journey.validation.party_size")
         }
@@ -339,7 +538,7 @@ final class RegistrationStore {
         if attendeeNote.count > 1_000 {
             errors[.attendeeNote] = localized("journey.validation.note_too_long")
         }
-        if event.fee?.isFree == false, !acceptedTerms {
+        if isPaidShell, !acceptedTerms {
             errors[.acceptedTerms] = localized("journey.validation.fee_terms")
         }
         validationErrors = errors
@@ -348,7 +547,7 @@ final class RegistrationStore {
     }
 
     private var orderedFields: [RegistrationField] {
-        [.partySize]
+        [.ticketType, .partySize]
             + (event.registrationQuestions ?? []).map { .question($0.id) }
             + [.acceptedTerms, .attendeeNote]
     }
@@ -462,6 +661,8 @@ final class RegistrationStore {
                 field = .attendeeNote
             case "acceptedTerms":
                 field = .acceptedTerms
+            case "ticketTypeId":
+                field = .ticketType
             default:
                 let answerPrefix = "answers."
                 if fieldError.field.hasPrefix(answerPrefix),
@@ -473,6 +674,8 @@ final class RegistrationStore {
             }
             if let field {
                 switch field {
+                case .ticketType:
+                    errors[field] = extras("regextras.ticket.required")
                 case .partySize:
                     errors[field] = localized("journey.validation.party_size")
                 case .acceptedTerms:
@@ -525,6 +728,10 @@ final class RegistrationStore {
 
     private func localized(_ key: String.LocalizationValue) -> String {
         CoreJourneyLocalization.text(key, locale: locale)
+    }
+
+    private func extras(_ key: String.LocalizationValue) -> String {
+        RegistrationExtrasLocalization.text(key, locale: locale)
     }
 
     private enum RegistrationStoreError: Error {

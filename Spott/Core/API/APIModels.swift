@@ -22,6 +22,24 @@ enum EventPriceFilter: String, Codable, CaseIterable, Sendable {
     case paid
 }
 
+enum EventDiscoverySort: String, Codable, CaseIterable, Sendable {
+    case recommended
+    case time
+    case newest
+    case almostFull = "almost_full"
+    case distance
+}
+
+struct DiscoveryNearOrigin: Hashable, Sendable {
+    let latitude: Double
+    let longitude: Double
+
+    init(latitude: Double, longitude: Double) {
+        self.latitude = latitude
+        self.longitude = longitude
+    }
+}
+
 struct EventCoordinate: Codable, Hashable, Sendable {
     let latitude: Double
     let longitude: Double
@@ -46,6 +64,8 @@ struct EventDiscoveryQuery: Hashable, Sendable {
     var language: EventLocale?
     var price: EventPriceFilter?
     var bounds: MapBounds?
+    var near: DiscoveryNearOrigin?
+    var sort: EventDiscoverySort?
     var cursor: String?
     var limit: Int?
 
@@ -60,6 +80,8 @@ struct EventDiscoveryQuery: Hashable, Sendable {
         language: EventLocale? = nil,
         price: EventPriceFilter? = nil,
         bounds: MapBounds? = nil,
+        near: DiscoveryNearOrigin? = nil,
+        sort: EventDiscoverySort? = nil,
         cursor: String? = nil,
         limit: Int? = nil
     ) {
@@ -73,6 +95,8 @@ struct EventDiscoveryQuery: Hashable, Sendable {
         self.language = language
         self.price = price
         self.bounds = bounds
+        self.near = near
+        self.sort = sort
         self.cursor = cursor
         self.limit = limit
     }
@@ -97,6 +121,16 @@ struct EventDiscoveryQuery: Hashable, Sendable {
                 to: &items
             )
         }
+        if let near {
+            append(
+                "near",
+                [near.latitude, near.longitude]
+                    .map { String(format: "%.15g", locale: Locale(identifier: "en_US_POSIX"), $0) }
+                    .joined(separator: ","),
+                to: &items
+            )
+        }
+        append("sort", sort?.rawValue, to: &items)
         append("cursor", cursor, to: &items)
         append("limit", limit.map(String.init), to: &items)
         return items
@@ -186,6 +220,7 @@ struct EventSummary: Codable, Identifiable, Hashable, Sendable {
     var checkinMode: String? = nil
     var commentPermission: String? = nil
     var posterEnabled: Bool? = nil
+    var showGuestList: Bool? = nil
     var exactAddressVisibility: String? = nil
     var registrationQuestions: [RegistrationQuestion]? = nil
 
@@ -408,6 +443,7 @@ struct EventDraftInput: Codable, Sendable {
     var checkinMode: String = "dynamic_qr"
     var commentPermission: String = "participants"
     var posterEnabled: Bool = true
+    var showGuestList: Bool = true
     var exactAddressVisibility: String = "confirmed"
     var registrationQuestions: [Question] = []
 }
@@ -456,6 +492,7 @@ struct RegistrationRequestPayload: Encodable, Sendable {
     let joinWaitlistIfFull: Bool
     let answers: [String: RegistrationAnswer]
     let attendeeNote: String?
+    let ticketTypeId: String?
 
     init(
         partySize: Int,
@@ -463,7 +500,8 @@ struct RegistrationRequestPayload: Encodable, Sendable {
         expectedEventVersion: Int,
         joinWaitlistIfFull: Bool,
         answers: [UUID: RegistrationAnswer],
-        attendeeNote: String? = nil
+        attendeeNote: String? = nil,
+        ticketTypeID: UUID? = nil
     ) {
         self.partySize = partySize
         quoteId = quoteID.uuidString.lowercased()
@@ -473,6 +511,7 @@ struct RegistrationRequestPayload: Encodable, Sendable {
             ($0.key.uuidString.lowercased(), $0.value)
         })
         self.attendeeNote = attendeeNote?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        ticketTypeId = ticketTypeID?.uuidString.lowercased()
     }
 }
 
@@ -765,6 +804,36 @@ struct PrivateFeedback: Codable, Identifiable, Sendable {
 
 struct PrivateFeedbackPage: Codable, Sendable { let items: [PrivateFeedback] }
 
+/// A host → attendee broadcast the organizer has published, as shown in the
+/// organizer's own "sent" list. `recipientCount` is the number of confirmed
+/// attendees who received it in their inbox.
+struct EventAnnouncement: Codable, Identifiable, Sendable {
+    let id: UUID
+    let title: String
+    let body: String
+    let recipientCount: Int
+    let sentAt: Date
+}
+
+/// The organizer's announcement list plus the remaining daily quota so the
+/// composer can honestly show how many more can be sent today.
+struct EventAnnouncementPage: Codable, Sendable {
+    let items: [EventAnnouncement]
+    let dailyLimit: Int
+    let remainingToday: Int
+}
+
+/// The receipt returned right after publishing an announcement.
+struct EventAnnouncementReceipt: Codable, Sendable {
+    let announcementId: UUID
+    let title: String
+    let body: String
+    let recipientCount: Int
+    let sentAt: Date
+    let dailyLimit: Int
+    let remainingToday: Int
+}
+
 struct CheckInCorrection: Codable, Identifiable, Sendable {
     let id: UUID
     let registrationId: UUID
@@ -1028,6 +1097,23 @@ struct EventAttendee: Codable, Identifiable, Sendable {
     let answers: [String: JSONValue]
 }
 
+/// "Who's coming" social proof (Luma signature). Public, unauthenticated payload
+/// exposing only confirmed-attendee count plus up to eight public preview avatars.
+/// Never carries email or phone. When the organizer hides the guest list the server
+/// returns `previews` empty while still reporting `confirmedCount`.
+struct GoingPreview: Codable, Sendable {
+    struct Attendee: Codable, Identifiable, Sendable {
+        let userId: UUID
+        let displayName: String
+        let avatarURL: URL?
+        var id: UUID { userId }
+    }
+
+    let confirmedCount: Int
+    let previews: [Attendee]
+    let hasMore: Bool
+}
+
 struct CheckInCode: Codable, Sendable {
     let mode: String
     let token: String?
@@ -1270,7 +1356,12 @@ struct ShareLinkResolution: Codable, Sendable {
     let resourceType: String
     let resourceId: UUID
     let canonicalPath: String
+    let isInvite: Bool?
     let sessionId: UUID
+}
+
+struct ShareAcceptance: Codable, Sendable {
+    let accepted: Bool
 }
 
 struct UserProfile: Codable, Sendable {
@@ -1462,6 +1553,8 @@ struct Achievement: Codable, Identifiable, Sendable {
     let visibility: String
     let awardedAt: Date
     let revokedAt: Date?
+    let revocationReason: String?
+    let hidden: Bool?
     let evidence: JSONValue?
 }
 
@@ -1557,6 +1650,7 @@ extension EventSummary {
         result.checkinMode = nil
         result.commentPermission = nil
         result.posterEnabled = nil
+        result.showGuestList = nil
         result.exactAddressVisibility = nil
         result.registrationQuestions = nil
         return result
@@ -1666,6 +1760,334 @@ extension EventSummary {
     ]
 }
 
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
+struct PasswordRegistrationPayload: Encodable, Sendable {
+    let email: String
+    let password: String
+    let nickname: String?
+    let deviceId: String
+
+    init(email: String, password: String, nickname: String?, deviceId: UUID) {
+        self.email = email
+        self.password = password
+        self.nickname = nickname?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.deviceId = deviceId.uuidString.lowercased()
+    }
+}
+
+struct PasswordLoginPayload: Encodable, Sendable {
+    let email: String
+    let password: String
+    let deviceId: String
+
+    init(email: String, password: String, deviceId: UUID) {
+        self.email = email
+        self.password = password
+        self.deviceId = deviceId.uuidString.lowercased()
+    }
+}
+
+struct DiscoveryFeedRecommendation: Codable, Hashable, Sendable {
+    let score: Double
+    let boosted: Bool
+    let components: [String: Double]
+}
+
+struct DiscoveryFeedItem: Codable, Identifiable, Hashable, Sendable {
+    let event: EventSummary
+    let recommendation: DiscoveryFeedRecommendation?
+
+    var id: UUID { event.id }
+
+    private enum CodingKeys: String, CodingKey {
+        case recommendation
+    }
+
+    init(event: EventSummary, recommendation: DiscoveryFeedRecommendation? = nil) {
+        self.event = event
+        self.recommendation = recommendation
+    }
+
+    init(from decoder: Decoder) throws {
+        event = try EventSummary(from: decoder).discoverySafeSummary
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        recommendation = try container.decodeIfPresent(
+            DiscoveryFeedRecommendation.self,
+            forKey: .recommendation
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try event.encode(to: encoder)
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(recommendation, forKey: .recommendation)
+    }
+}
+
+struct DiscoveryFeedModule: Codable, Identifiable, Sendable {
+    let key: String
+    let title: String
+    let items: [DiscoveryFeedItem]
+
+    var id: String { key }
+}
+
+struct DiscoveryFeedBanner: Codable, Sendable {
+    let label: String
+    let kind: String
+    let promotional: Bool
+    let headline: String?
+    let imageURL: URL?
+    let event: EventSummary
+}
+
+struct DiscoveryFeedResponse: Codable, Sendable {
+    let banner: DiscoveryFeedBanner?
+    let modules: [DiscoveryFeedModule]
+    let moduleOrder: [String]
+    let scoringVersion: String
+    let serverTime: Date
+    let queryExplanationId: String
+}
+
+struct EventCommentAuthor: Codable, Hashable, Sendable {
+    let id: UUID
+    let name: String
+}
+
+struct EventComment: Codable, Identifiable, Hashable, Sendable {
+    let id: UUID
+    let eventId: UUID
+    let author: EventCommentAuthor
+    let body: String
+    let parentId: UUID?
+    let locale: String
+    let version: Int
+    let createdAt: Date
+    let updatedAt: Date
+}
+
+struct EventCommentPage: Codable, Sendable {
+    let eventId: UUID
+    let commentPermission: String?
+    let items: [EventComment]
+}
+
+struct GroupDiscussionPost: Codable, Identifiable, Sendable {
+    let id: UUID
+    let groupId: UUID
+    let author: GroupPersonSummary
+    let body: String
+    let parentId: UUID?
+    let locale: String
+    let likeCount: Int
+    let viewerLiked: Bool
+    let replyCount: Int
+    let version: Int
+    let createdAt: Date
+    let updatedAt: Date
+}
+
+struct GroupDiscussionPage: Codable, Sendable {
+    let items: [GroupDiscussionPost]
+    let hasMore: Bool
+    let nextCursor: String?
+}
+
+struct GroupDiscussionReplyPage: Codable, Sendable {
+    let items: [GroupDiscussionPost]
+}
+
+struct GroupDiscussionLikeMutation: Codable, Sendable {
+    let commentId: UUID
+    let liked: Bool
+}
+
+struct GroupDiscussionModerationResult: Codable, Identifiable, Sendable {
+    let id: UUID
+    let groupId: UUID
+    let author: GroupPersonSummary
+    let body: String
+    let parentId: UUID?
+    let locale: String
+    let version: Int
+    let createdAt: Date
+    let updatedAt: Date
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case groupId = "announcementId"
+        case author, body, parentId, locale, version, createdAt, updatedAt
+    }
+}
+
+struct EventTicketType: Codable, Identifiable, Sendable {
+    let id: UUID
+    let eventId: UUID
+    let name: String
+    let description: String?
+    let isFree: Bool
+    let amountJPY: Int?
+    let collectorName: String?
+    let method: String?
+    let paymentDeadlineText: String?
+    let refundPolicy: String?
+    let quota: Int?
+    let soldCount: Int
+    let remaining: Int?
+    let soldOut: Bool
+    let active: Bool
+    let sortOrder: Int
+    let availableActions: [String]
+    let updatedAt: Date
+}
+
+struct EventTicketTypePage: Codable, Sendable {
+    let items: [EventTicketType]
+}
+
+struct TicketTypeInput: Encodable, Sendable {
+    let name: String
+    var description: String? = nil
+    let isFree: Bool
+    var amountJPY: Int? = nil
+    var collectorName: String? = nil
+    var method: String? = nil
+    var paymentDeadlineText: String? = nil
+    var refundPolicy: String? = nil
+    var quota: Int? = nil
+}
+
+struct TicketTypeUpdateInput: Encodable, Sendable {
+    var name: String? = nil
+    var description: String? = nil
+    var isFree: Bool? = nil
+    var amountJPY: Int? = nil
+    var collectorName: String? = nil
+    var method: String? = nil
+    var paymentDeadlineText: String? = nil
+    var refundPolicy: String? = nil
+    var quota: Int? = nil
+    var active: Bool? = nil
+}
+
+struct TicketPaymentReport: Codable, Sendable {
+    let registrationId: UUID
+    let paymentStatus: String
+    let selfReportedAt: Date
+}
+
+struct TicketPaymentConfirmation: Codable, Sendable {
+    let registrationId: UUID
+    let paymentStatus: String
+    let confirmedAt: Date
+    let confirmedBy: UUID
+}
+
+enum EventPromotionTier: String, Codable, CaseIterable, Identifiable, Sendable {
+    case boost24h = "boost_24h"
+    case boost72h = "boost_72h"
+    case boost7d = "boost_7d"
+
+    var id: String { rawValue }
+    var quotePurpose: String { rawValue }
+}
+
+struct EventPromotion: Codable, Identifiable, Sendable {
+    let id: UUID
+    let eventId: UUID
+    let tier: String
+    let amount: Int
+    let durationHours: Int
+    let state: String
+    let startsAt: Date
+    let expiresAt: Date
+    let purchaseTransactionId: UUID
+}
+
+struct PointsCheckInReward: Codable, Hashable, Sendable {
+    let type: String
+    let points: Int
+}
+
+struct PointsCheckInResult: Codable, Sendable {
+    let alreadyCheckedIn: Bool
+    let streak: Int
+    let civilDay: String
+    let rewards: [PointsCheckInReward]
+    let wallet: WalletSnapshot
+}
+
+struct PointsRule: Codable, Identifiable, Sendable {
+    let key: String
+    let type: String
+    let launchValue: Double
+    let stableValue: Double
+    let effectiveValue: Double
+    let unit: String?
+    let conditions: [String: JSONValue]?
+    let description: String?
+
+    var id: String { key }
+}
+
+struct PointsRuleCatalog: Codable, Sendable {
+    let stage: String
+    let items: [PointsRule]
+}
+
+struct AchievementEvaluation: Codable, Sendable {
+    struct Revocation: Codable, Sendable {
+        let code: String
+        let reason: String
+    }
+
+    let awarded: [String]
+    let revoked: [Revocation]
+}
+
+struct AchievementVisibilityMutation: Codable, Sendable {
+    let hidden: Bool
+    let affected: Int
+}
+
+struct AchievementBadgeVisibilityMutation: Codable, Sendable {
+    let awardId: UUID
+    let hidden: Bool
+}
+
+struct AchievementShareCard: Codable, Sendable {
+    struct Summary: Codable, Sendable {
+        let code: String
+        let audience: String
+        let ruleVersion: Int
+        let awardedAt: Date
+    }
+
+    let brand: String
+    let nickname: String
+    let achievement: Summary
+    let dataRange: [String: JSONValue]
+    let link: URL
+}
+
+struct PublicAchievement: Codable, Identifiable, Sendable {
+    let code: String
+    let audience: String
+    let ruleVersion: Int
+    let awardedAt: Date
+    let hidden: Bool?
+
+    var id: String { code }
+}
+
+struct HostReputation: Codable, Sendable {
+    let completedEvents: Int
+    let attendanceBand: String
+    let continuousOrganizingMonths: Int
+}
+
+struct PublicAchievementPage: Codable, Sendable {
+    let userId: UUID
+    let items: [PublicAchievement]
+    let hostReputation: HostReputation?
 }

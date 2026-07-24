@@ -1,0 +1,70 @@
+- generic [ref=f14e1]:
+  - link "Skip to main content" [ref=f14e2] [cursor=pointer]:
+    - /url: "#spott-main-content"
+  - banner [ref=f14e3]:
+    - generic [ref=f14e4]:
+      - link "Spott" [ref=f14e5] [cursor=pointer]:
+        - /url: /discover
+      - 'link "Region: Japan" [ref=f14e6] [cursor=pointer]':
+        - /url: /discover
+        - text: Japan
+    - generic [ref=f14e9]:
+      - generic [ref=f14e10]: Language
+      - combobox "Language" [ref=f14e11] [cursor=pointer]:
+        - option "简体中文"
+        - option "日本語"
+        - option "English" [selected]
+  - status [ref=f14e12]:
+    - strong [ref=f14e13]: Public read-only preview
+    - generic [ref=f14e14]: Browse, filters, details, sharing and calendar are available. Use the encrypted internal-test entry for sign-in, registration and publishing.
+  - navigation "Mobile navigation" [ref=f14e15]:
+    - link "Discover" [ref=f14e16] [cursor=pointer]:
+      - /url: /discover
+    - link "Groups" [ref=f14e21] [cursor=pointer]:
+      - /url: /groups
+  - main [ref=f14e27]:
+    - generic [ref=f14e28]:
+      - generic [ref=f14e29]:
+        - heading "Find events you genuinely want to join" [level=1] [ref=f14e30]
+        - paragraph [ref=f14e31]: See the time, place, fee, and availability before you head out.
+      - generic [ref=f14e32]:
+        - generic [ref=f14e33]:
+          - generic [ref=f14e37]: Search events
+          - searchbox "Search events" [ref=f14e38]
+        - generic "List / Map" [ref=f14e39]:
+          - button "List" [pressed] [ref=f14e40] [cursor=pointer]
+          - button "Map" [ref=f14e46] [cursor=pointer]
+      - generic [ref=f14e50]:
+        - group "When" [ref=f14e51]:
+          - button "This weekend" [ref=f14e52] [cursor=pointer]
+          - button "Open spots" [ref=f14e56] [cursor=pointer]
+        - button "More filters" [active] [ref=f14e61] [cursor=pointer]
+      - generic [ref=f14e223]:
+        - heading "Events" [level=2] [ref=f14e224]
+        - generic [ref=f14e225]: 1 events · Japan time
+      - article "下北沢 Listening Table · 一枚を聴く夜" [ref=f14e227]:
+        - link "下北沢 Listening Table · 一枚を聴く夜 Mon, August 3121:00–00:00 下北沢 Listening Table · 一枚を聴く夜 好きなレコードを一枚持ち寄り、片面から一曲ずつ聴きます。音楽の知識は不要。選んだ理由や下北沢でよく行く店を、少人数のテーブルでゆっくり話しましょう。 下北沢 Free In person Japanese Language confirmed Event tags Shimokita Listening Table New to hosting on Spott 11 left" [ref=f14e228] [cursor=pointer]:
+          - /url: /e/shimokita-vinyl-preview
+          - img "下北沢 Listening Table · 一枚を聴く夜" [ref=f14e230]
+          - generic [ref=f14e238]:
+            - paragraph [ref=f14e239]: Mon, August 31 · 21:00–00:00
+            - heading "下北沢 Listening Table · 一枚を聴く夜" [level=3] [ref=f14e240]
+            - paragraph [ref=f14e241]: 好きなレコードを一枚持ち寄り、片面から一曲ずつ聴きます。音楽の知識は不要。選んだ理由や下北沢でよく行く店を、少人数のテーブルでゆっくり話しましょう。
+            - generic [ref=f14e242]:
+              - generic [ref=f14e243]: 下北沢
+              - generic [ref=f14e247]:
+                - text: Free
+                - generic [ref=f14e250]: ·
+                - text: In person
+              - generic [ref=f14e251]:
+                - text: Japanese
+                - generic [ref=f14e255]: ·
+                - text: Language confirmed
+            - list "Event tags" [ref=f14e256]:
+              - listitem [ref=f14e257]: "#Music"
+              - listitem [ref=f14e258]: "#音楽"
+              - listitem [ref=f14e259]: "#レコード"
+            - generic [ref=f14e260]:
+              - generic [ref=f14e261]: Shimokita Listening Table
+              - generic [ref=f14e264]: New to hosting on Spott
+          - strong [ref=f14e266]: 11 left

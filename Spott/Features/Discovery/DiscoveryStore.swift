@@ -54,6 +54,8 @@ final class DiscoveryStore {
     var language: EventLocale?
     var price: EventPriceFilter?
     var bounds: MapBounds?
+    var sort: EventDiscoverySort?
+    var nearOrigin: DiscoveryNearOrigin?
 
     @ObservationIgnored private let service: any DiscoveryServing
     @ObservationIgnored private let cache: any DiscoveryCaching
@@ -86,7 +88,7 @@ final class DiscoveryStore {
 
     var hasActiveFilters: Bool {
         category != nil || startsAfter != nil || startsBefore != nil || availableOnly != nil
-            || format != nil || language != nil || price != nil || bounds != nil
+            || format != nil || language != nil || price != nil || bounds != nil || sort != nil
     }
 
     func loadInitial() async -> DiscoveryReplacementReceipt? {
@@ -148,6 +150,8 @@ final class DiscoveryStore {
         language = nil
         price = nil
         bounds = nil
+        sort = nil
+        nearOrigin = nil
         scheduleReplacement()
     }
 
@@ -385,6 +389,8 @@ final class DiscoveryStore {
             && query.language == nil
             && query.price == nil
             && query.bounds == nil
+            && query.near == nil
+            && query.sort == nil
             && query.cursor == nil
     }
 
@@ -400,6 +406,8 @@ final class DiscoveryStore {
             language: language,
             price: price,
             bounds: bounds,
+            near: nearOrigin,
+            sort: sort,
             cursor: cursor,
             limit: 20
         )
@@ -459,7 +467,10 @@ final class DiscoveryStore {
     }
 }
 
-private extension EventSummary {
+extension EventSummary {
+    /// Public, viewer-neutral projection used for every on-disk discovery
+    /// cache (canonical flat list and the feed snapshot): strips favorited,
+    /// registration state, follow state, viewer actions, and exactAddress.
     var viewerNeutralDiscoverySummary: EventSummary {
         let safe = discoverySafeSummary
         return EventSummary(
@@ -505,8 +516,4 @@ private extension EventSummary {
             fee: safe.fee
         )
     }
-}
-
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

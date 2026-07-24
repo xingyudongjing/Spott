@@ -1,0 +1,115 @@
+- generic [ref=e1]:
+  - link "跳到主要内容" [ref=e2] [cursor=pointer]:
+    - /url: "#spott-main-content"
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - link "Spott" [ref=e5] [cursor=pointer]:
+        - /url: /discover
+      - link "地区：日本" [ref=e6] [cursor=pointer]:
+        - /url: /discover
+        - text: 日本
+    - navigation "主导航" [ref=e7]:
+      - link "发现" [ref=e8] [cursor=pointer]:
+        - /url: /discover
+      - link "群组" [ref=e9] [cursor=pointer]:
+        - /url: /groups
+    - generic [ref=e12]:
+      - generic [ref=e13]: 语言
+      - combobox "语言" [ref=e14] [cursor=pointer]:
+        - option "简体中文" [selected]
+        - option "日本語"
+        - option "English"
+  - status [ref=e15]:
+    - strong [ref=e16]: 公开只读预览
+    - generic [ref=e17]: 活动浏览、筛选、详情、分享与日历可用；登录、报名和发布请使用加密的内部测试入口。
+  - main [ref=e19]:
+    - generic [ref=e20]:
+      - generic [ref=e21]:
+        - heading "遇见真正想参加的活动" [level=1] [ref=e22]
+        - paragraph [ref=e23]: 看清时间、地点、费用与名额，再决定出发。
+      - generic [ref=e24]:
+        - generic [ref=e25]:
+          - generic [ref=e29]: 搜索活动
+          - searchbox "搜索活动" [ref=e256]
+        - generic [ref=e31]:
+          - generic [ref=e35]: 地区
+          - combobox "地区" [ref=e36] [cursor=pointer]:
+            - option "日本全部" [selected]
+            - option "东京"
+            - option "神奈川"
+            - option "埼玉"
+            - option "千叶"
+            - option "大阪"
+            - option "京都"
+        - generic "列表 / 地图" [ref=e37]:
+          - button "列表" [ref=e38] [cursor=pointer]
+          - button "地图" [active] [pressed] [ref=e44] [cursor=pointer]
+      - generic [ref=e48]:
+        - group "时间" [ref=e49]:
+          - button "本周末" [ref=e50] [cursor=pointer]
+          - button "只看有名额" [ref=e54] [cursor=pointer]
+          - combobox "活动形式" [ref=e62] [cursor=pointer]:
+            - option "全部形式" [selected]
+            - option "线下"
+            - option "线上"
+            - option "线上与线下"
+          - combobox "费用" [ref=e66] [cursor=pointer]:
+            - option "全部费用" [selected]
+            - option "免费"
+            - option "付费"
+          - combobox "语言" [ref=e71] [cursor=pointer]:
+            - option "全部语言" [selected]
+            - option "中文"
+            - option "日语"
+            - option "英语"
+        - button "更多筛选" [ref=e73] [cursor=pointer]
+        - button "清除筛选" [ref=e78] [cursor=pointer]
+      - generic [ref=e384]:
+        - generic [ref=e385]:
+          - heading "活动" [level=2] [ref=e386]
+          - generic [ref=e387]: 3 个活动 · 按日本时间
+        - generic [ref=e388]: 推荐顺序
+      - generic [ref=e389]:
+        - region "活动地图" [ref=e391]:
+          - generic:
+            - region "Map" [ref=e392]
+            - button "东京余光 · 隅田川蓝调散步 · 约在此区域" [ref=e393] [cursor=pointer]
+            - button "下北沢 Listening Table · 一枚を聴く夜 · 约在此区域" [ref=e394] [cursor=pointer]
+            - button "Kamakura Morning Reset · Coastline Walk & Coffee · 约在此区域" [ref=e395] [cursor=pointer]
+        - generic [ref=e396]:
+          - article "东京余光 · 隅田川蓝调散步" [ref=e397]:
+            - link [ref=e398] [cursor=pointer]:
+              - /url: /e/tokyo-afterglow-preview
+              - img "东京余光 · 隅田川蓝调散步" [ref=e400]
+              - generic [ref=e409]:
+                - paragraph [ref=e410]: 7月25日周六 · 12:00–14:30
+                - heading "东京余光 · 隅田川蓝调散步" [level=3] [ref=e411]
+                - generic [ref=e412]: 清澄白河站附近
+                - list "活动标签" [ref=e417]:
+                  - listitem [ref=e418]: "#城市探索"
+                  - listitem [ref=e419]: "#摄影"
+                  - listitem [ref=e420]: "#城市散步"
+          - article "下北沢 Listening Table · 一枚を聴く夜" [ref=e421]:
+            - link [ref=e422] [cursor=pointer]:
+              - /url: /e/shimokita-vinyl-preview
+              - img "下北沢 Listening Table · 一枚を聴く夜" [ref=e424]
+              - generic [ref=e432]:
+                - paragraph [ref=e433]: 8月31日周一 · 21:00–00:00
+                - heading "下北沢 Listening Table · 一枚を聴く夜" [level=3] [ref=e434]
+                - generic [ref=e435]: 下北沢
+                - list "活动标签" [ref=e440]:
+                  - listitem [ref=e441]: "#音乐"
+                  - listitem [ref=e442]: "#音楽"
+                  - listitem [ref=e443]: "#レコード"
+          - article "Kamakura Morning Reset · Coastline Walk & Coffee" [ref=e444]:
+            - link [ref=e445] [cursor=pointer]:
+              - /url: /e/kamakura-morning-preview
+              - img "Kamakura Morning Reset · Coastline Walk & Coffee" [ref=e447]
+              - generic [ref=e453]:
+                - paragraph [ref=e454]: 10月15日周四 · 12:00–15:00
+                - heading "Kamakura Morning Reset · Coastline Walk & Coffee" [level=3] [ref=e455]
+                - generic [ref=e456]: 鎌倉海岸
+                - list "活动标签" [ref=e461]:
+                  - listitem [ref=e462]: "#户外"
+                  - listitem [ref=e463]: "#coast"
+                  - listitem [ref=e464]: "#morning"

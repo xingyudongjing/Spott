@@ -79,17 +79,21 @@ final class DiscoveryStoreTests: XCTestCase {
     }
 
     func testDefaultSearchDebounceIsExactlyThreeHundredMilliseconds() async throws {
+        XCTAssertEqual(DiscoveryStore.defaultDebounce, .milliseconds(300))
+
         let service = TestDiscoveryService { _, _ in Self.page(items: []) }
         let store = DiscoveryStore(service: service, cache: TestDiscoveryCache())
 
         store.searchText = "night"
         store.searchDidChange()
-        try await Task.sleep(for: .milliseconds(240))
         var queries = await service.recordedQueries()
         XCTAssertEqual(queries.count, 0)
 
-        try await Task.sleep(for: .milliseconds(100))
-        queries = await service.recordedQueries()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while queries.isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+            queries = await service.recordedQueries()
+        }
         XCTAssertEqual(queries.map(\.q), ["night"])
     }
 
@@ -315,6 +319,41 @@ final class DiscoveryStoreTests: XCTestCase {
         XCTAssertEqual(store.items.map(\.title), ["Server truth"])
         let queries = await service.recordedQueries()
         XCTAssertEqual(queries.last?.category, "music")
+    }
+
+    func testSortAndNearOriginAreForwardedToTheServerAndClearedWithFilters() async throws {
+        let serverResult = try Self.event(id: 1, title: "Server order", category: "walk")
+        let service = TestDiscoveryService { _, _ in Self.page(items: [serverResult]) }
+        let store = DiscoveryStore(
+            service: service,
+            cache: TestDiscoveryCache(),
+            debounce: .milliseconds(1)
+        )
+        store.sort = .distance
+        store.nearOrigin = DiscoveryNearOrigin(latitude: 35.66, longitude: 139.7)
+        XCTAssertTrue(store.hasActiveFilters, "an active sort must switch BROWSE to RESULTS")
+
+        await store.loadInitial()
+
+        XCTAssertEqual(store.items.map(\.title), ["Server order"])
+        var queries = await service.recordedQueries()
+        XCTAssertEqual(queries.last?.sort, .distance)
+        XCTAssertEqual(
+            queries.last?.near,
+            DiscoveryNearOrigin(latitude: 35.66, longitude: 139.7)
+        )
+
+        store.clearFilters()
+        XCTAssertNil(store.sort)
+        XCTAssertNil(store.nearOrigin)
+        XCTAssertFalse(store.hasActiveFilters)
+        let deadline = Date().addingTimeInterval(5)
+        repeat {
+            try await Task.sleep(for: .milliseconds(20))
+            queries = await service.recordedQueries()
+        } while queries.count < 2 && Date() < deadline
+        XCTAssertNil(queries.last?.sort)
+        XCTAssertNil(queries.last?.near)
     }
 
     func testSettledMapBoundsAreForwardedToTheServer() async throws {

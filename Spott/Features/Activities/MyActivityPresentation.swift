@@ -117,7 +117,9 @@ struct MyActivityRowPresentation: Equatable, Sendable {
         case .viewEvent:
             actionTitle = Self.text("journey.itinerary.action.view", locale)
             actionSystemImage = "arrow.right.circle"
-        case .none:
+        case .reportPayment, .none:
+            // reportPayment is offered from the row overflow menu, never as
+            // the primary action.
             actionTitle = nil
             actionSystemImage = nil
         }

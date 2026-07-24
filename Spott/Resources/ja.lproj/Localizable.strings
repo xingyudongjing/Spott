@@ -868,3 +868,10 @@
 "更新失败" = "更新できませんでした";
 "重试" = "再試行";
 "更多活动暂时无法加载，请稍后重试。" = "追加のイベントを読み込めませんでした。しばらくしてから再試行してください。";
+
+/* DesignSystem components (PromotedBadge / CapacityRing / AvatarStack / StreakFlame) */
+"推广" = "PR";
+"推广内容" = "プロモーション掲載";
+"已确认 %lld 人，容量 %lld 人" = "確定%lld人、定員%lld人";
+"共 %lld 位参与者" = "参加者%lld人";
+"连续签到 %lld 天" = "連続チェックイン%lld日";

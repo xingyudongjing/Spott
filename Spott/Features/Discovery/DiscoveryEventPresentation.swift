@@ -1,78 +1,11 @@
 import Foundation
 
-private final class DiscoveryLocalizationBundleToken {}
-
-private final class DiscoveryLocalizationBundleCache: @unchecked Sendable {
-    private var bundles: [String: Bundle] = [:]
-    private let lock = NSLock()
-
-    func bundle(for key: String, resolve: () -> Bundle) -> Bundle {
-        lock.lock()
-        if let bundle = bundles[key] {
-            lock.unlock()
-            return bundle
-        }
-        lock.unlock()
-
-        let resolved = resolve()
-        lock.lock()
-        defer { lock.unlock() }
-        if let bundle = bundles[key] {
-            return bundle
-        }
-        bundles[key] = resolved
-        return resolved
-    }
-}
-
 enum DiscoveryLocalization {
     static func text(
         _ key: String.LocalizationValue,
         locale: Locale
     ) -> String {
-        String(
-            localized: key,
-            bundle: localizedBundle(for: locale),
-            locale: locale
-        )
-    }
-
-    private static let sourceBundle = Bundle(for: DiscoveryLocalizationBundleToken.self)
-    private static let bundleCache = DiscoveryLocalizationBundleCache()
-
-    private static func localizedBundle(for locale: Locale) -> Bundle {
-        let requestedIdentifier = locale.identifier
-            .split(separator: "@", maxSplits: 1)
-            .first
-            .map(String.init)?
-            .replacingOccurrences(of: "_", with: "-") ?? locale.identifier
-        let language = requestedIdentifier
-            .split(separator: "-", maxSplits: 1)
-            .first
-            .map(String.init)
-
-        return bundleCache.bundle(for: requestedIdentifier.lowercased()) {
-            var candidates = [requestedIdentifier]
-            if language?.lowercased() == "zh" {
-                candidates.append("zh-Hans")
-            }
-            if let language {
-                candidates.append(language)
-            }
-
-            for candidate in candidates {
-                guard let localization = sourceBundle.localizations.first(where: {
-                    $0.replacingOccurrences(of: "_", with: "-")
-                        .caseInsensitiveCompare(candidate) == .orderedSame
-                }),
-                    let path = sourceBundle.path(forResource: localization, ofType: "lproj"),
-                    let bundle = Bundle(path: path)
-                else { continue }
-                return bundle
-            }
-
-            return sourceBundle
-        }
+        SpottLocalization.text(key, locale: locale)
     }
 }
 

@@ -842,6 +842,252 @@ final class RegistrationStoreTests: XCTestCase {
     }
 #endif
 
+    func testTicketSelectionIsRequiredAndSelectedTicketFlowsIntoRegisterCall() async throws {
+        let paid = ticketType(id: 1, name: "普通票")
+        let event = try makeEvent()
+        let service = RegistrationServiceStub(
+            quotes: [quote(id: 1)],
+            registrationResults: [
+                .success(makeRegistration(eventID: event.id, status: "confirmed")),
+            ],
+            ticketTypes: [paid]
+        )
+        let store = RegistrationStore(
+            event: event,
+            service: service,
+            itineraryRefresher: ItineraryRefreshSpy(),
+            idempotencyKey: fixedKey,
+            now: now
+        )
+
+        await store.loadTicketTypes()
+        XCTAssertTrue(store.requiresTicketSelection)
+
+        await store.prepareReview()
+        XCTAssertEqual(store.step, .form)
+        XCTAssertNotNil(store.validationErrors[.ticketType])
+        XCTAssertEqual(store.firstInvalidField, .ticketType)
+
+        store.selectTicketType(paid.id)
+        XCTAssertFalse(store.acceptedTerms, "paid shell must be re-accepted per ticket")
+        store.acceptedTerms = true
+
+        await store.prepareReview()
+        XCTAssertEqual(store.step, .review)
+        await store.submit()
+
+        XCTAssertEqual(store.step, .confirmation)
+        let submittedTicketIDs = await service.submittedTicketTypeIDs()
+        XCTAssertEqual(submittedTicketIDs, [paid.id])
+    }
+
+    func testEventWithoutTicketTypesSkipsSelectionAndSubmitsNilTicketType() async throws {
+        let event = try makeEvent()
+        let service = RegistrationServiceStub(
+            quotes: [quote(id: 1)],
+            registrationResults: [
+                .success(makeRegistration(eventID: event.id, status: "confirmed")),
+            ]
+        )
+        let store = RegistrationStore(
+            event: event,
+            service: service,
+            itineraryRefresher: ItineraryRefreshSpy(),
+            idempotencyKey: fixedKey,
+            now: now
+        )
+
+        await store.loadTicketTypes()
+        XCTAssertFalse(store.requiresTicketSelection)
+        XCTAssertNil(store.validationErrors[.ticketType])
+
+        await store.prepareReview()
+        XCTAssertEqual(store.step, .review)
+        await store.submit()
+
+        XCTAssertEqual(store.step, .confirmation)
+        let submittedTicketIDs = await service.submittedTicketTypeIDs()
+        XCTAssertEqual(submittedTicketIDs, [UUID?.none])
+    }
+
+    func testSoldOutTicketCannotBeSelected() async throws {
+        let soldOut = ticketType(id: 1, name: "早鸟票", soldOut: true)
+        let open = ticketType(id: 2, name: "普通票", sortOrder: 1)
+        let service = RegistrationServiceStub(ticketTypes: [soldOut, open])
+        let store = RegistrationStore(
+            event: try makeEvent(),
+            service: service,
+            itineraryRefresher: ItineraryRefreshSpy(),
+            idempotencyKey: fixedKey,
+            now: now
+        )
+
+        await store.loadTicketTypes()
+        store.selectTicketType(soldOut.id)
+        XCTAssertNil(store.selectedTicketTypeID)
+
+        store.selectTicketType(open.id)
+        XCTAssertEqual(store.selectedTicketTypeID, open.id)
+    }
+
+    func testReportPaymentAfterPaidConfirmationSetsHonestChipState() async throws {
+        let paid = ticketType(id: 1, name: "普通票")
+        let event = try makeEvent()
+        let registration = makeRegistration(eventID: event.id, status: "confirmed")
+        let service = RegistrationServiceStub(
+            quotes: [quote(id: 1)],
+            registrationResults: [.success(registration)],
+            ticketTypes: [paid],
+            paymentReport: TicketPaymentReport(
+                registrationId: registration.id,
+                paymentStatus: "self_reported",
+                selfReportedAt: now
+            )
+        )
+        let store = RegistrationStore(
+            event: event,
+            service: service,
+            itineraryRefresher: ItineraryRefreshSpy(),
+            idempotencyKey: fixedKey,
+            now: now
+        )
+
+        await store.loadTicketTypes()
+        store.selectTicketType(paid.id)
+        store.acceptedTerms = true
+        await store.prepareReview()
+        await store.submit()
+        XCTAssertEqual(store.step, .confirmation)
+        XCTAssertTrue(store.canReportPayment)
+        XCTAssertFalse(store.paymentReported)
+
+        await store.reportPayment()
+
+        XCTAssertTrue(store.paymentReported)
+        XCTAssertNil(store.paymentReportError)
+        let reportedIDs = await service.reportedPaymentIDs()
+        XCTAssertEqual(reportedIDs, [registration.id])
+
+        // Idempotent from the UI: a second tap must not re-send.
+        await store.reportPayment()
+        let secondReportedIDs = await service.reportedPaymentIDs()
+        XCTAssertEqual(secondReportedIDs, [registration.id])
+    }
+
+    func testReportPaymentNotApplicableShowsHonestMessageWithoutChip() async throws {
+        let paid = ticketType(id: 1, name: "普通票")
+        let event = try makeEvent()
+        let service = RegistrationServiceStub(
+            quotes: [quote(id: 1)],
+            registrationResults: [
+                .success(makeRegistration(eventID: event.id, status: "confirmed")),
+            ],
+            ticketTypes: [paid],
+            paymentReportFailure: APIError(
+                status: 409,
+                code: "TICKET_PAYMENT_NOT_APPLICABLE",
+                message: "not applicable",
+                retryable: false
+            )
+        )
+        let store = RegistrationStore(
+            event: event,
+            service: service,
+            itineraryRefresher: ItineraryRefreshSpy(),
+            idempotencyKey: fixedKey,
+            locale: Locale(identifier: "zh-Hans"),
+            now: now
+        )
+
+        await store.loadTicketTypes()
+        store.selectTicketType(paid.id)
+        store.acceptedTerms = true
+        await store.prepareReview()
+        await store.submit()
+
+        await store.reportPayment()
+
+        XCTAssertFalse(store.paymentReported)
+        XCTAssertEqual(
+            store.paymentReportError,
+            RegistrationExtrasLocalization.text(
+                "regextras.payment.not_applicable",
+                locale: Locale(identifier: "zh-Hans")
+            )
+        )
+    }
+
+    func testPrepareInviteLinkRequestsInvitePurposeShareLink() async throws {
+        let event = try makeEvent()
+        let inviteURL = URL(string: "https://spott.jp/s/abc123")!
+        let service = RegistrationServiceStub(
+            quotes: [quote(id: 1)],
+            registrationResults: [
+                .success(makeRegistration(eventID: event.id, status: "confirmed")),
+            ],
+            shareReceipt: ShareLinkReceipt(
+                id: UUID(),
+                code: "abc123",
+                url: inviteURL,
+                createdAt: now
+            )
+        )
+        let store = RegistrationStore(
+            event: event,
+            service: service,
+            itineraryRefresher: ItineraryRefreshSpy(),
+            idempotencyKey: fixedKey,
+            now: now
+        )
+
+        await store.prepareInviteLink()
+        XCTAssertNil(store.inviteURL, "no invite link before a confirmation exists")
+
+        await store.prepareReview()
+        await store.submit()
+        XCTAssertEqual(store.step, .confirmation)
+
+        await store.prepareInviteLink()
+
+        XCTAssertEqual(store.inviteURL, inviteURL)
+        let requests = await service.shareLinkRequests()
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.resourceType, "event")
+        XCTAssertEqual(requests.first?.purpose, "invite")
+    }
+
+    private func ticketType(
+        id: Int,
+        name: String,
+        isFree: Bool = false,
+        quota: Int? = nil,
+        remaining: Int? = nil,
+        soldOut: Bool = false,
+        active: Bool = true,
+        sortOrder: Int = 0
+    ) -> EventTicketType {
+        EventTicketType(
+            id: UUID(uuidString: String(format: "019b0000-0000-7000-8900-%012d", id))!,
+            eventId: UUID(uuidString: "019b0000-0000-7000-8a00-000000000001")!,
+            name: name,
+            description: nil,
+            isFree: isFree,
+            amountJPY: isFree ? nil : 1_500,
+            collectorName: "主办方",
+            method: "现金",
+            paymentDeadlineText: nil,
+            refundPolicy: "活动开始前 24 小时可退",
+            quota: quota,
+            soldCount: 0,
+            remaining: remaining,
+            soldOut: soldOut,
+            active: active,
+            sortOrder: sortOrder,
+            availableActions: [],
+            updatedAt: now
+        )
+    }
+
     private func makeEvent(
         _ overrides: [String: Any] = [:],
         registrationQuestions: [[String: Any]]? = nil
@@ -935,6 +1181,7 @@ private actor RegistrationServiceStub: RegistrationServing {
     private var registrationResults: [RegistrationResult]
     private let refreshedEvent: EventSummary?
     private let registrationDelay: Duration?
+    private let stubTicketTypes: [EventTicketType]
     private var quoteRequests = 0
     private var registrationRequests = 0
     private var detailRequests = 0
@@ -942,17 +1189,31 @@ private actor RegistrationServiceStub: RegistrationServing {
     private var payloads: [RegistrationRequestPayloadSnapshot] = []
     private var answerPayloads: [[UUID: RegistrationAnswer]] = []
     private var eventVersions: [Int] = []
+    private var ticketTypeIDs: [UUID?] = []
+    private let stubPaymentReport: TicketPaymentReport?
+    private let stubPaymentReportFailure: APIError?
+    private let stubShareReceipt: ShareLinkReceipt?
+    private var paymentReportIDs: [UUID] = []
+    private var shareRequests: [(resourceType: String, purpose: String?)] = []
 
     init(
         quotes: [Quote] = [],
         registrationResults: [RegistrationResult] = [],
         refreshedEvent: EventSummary? = nil,
-        registrationDelay: Duration? = nil
+        registrationDelay: Duration? = nil,
+        ticketTypes: [EventTicketType] = [],
+        paymentReport: TicketPaymentReport? = nil,
+        paymentReportFailure: APIError? = nil,
+        shareReceipt: ShareLinkReceipt? = nil
     ) {
         self.quotes = quotes
         self.registrationResults = registrationResults
         self.refreshedEvent = refreshedEvent
         self.registrationDelay = registrationDelay
+        stubTicketTypes = ticketTypes
+        stubPaymentReport = paymentReport
+        stubPaymentReportFailure = paymentReportFailure
+        stubShareReceipt = shareReceipt
     }
 
     func quote(purpose: String, resourceID: UUID?) async throws -> Quote {
@@ -971,10 +1232,12 @@ private actor RegistrationServiceStub: RegistrationServing {
         joinWaitlist: Bool,
         answers: [UUID: RegistrationAnswer],
         attendeeNote: String?,
+        ticketTypeID: UUID?,
         idempotencyKey: UUID
     ) async throws -> Registration {
         registrationRequests += 1
         keys.append(idempotencyKey)
+        ticketTypeIDs.append(ticketTypeID)
         payloads.append(RegistrationRequestPayloadSnapshot(
             partySize: partySize,
             quoteID: quoteID,
@@ -1013,7 +1276,38 @@ private actor RegistrationServiceStub: RegistrationServing {
         return refreshedEvent
     }
 
+    func ticketTypes(eventID: UUID) async throws -> EventTicketTypePage {
+        EventTicketTypePage(items: stubTicketTypes)
+    }
+
+    func reportPayment(registrationID: UUID) async throws -> TicketPaymentReport {
+        paymentReportIDs.append(registrationID)
+        if let stubPaymentReportFailure {
+            throw stubPaymentReportFailure
+        }
+        guard let stubPaymentReport else { throw StubError.missingResponse }
+        return stubPaymentReport
+    }
+
+    func createShareLink(
+        resourceType: String,
+        resourceID: UUID,
+        campaign: String?,
+        channel: String?,
+        purpose: String?
+    ) async throws -> ShareLinkReceipt {
+        shareRequests.append((resourceType: resourceType, purpose: purpose))
+        guard let stubShareReceipt else { throw StubError.missingResponse }
+        return stubShareReceipt
+    }
+
+    func reportedPaymentIDs() -> [UUID] { paymentReportIDs }
+    func shareLinkRequests() -> [(resourceType: String, purpose: String?)] {
+        shareRequests
+    }
+
     func quoteRequestCount() -> Int { quoteRequests }
+    func submittedTicketTypeIDs() -> [UUID?] { ticketTypeIDs }
     func registrationRequestCount() -> Int { registrationRequests }
     func detailRequestCount() -> Int { detailRequests }
     func submittedKeys() -> [UUID] { keys }

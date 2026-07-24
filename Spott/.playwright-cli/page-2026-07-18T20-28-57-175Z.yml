@@ -1,0 +1,55 @@
+- generic [active] [ref=f1e1]:
+  - link "跳到主要内容" [ref=f1e2] [cursor=pointer]:
+    - /url: "#spott-main-content"
+  - banner [ref=f1e3]:
+    - generic [ref=f1e4]:
+      - link "Spott" [ref=f1e5] [cursor=pointer]:
+        - /url: /discover
+      - link "地区：日本" [ref=f1e6] [cursor=pointer]:
+        - /url: /discover
+        - text: 日本
+    - navigation "主导航" [ref=f1e7]:
+      - link "发现" [ref=f1e8] [cursor=pointer]:
+        - /url: /discover
+      - link "群组" [ref=f1e9] [cursor=pointer]:
+        - /url: /groups
+    - generic [ref=f1e12]:
+      - generic [ref=f1e13]: 语言
+      - combobox "语言" [ref=f1e14] [cursor=pointer]:
+        - option "简体中文" [selected]
+        - option "日本語"
+        - option "English"
+  - status [ref=f1e15]:
+    - strong [ref=f1e16]: 公开只读预览
+    - generic [ref=f1e17]: 活动浏览、筛选、详情、分享与日历可用；登录、报名和发布请使用加密的内部测试入口。
+  - main [ref=f1e19]:
+    - generic [ref=f1e20]:
+      - generic [ref=f1e22]:
+        - text: 东京 · 兴趣社区
+        - heading "兴趣群组" [level=1] [ref=f1e23]
+        - paragraph [ref=f1e24]: 在 Web 和 iOS 加入同一个群组，接收公告、讨论后续活动。
+      - status [ref=f1e25]:
+        - generic [ref=f1e26]: 正在加载…
+    - generic [ref=f1e45]:
+      - generic [ref=f1e46]:
+        - generic [ref=f1e47]: SPOTT
+        - paragraph [ref=f1e48]: 发现活动，遇见同好。
+      - generic [ref=f1e49]:
+        - link "发现" [ref=f1e50] [cursor=pointer]:
+          - /url: /discover
+        - link "群组" [ref=f1e51] [cursor=pointer]:
+          - /url: /groups
+        - link "安全中心" [ref=f1e52] [cursor=pointer]:
+          - /url: /safety
+        - link "隐私" [ref=f1e53] [cursor=pointer]:
+          - /url: /privacy
+        - link "条款" [ref=f1e54] [cursor=pointer]:
+          - /url: /terms
+      - generic [ref=f1e55]:
+        - generic [ref=f1e56]:
+          - generic [ref=f1e57]: 语言
+          - combobox "语言" [ref=f1e58] [cursor=pointer]:
+            - option "简体中文" [selected]
+            - option "日本語"
+            - option "English"
+        - paragraph [ref=f1e59]: Tokyo · 2026

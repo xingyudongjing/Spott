@@ -868,3 +868,10 @@
 "更新失败" = "更新失败";
 "重试" = "重试";
 "更多活动暂时无法加载，请稍后重试。" = "更多活动暂时无法加载，请稍后重试。";
+
+/* DesignSystem components (PromotedBadge / CapacityRing / AvatarStack / StreakFlame) */
+"推广" = "推广";
+"推广内容" = "推广内容";
+"已确认 %lld 人，容量 %lld 人" = "已确认 %lld 人，容量 %lld 人";
+"共 %lld 位参与者" = "共 %lld 位参与者";
+"连续签到 %lld 天" = "连续签到 %lld 天";

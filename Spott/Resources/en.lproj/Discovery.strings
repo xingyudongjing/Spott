@@ -1,0 +1,141 @@
+"discovery.title" = "Discover";
+"discovery.search.prompt" = "Search events, places, or interests";
+"discovery.search.recent" = "Recent searches";
+"discovery.search.recent.delete" = "Delete recent search: %@";
+"discovery.search.categories" = "Browse by category";
+
+"discovery.region.accessibility" = "Region";
+"discovery.region.tokyo" = "Tokyo";
+"discovery.region.kanagawa" = "Kanagawa";
+"discovery.region.osaka" = "Osaka";
+"discovery.region.kyoto" = "Kyoto";
+"discovery.region.fallback" = "Japan";
+
+"discovery.toolbar.notifications" = "Notifications";
+"discovery.toolbar.show_map" = "Show map";
+"discovery.toolbar.show_list" = "Show list";
+
+"discovery.chip.filters" = "Filters";
+"discovery.chip.filters.active" = "%lld filters active";
+"discovery.chip.nearby" = "Nearby";
+
+"discovery.category.all" = "All";
+"discovery.category.family" = "Family";
+"discovery.category.outdoor" = "Outdoors";
+"discovery.category.sports" = "Sports";
+"discovery.category.city_walk" = "City walks";
+"discovery.category.food" = "Food";
+"discovery.category.art" = "Arts & culture";
+"discovery.category.learning" = "Learning";
+"discovery.category.networking" = "Networking";
+"discovery.category.music" = "Music";
+"discovery.category.games" = "Games";
+
+"discovery.module.today.eyebrow" = "TODAY";
+"discovery.module.today.title" = "Happening today";
+"discovery.module.weekend.eyebrow" = "WEEKEND";
+"discovery.module.weekend.title" = "This weekend";
+"discovery.module.nearby.eyebrow" = "NEARBY";
+"discovery.module.nearby.title" = "Popular nearby";
+"discovery.module.interest.eyebrow" = "FOR YOU";
+"discovery.module.interest.title" = "Picked for you";
+"discovery.module.new.eyebrow" = "NEW";
+"discovery.module.new.title" = "New events";
+"discovery.module.verified.title" = "Verified hosts";
+"discovery.module.followed.title" = "From people you follow";
+"discovery.module.see_all" = "See all";
+"discovery.module.nearby.view_map" = "View on map";
+"discovery.module.nearby.enable.title" = "Turn on location to see what's happening nearby";
+"discovery.module.nearby.enable.action" = "Turn on";
+
+"discovery.card.today" = "Today %@";
+"discovery.card.tomorrow" = "Tomorrow %@";
+"discovery.card.free" = "Free";
+"discovery.card.fee_onsite" = "¥%@ pay on site";
+"discovery.card.fee_pending" = "Fee to be announced";
+"discovery.card.time_pending" = "Time to be announced";
+"discovery.card.capacity" = "%lld/%lld";
+"discovery.card.remaining_low" = "Only %lld spots left";
+"discovery.card.waitlist" = "Waitlist";
+"discovery.card.full" = "Full";
+"discovery.card.hosted_count" = "%lld events hosted";
+"discovery.card.attendance_90" = "90%+ attendance";
+"discovery.card.attendance_70" = "70%+ attendance";
+"discovery.card.verified" = "Verified host";
+"discovery.card.favorite" = "Save to favorites";
+"discovery.card.unfavorite" = "Remove from favorites";
+"discovery.card.promoted" = "Promoted";
+"discovery.card.open_detail" = "Open event details";
+
+"discovery.all.title" = "All events";
+"discovery.all.count" = "%lld events";
+"discovery.all.count_more" = "%lld+ events";
+
+"discovery.sort.title" = "Sort";
+"discovery.sort.recommended" = "Recommended";
+"discovery.sort.time" = "Soonest";
+"discovery.sort.newest" = "Newest";
+"discovery.sort.almost_full" = "Almost full";
+"discovery.sort.distance" = "Nearest";
+
+"discovery.results.clear" = "Clear";
+"discovery.results.chip.nearby" = "Nearby";
+"discovery.results.chip.map_area" = "Map area";
+"discovery.results.chip.remove" = "Remove filter: %@";
+
+"discovery.filter.title" = "Filters";
+"discovery.filter.done" = "Done";
+"discovery.filter.any" = "Any";
+"discovery.filter.date" = "Date";
+"discovery.filter.date.any" = "Any";
+"discovery.filter.date.today" = "Today";
+"discovery.filter.date.tomorrow" = "Tomorrow";
+"discovery.filter.date.weekend" = "This weekend";
+"discovery.filter.date.custom" = "Custom";
+"discovery.filter.date.starts" = "Starts";
+"discovery.filter.date.ends" = "Ends";
+"discovery.filter.format" = "Format";
+"discovery.filter.format.in_person" = "In person";
+"discovery.filter.format.online" = "Online";
+"discovery.filter.format.hybrid" = "Hybrid";
+"discovery.filter.language" = "Language";
+"discovery.filter.language.zh" = "Simplified Chinese";
+"discovery.filter.language.ja" = "Japanese";
+"discovery.filter.language.en" = "English";
+"discovery.filter.price" = "Price";
+"discovery.filter.price.free" = "Free";
+"discovery.filter.price.paid" = "Paid";
+"discovery.filter.available" = "Open spots only";
+"discovery.filter.clear_all" = "Clear all";
+
+"discovery.location.denied.title" = "Location access needed";
+"discovery.location.denied.message" = "Allow Spott to use your location in Settings to see events nearby.";
+"discovery.location.denied.settings" = "Open Settings";
+"discovery.location.denied.cancel" = "Cancel";
+
+"discovery.state.loading" = "Loading events";
+"discovery.state.offline" = "Showing saved events";
+"discovery.state.update_failed" = "Update failed";
+"discovery.state.retry" = "Retry";
+"discovery.state.empty.title" = "No events in this area yet";
+"discovery.state.empty.message" = "Try another area, loosen your filters, or host the first one.";
+"discovery.state.empty.reload" = "Reload";
+"discovery.state.results_empty.title" = "No events match these filters";
+"discovery.state.results_empty.clear" = "Clear filters";
+"discovery.state.results_empty.weekend" = "See this weekend";
+"discovery.state.error.title" = "Unable to load";
+"discovery.state.error.retry" = "Reconnect";
+"discovery.state.error.code" = "Error code: %@";
+"discovery.pagination.loading" = "Loading more events…";
+
+"discovery.map.a11y.label" = "Event map";
+"discovery.map.a11y.hint" = "Map pins show only the approximate locations shared by hosts. The same results are available as a list.";
+"discovery.map.results" = "%lld map results";
+"discovery.map.results_title" = "Map results";
+"discovery.map.close" = "Close";
+"discovery.map.no_locations.title" = "No public locations to show";
+"discovery.map.no_locations.message" = "These events do not have a public map location yet. Use the list to browse them.";
+"discovery.map.minicard.hint" = "Open event details";
+
+"discovery.colophon.title" = "That's %@ for tonight";
+"discovery.colophon.map" = "Open the map";

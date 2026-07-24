@@ -3,12 +3,20 @@ import Foundation
 
 struct APIEnvironment: Sendable {
     let baseURL: URL
+
+    // Resolution order: explicit env var > user-chosen server (DEBUG settings) > build default.
+    static let overrideDefaultsKey = "spott.api.base-url-override"
+
     static let `default`: APIEnvironment = {
         if let configured = ProcessInfo.processInfo.environment["SPOTT_API_BASE_URL"],
            let url = URL(string: configured) {
             return APIEnvironment(baseURL: url)
         }
 #if DEBUG
+        if let stored = UserDefaults.standard.string(forKey: overrideDefaultsKey),
+           let url = URL(string: stored), url.scheme != nil, url.host() != nil {
+            return APIEnvironment(baseURL: url)
+        }
         return APIEnvironment(baseURL: URL(string: "http://127.0.0.1:4100/v1")!)
 #else
         return APIEnvironment(baseURL: URL(string: "https://api.spott.jp/v1")!)
@@ -114,8 +122,27 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         try await discovery(.init(q: query, region: region))
     }
 
+    func discoveryFeed(query: EventDiscoveryQuery = .init()) async throws -> DiscoveryFeedResponse {
+        var components = URLComponents(
+            url: environment.baseURL.appending(path: "discovery/feed"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = query.queryItems
+        let feed: DiscoveryFeedResponse = try await send(URLRequest(url: components.url!))
+        serverTimeAuthority.calibrate(serverTime: feed.serverTime)
+        return feed
+    }
+
     func event(identifier: String) async throws -> EventSummary {
         try await send(URLRequest(url: environment.baseURL.appending(path: "events/\(identifier)")))
+    }
+
+    /// "Who's coming" social proof. Public endpoint; confirmed attendees only,
+    /// gated server-side behind the organizer's guest-list setting.
+    func goingPreview(eventID: UUID) async throws -> GoingPreview {
+        try await send(URLRequest(
+            url: environment.baseURL.appending(path: "events/\(eventID.uuidString.lowercased())/going-preview")
+        ))
     }
 
     nonisolated func authoritativeNow() -> Date {
@@ -130,6 +157,17 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
 
     func wallet() async throws -> WalletSnapshot {
         try await send(URLRequest(url: environment.baseURL.appending(path: "wallet")))
+    }
+
+    func dailyCheckIn() async throws -> PointsCheckInResult {
+        try await post("points/checkin", body: EmptyRequest())
+    }
+
+    func pointsRules() async throws -> PointsRuleCatalog {
+        try await send(
+            URLRequest(url: environment.baseURL.appending(path: "points/rules")),
+            authenticated: false
+        )
     }
 
     func notifications() async throws -> CursorPage<NotificationItem> {
@@ -339,6 +377,32 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         )
     }
 
+    /// Host → attendee broadcast. Publishes an announcement to the event's
+    /// confirmed attendees' notification inbox and returns the receipt.
+    func sendEventAnnouncement(
+        eventID: UUID,
+        title: String,
+        body: String
+    ) async throws -> EventAnnouncementReceipt {
+        struct Body: Encodable, Sendable {
+            let title: String
+            let body: String
+        }
+        return try await post(
+            "events/\(eventID.uuidString.lowercased())/announcements",
+            body: Body(title: title, body: body),
+            idempotencyKey: UUID()
+        )
+    }
+
+    /// The organizer's list of announcements already sent for an event, with the
+    /// remaining daily quota.
+    func hostEventAnnouncements(eventID: UUID) async throws -> EventAnnouncementPage {
+        try await send(
+            URLRequest(url: environment.baseURL.appending(path: "events/\(eventID.uuidString.lowercased())/announcements"))
+        )
+    }
+
     func favoriteEvents() async throws -> EventCollection {
         try await send(URLRequest(url: environment.baseURL.appending(path: "me/favorite-events")))
     }
@@ -347,6 +411,107 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         var request = URLRequest(url: environment.baseURL.appending(path: "events/\(eventID.uuidString.lowercased())/favorite"))
         request.httpMethod = enabled ? "PUT" : "DELETE"
         let _: EmptyResponse = try await send(request)
+    }
+
+    func eventComments(
+        eventID: UUID,
+        cursor: String? = nil,
+        limit: Int = 50
+    ) async throws -> EventCommentPage {
+        var components = URLComponents(
+            url: environment.baseURL.appending(path: "events/\(eventID.uuidString.lowercased())/comments"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [URLQueryItem(name: "limit", value: String(min(max(limit, 1), 100)))]
+        if let cursor, !cursor.isEmpty {
+            components.queryItems?.append(.init(name: "cursor", value: cursor))
+        }
+        return try await send(URLRequest(url: components.url!))
+    }
+
+    func postEventComment(
+        eventID: UUID,
+        body: String,
+        parentID: UUID? = nil,
+        locale: String
+    ) async throws -> EventComment {
+        struct Body: Encodable, Sendable {
+            let body: String
+            let parentId: String?
+            let locale: String
+        }
+        return try await post(
+            "events/\(eventID.uuidString.lowercased())/comments",
+            body: Body(body: body, parentId: parentID?.uuidString.lowercased(), locale: locale),
+            idempotencyKey: UUID()
+        )
+    }
+
+    func cancelEvent(id: UUID, reason: String) async throws -> EventSummary {
+        try await post(
+            "events/\(id.uuidString.lowercased())/cancel",
+            body: ["reason": reason],
+            idempotencyKey: UUID()
+        )
+    }
+
+    func eventPromotion(eventID: UUID) async throws -> EventPromotion? {
+        try await send(
+            URLRequest(url: environment.baseURL.appending(path: "events/\(eventID.uuidString.lowercased())/promotion")),
+            authenticated: false
+        )
+    }
+
+    func purchasePromotion(
+        eventID: UUID,
+        tier: EventPromotionTier,
+        quoteID: UUID
+    ) async throws -> EventPromotion {
+        struct Body: Encodable, Sendable {
+            let tier: String
+            let quoteId: String
+        }
+        return try await post(
+            "events/\(eventID.uuidString.lowercased())/promotions",
+            body: Body(tier: tier.rawValue, quoteId: quoteID.uuidString.lowercased()),
+            idempotencyKey: UUID()
+        )
+    }
+
+    func ticketTypes(eventID: UUID) async throws -> EventTicketTypePage {
+        try await send(
+            URLRequest(url: environment.baseURL.appending(path: "events/\(eventID.uuidString.lowercased())/ticket-types")),
+            authenticated: false
+        )
+    }
+
+    func createTicketType(eventID: UUID, input: TicketTypeInput) async throws -> EventTicketType {
+        try await post(
+            "events/\(eventID.uuidString.lowercased())/ticket-types",
+            body: input
+        )
+    }
+
+    func updateTicketType(id: UUID, changes: TicketTypeUpdateInput) async throws -> EventTicketType {
+        var request = URLRequest(url: environment.baseURL.appending(path: "ticket-types/\(id.uuidString.lowercased())"))
+        request.httpMethod = "PATCH"
+        request.httpBody = try encoder.encode(changes)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return try await send(request)
+    }
+
+    func reportPayment(registrationID: UUID) async throws -> TicketPaymentReport {
+        try await post(
+            "registrations/\(registrationID.uuidString.lowercased())/payment-report",
+            body: EmptyRequest()
+        )
+    }
+
+    func confirmPayment(registrationID: UUID) async throws -> TicketPaymentConfirmation {
+        try await post(
+            "registrations/\(registrationID.uuidString.lowercased())/payment-confirmation",
+            body: EmptyRequest()
+        )
     }
 
     func groups() async throws -> GroupPage {
@@ -520,6 +685,104 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         return try await send(request)
     }
 
+    func groupDiscussion(
+        groupID: UUID,
+        cursor: String? = nil,
+        limit: Int = 20
+    ) async throws -> GroupDiscussionPage {
+        var components = URLComponents(
+            url: environment.baseURL.appending(path: "groups/\(groupID.uuidString.lowercased())/discussion"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [URLQueryItem(name: "limit", value: String(min(max(limit, 1), 100)))]
+        if let cursor, !cursor.isEmpty {
+            components.queryItems?.append(.init(name: "cursor", value: cursor))
+        }
+        return try await send(URLRequest(url: components.url!))
+    }
+
+    func postGroupDiscussion(
+        groupID: UUID,
+        body: String,
+        locale: String
+    ) async throws -> GroupDiscussionPost {
+        struct Body: Encodable, Sendable {
+            let body: String
+            let locale: String
+        }
+        return try await post(
+            "groups/\(groupID.uuidString.lowercased())/discussion",
+            body: Body(body: body, locale: locale),
+            idempotencyKey: UUID()
+        )
+    }
+
+    func discussionReplies(
+        groupID: UUID,
+        postID: UUID,
+        cursor: String? = nil,
+        limit: Int = 50
+    ) async throws -> GroupDiscussionReplyPage {
+        var components = URLComponents(
+            url: environment.baseURL.appending(
+                path: "groups/\(groupID.uuidString.lowercased())/discussion/\(postID.uuidString.lowercased())/replies"
+            ),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [URLQueryItem(name: "limit", value: String(min(max(limit, 1), 100)))]
+        if let cursor, !cursor.isEmpty {
+            components.queryItems?.append(.init(name: "cursor", value: cursor))
+        }
+        return try await send(URLRequest(url: components.url!))
+    }
+
+    func postDiscussionReply(
+        groupID: UUID,
+        postID: UUID,
+        body: String,
+        locale: String
+    ) async throws -> GroupDiscussionPost {
+        struct Body: Encodable, Sendable {
+            let body: String
+            let locale: String
+        }
+        return try await post(
+            "groups/\(groupID.uuidString.lowercased())/discussion/\(postID.uuidString.lowercased())/replies",
+            body: Body(body: body, locale: locale),
+            idempotencyKey: UUID()
+        )
+    }
+
+    func setDiscussionLike(
+        groupID: UUID,
+        commentID: UUID,
+        liked: Bool
+    ) async throws -> GroupDiscussionLikeMutation {
+        var request = URLRequest(
+            url: environment.baseURL.appending(
+                path: "groups/\(groupID.uuidString.lowercased())/discussion/\(commentID.uuidString.lowercased())/like"
+            )
+        )
+        request.httpMethod = liked ? "PUT" : "DELETE"
+        return try await send(request)
+    }
+
+    func moderateDiscussion(
+        groupID: UUID,
+        commentID: UUID,
+        status: String
+    ) async throws -> GroupDiscussionModerationResult {
+        var request = URLRequest(
+            url: environment.baseURL.appending(
+                path: "groups/\(groupID.uuidString.lowercased())/discussion/\(commentID.uuidString.lowercased())/moderation"
+            )
+        )
+        request.httpMethod = "PATCH"
+        request.httpBody = try encoder.encode(["status": status])
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return try await send(request)
+    }
+
     func groupMembers(id: UUID) async throws -> GroupMemberPage {
         try await send(
             URLRequest(url: environment.baseURL.appending(path: "groups/\(id.uuidString.lowercased())/members"))
@@ -639,19 +902,25 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
     func createShareLink(
         resourceType: String,
         resourceID: UUID,
-        campaign: String? = nil
+        campaign: String? = nil,
+        channel: String? = nil,
+        purpose: String? = nil
     ) async throws -> ShareLinkReceipt {
         struct Body: Encodable, Sendable {
             let resourceType: String
             let resourceId: String
             let campaign: String?
+            let channel: String?
+            let purpose: String?
         }
         return try await post(
             "shares",
             body: Body(
                 resourceType: resourceType,
                 resourceId: resourceID.uuidString.lowercased(),
-                campaign: campaign
+                campaign: campaign,
+                channel: channel,
+                purpose: purpose
             )
         )
     }
@@ -661,6 +930,10 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
             URLRequest(url: environment.baseURL.appending(path: "shares/\(code)")),
             authenticated: false
         )
+    }
+
+    func acceptShare(code: String) async throws -> ShareAcceptance {
+        try await post("shares/\(code)/accept", body: EmptyRequest())
     }
 
     func createPoster(
@@ -719,6 +992,37 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
 
     func achievements() async throws -> AchievementPage {
         try await send(URLRequest(url: environment.baseURL.appending(path: "me/achievements")))
+    }
+
+    func evaluateAchievements() async throws -> AchievementEvaluation {
+        try await post("me/achievements/evaluate", body: EmptyRequest())
+    }
+
+    func setAchievementsHidden(_ hidden: Bool) async throws -> AchievementVisibilityMutation {
+        try await post("me/achievements/hidden", body: ["hidden": hidden])
+    }
+
+    func setAchievementHidden(id: UUID, hidden: Bool) async throws -> AchievementBadgeVisibilityMutation {
+        try await post(
+            "me/achievements/\(id.uuidString.lowercased())/hidden",
+            body: ["hidden": hidden]
+        )
+    }
+
+    func achievementShareCard(id: UUID) async throws -> AchievementShareCard {
+        try await send(
+            URLRequest(
+                url: environment.baseURL.appending(
+                    path: "me/achievements/\(id.uuidString.lowercased())/share-card"
+                )
+            )
+        )
+    }
+
+    func publicAchievements(userID: UUID) async throws -> PublicAchievementPage {
+        try await send(
+            URLRequest(url: environment.baseURL.appending(path: "users/\(userID.uuidString.lowercased())/achievements"))
+        )
     }
 
     func submitSafetyReport(
@@ -937,6 +1241,40 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         return response
     }
 
+    func registerWithPassword(
+        email: String,
+        password: String,
+        nickname: String? = nil,
+        deviceID: UUID = DeviceIdentity.current
+    ) async throws -> UserSession {
+        let response: UserSession = try await post(
+            "auth/password/register",
+            body: PasswordRegistrationPayload(
+                email: email,
+                password: password,
+                nickname: nickname,
+                deviceId: deviceID
+            ),
+            authenticated: false
+        )
+        try await credentials.save(session: response)
+        return response
+    }
+
+    func loginWithPassword(
+        email: String,
+        password: String,
+        deviceID: UUID = DeviceIdentity.current
+    ) async throws -> UserSession {
+        let response: UserSession = try await post(
+            "auth/password/login",
+            body: PasswordLoginPayload(email: email, password: password, deviceId: deviceID),
+            authenticated: false
+        )
+        try await credentials.save(session: response)
+        return response
+    }
+
     func requestPhoneCode(phone: String, deviceID: UUID) async throws -> PhoneChallenge {
         try await post("phone/challenges", body: ["phoneNumber": phone, "deviceId": deviceID.uuidString.lowercased()])
     }
@@ -961,6 +1299,7 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
         joinWaitlist: Bool,
         answers: [UUID: RegistrationAnswer] = [:],
         attendeeNote: String? = nil,
+        ticketTypeID: UUID? = nil,
         idempotencyKey: UUID
     ) async throws -> Registration {
         let payload = RegistrationRequestPayload(
@@ -969,7 +1308,8 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
             expectedEventVersion: expectedEventVersion,
             joinWaitlistIfFull: joinWaitlist,
             answers: answers,
-            attendeeNote: attendeeNote
+            attendeeNote: attendeeNote,
+            ticketTypeID: ticketTypeID
         )
         return try await post(
             "events/\(eventID.uuidString.lowercased())/registrations",
@@ -1030,6 +1370,13 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
 
     func currentSession() async throws -> UserSession? { try await credentials.session() }
     func refreshCurrentSession() async throws -> UserSession { try await refresh() }
+
+    func revokeAllSessions() async throws {
+        var request = URLRequest(url: environment.baseURL.appending(path: "sessions"))
+        request.httpMethod = "DELETE"
+        let _: EmptyResponse = try await send(request)
+    }
+
     @discardableResult
     func signOut(expectedSessionID: UUID) async throws -> Bool {
         try await credentials.clear(expectedSessionID: expectedSessionID)
@@ -1091,7 +1438,10 @@ actor SpottAPIClient: SessionEnding, SessionRestoring {
                 }
                 guard (200..<300).contains(http.statusCode) else { throw decodeError(data: data, status: http.statusCode) }
                 if Response.self == EmptyResponse.self { return EmptyResponse() as! Response }
-                return try decoder.decode(Response.self, from: data)
+                // Endpoints that legitimately return "no content" (e.g. GET /events/{id}/promotion
+                // without an active promotion) may answer with an empty body; normalize it to a
+                // JSON null so optional response types decode to nil instead of failing.
+                return try decoder.decode(Response.self, from: data.isEmpty ? Data("null".utf8) : data)
             } catch is CancellationError { throw CancellationError() }
             catch let error as URLError where error.code == .cancelled { throw CancellationError() }
             catch let error as APIError { throw error }

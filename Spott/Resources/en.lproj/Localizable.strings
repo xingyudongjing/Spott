@@ -868,3 +868,10 @@
 "更新失败" = "Update failed";
 "重试" = "Retry";
 "更多活动暂时无法加载，请稍后重试。" = "More events could not be loaded. Try again shortly.";
+
+/* DesignSystem components (PromotedBadge / CapacityRing / AvatarStack / StreakFlame) */
+"推广" = "Promoted";
+"推广内容" = "Promoted content";
+"已确认 %lld 人，容量 %lld 人" = "%lld confirmed of %lld capacity";
+"共 %lld 位参与者" = "%lld participants";
+"连续签到 %lld 天" = "%lld-day check-in streak";

@@ -1,0 +1,6 @@
+"appshell.create.accessibility_label" = "イベントを作成";
+"appshell.composer.close" = "閉じる";
+"appshell.composer.discard_title" = "編集を破棄しますか？";
+"appshell.composer.discard_message" = "保存されていない変更は失われます。同期済みのクラウド下書きは保持されます。";
+"appshell.composer.discard_confirm" = "破棄して閉じる";
+"appshell.composer.discard_cancel" = "編集を続ける";

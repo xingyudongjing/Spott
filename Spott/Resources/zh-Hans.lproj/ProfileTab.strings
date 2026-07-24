@@ -1,0 +1,215 @@
+"profile.day.today" = "今天";
+"profile.day.yesterday" = "昨天";
+
+"profile.home.error_title" = "暂时无法加载资料";
+"profile.home.retry" = "重试";
+"profile.home.edit_profile" = "编辑资料";
+"profile.home.phone_verified" = "日本手机号已验证";
+"profile.home.phone_unverified" = "验证手机号";
+
+"profile.signedout.title" = "把每一次见面，留在同一个账号里。";
+"profile.signedout.subtitle" = "登录后同步收藏、活动、群组、成就和积分钱包。";
+"profile.signedout.benefit_sync" = "跨端同步";
+"profile.signedout.benefit_privacy" = "隐私保护";
+"profile.signedout.benefit_identity" = "活动身份";
+"profile.signedout.action" = "登录或注册";
+
+"profile.signout.action" = "退出登录";
+"profile.signout.confirm_title" = "确认退出登录？";
+"profile.signout.confirm_action" = "退出登录";
+"profile.signout.confirm_cancel" = "取消";
+
+"profile.itinerary.title" = "我的行程";
+"profile.itinerary.subtitle" = "报名、候补与票码都在这里";
+
+"profile.stats.points" = "积分";
+"profile.stats.achievements" = "成就";
+
+"profile.section.mine" = "我的 Spott";
+"profile.section.trust" = "信任与设置";
+"profile.row.favorites" = "收藏";
+"profile.row.favorites_subtitle" = "稍后想参加的活动";
+"profile.row.wallet" = "积分钱包";
+"profile.row.wallet_subtitle" = "签到、流水与购买";
+"profile.row.notifications" = "通知中心";
+"profile.row.notifications_subtitle" = "候补、变更和安全消息";
+"profile.row.achievements" = "成就";
+"profile.row.achievements_subtitle" = "由真实履约形成的身份";
+"profile.row.host_studio" = "主办工作台";
+"profile.row.host_studio_subtitle" = "活动、名单与现场签到";
+"profile.row.safety" = "安全中心";
+"profile.row.safety_subtitle" = "举报、拉黑与线下见面守则";
+"profile.row.settings" = "设置";
+"profile.row.settings_subtitle" = "语言、通知与账号控制";
+
+"profile.common.close" = "关闭";
+"profile.common.cancel" = "取消";
+
+"profile.wallet.title" = "积分钱包";
+"profile.wallet.error_title" = "暂时无法加载钱包";
+"profile.wallet.total" = "总积分";
+"profile.wallet.paid" = "付费积分";
+"profile.wallet.free" = "免费积分";
+"profile.wallet.buy" = "购买积分";
+"profile.wallet.transactions" = "最近流水";
+"profile.wallet.transactions_empty" = "积分获得与消耗会在这里逐笔记录。";
+"profile.wallet.spend_order" = "优先使用即将到期的免费积分，其次其他免费积分，最后使用付费积分。付费积分不设有效期。";
+"profile.wallet.rules_title" = "积分规则";
+"profile.wallet.rules_error" = "暂时无法加载积分规则";
+
+"profile.checkin.title" = "每日签到";
+"profile.checkin.subtitle" = "连续签到可获得额外积分";
+"profile.checkin.action" = "每日签到";
+"profile.checkin.already" = "今日已签到";
+"profile.checkin.done" = "签到成功";
+
+"profile.tx.phone_verified" = "手机验证奖励";
+"profile.tx.attendance_reward" = "真实到场奖励";
+"profile.tx.registration_fee" = "活动报名";
+"profile.tx.event_publish" = "发布活动";
+"profile.tx.group_create" = "创建群组";
+"profile.tx.daily_checkin_reward" = "每日签到奖励";
+"profile.tx.streak_7_reward" = "连续 7 天签到奖励";
+"profile.tx.streak_30_reward" = "连续 30 天签到奖励";
+"profile.tx.storekit_purchase" = "App Store 购买";
+"profile.tx.storekit_bonus" = "购买赠送积分";
+"profile.tx.storekit_refund" = "App Store 退款";
+"profile.tx.point_adjustment" = "积分调整";
+
+"profile.notifications.title" = "通知";
+"profile.notifications.error_title" = "暂时无法加载通知";
+"profile.notifications.empty_title" = "没有新通知";
+"profile.notifications.empty_message" = "候补、取消和安全通知会保留在这里。";
+"profile.notifications.unread" = "未读";
+"profile.notifications.generic" = "有一条新动态";
+
+"profile.notification.waitlist_offered" = "候补名额已开放";
+"profile.notification.registration_hold_expired" = "候补确认已过期";
+"profile.notification.registration_changed" = "报名状态有变化";
+"profile.notification.event_reminder" = "活动即将开始";
+"profile.notification.event_cancelled" = "活动已取消";
+"profile.notification.event_key_fields_changed" = "活动关键信息有变更";
+"profile.notification.event_reviewed" = "活动审核有结果";
+"profile.notification.event_removed" = "活动已下架";
+"profile.notification.event_host_announcement" = "主办方发来通知";
+"profile.notification.group_announcement" = "社群有新公告";
+"profile.notification.group_dissolution_scheduled" = "社群将要解散";
+"profile.notification.achievements_awarded" = "获得了新成就";
+"profile.notification.moderation_decided" = "举报处理有结果";
+"profile.notification.account_restricted" = "账号状态有变化";
+"profile.notification.safety_case" = "安全通知";
+
+"profile.achievements.title" = "成就";
+"profile.achievements.error_title" = "暂时无法加载成就";
+"profile.achievements.empty_title" = "成就从真实见面开始";
+"profile.achievements.empty_message" = "完成签到、认真组织活动和建设社群都会留下成就。";
+"profile.achievements.new_title" = "新获得的成就";
+"profile.achievements.hidden_tag" = "已隐藏";
+"profile.achievements.share" = "分享成就卡";
+"profile.achievements.hide" = "对外隐藏";
+"profile.achievements.unhide" = "恢复公开";
+"profile.achievements.actions" = "成就操作";
+"profile.achievements.awarded_on" = "获得于 %@";
+"profile.achievements.share_title" = "成就分享";
+
+"profile.achievement.first_checkin.name" = "初次见面";
+"profile.achievement.first_checkin.detail" = "首次完成活动签到。";
+"profile.achievement.city_explorer_5.name" = "城市探索者";
+"profile.achievement.city_explorer_5.detail" = "累计完成 5 次活动签到。";
+"profile.achievement.first_hosted_event.name" = "首次主办";
+"profile.achievement.first_hosted_event.detail" = "第一次把活动办到了结束。";
+"profile.achievement.community_builder.name" = "社群建设者";
+"profile.achievement.community_builder.detail" = "你的社群拥有 10 位以上成员。";
+"profile.achievement.continuous_participation.name" = "持续参与";
+"profile.achievement.continuous_participation.detail" = "连续 3 个月每月至少签到一次。";
+"profile.achievement.reliable_attendee.name" = "守约达人";
+"profile.achievement.reliable_attendee.detail" = "最近 10 次报名的到场率达到 90%。";
+"profile.achievement.friendly_contributor.name" = "友好贡献";
+"profile.achievement.friendly_contributor.detail" = "提交了 10 条有效活动反馈。";
+"profile.achievement.continuous_organizer.name" = "连续组织";
+"profile.achievement.continuous_organizer.detail" = "连续 3 个月每月都主办活动。";
+
+"profile.favorites.title" = "收藏";
+"profile.favorites.error_title" = "暂时无法加载收藏";
+"profile.favorites.empty_title" = "还没有收藏";
+"profile.favorites.empty_message" = "收藏让你稍后再决定，不会占用活动名额。";
+"profile.favorites.time_tbd" = "时间待定";
+"profile.favorites.fee_free" = "免费";
+"profile.favorites.fee_onsite" = "¥%ld 现场支付";
+
+"profile.settings.title" = "设置";
+"profile.settings.language" = "语言";
+"profile.settings.language_picker" = "界面语言";
+"profile.settings.notifications" = "通知";
+"profile.settings.push_reminder" = "允许普通活动提醒";
+"profile.settings.email_reminder" = "通过邮箱接收活动提醒";
+"profile.settings.lockscreen_address" = "锁屏显示精确地址";
+"profile.settings.quiet_start" = "免打扰开始";
+"profile.settings.quiet_end" = "免打扰结束";
+"profile.settings.quiet_hint" = "免打扰时段按日本时间（JST）生效。";
+"profile.settings.critical_hint" = "取消、候补递补与安全通知不会被静默。";
+"profile.settings.sync_after_login" = "登录后同步通知偏好";
+"profile.settings.privacy" = "隐私";
+"profile.settings.analytics" = "匿名产品体验分析";
+"profile.settings.privacy_summary" = "数据与隐私说明";
+"profile.settings.deletion_date" = "账号注销执行时间";
+"profile.settings.deletion_cancel" = "撤销注销申请";
+"profile.settings.deletion_request" = "请求注销账号";
+"profile.settings.deletion_confirm_title" = "确认请求注销账号？";
+"profile.settings.deletion_confirm_action" = "请求注销";
+"profile.settings.deletion_confirm_message" = "申请后有 14 天冷静期。未结束活动、仍由你管理的群组或负积分会阻止注销。";
+"profile.settings.account" = "账号";
+"profile.settings.merge" = "合并另一个账号";
+"profile.settings.merge_hint" = "必须重新验证另一个现有账号；Spott 不会仅凭当前登录状态直接合并。";
+"profile.settings.revoke_all" = "全部设备退出登录";
+"profile.settings.revoke_hint" = "撤销所有设备上的会话，本机也会退出登录。";
+"profile.settings.revoke_confirm_title" = "确认在所有设备退出登录？";
+"profile.settings.revoke_confirm_action" = "全部退出";
+"profile.settings.revoke_confirm_message" = "所有设备上的会话都会立即失效，需要重新登录。";
+"profile.settings.error_section" = "无法完成";
+"profile.settings.retry_sync" = "重试通知同步";
+
+"profile.public.title" = "公开资料";
+"profile.public.about" = "关于";
+"profile.public.no_bio" = "这位用户还没有填写公开简介。";
+"profile.public.privacy_note" = "公开资料不包含手机号与安全记录";
+"profile.public.error_title" = "无法查看这份资料";
+"profile.public.error_message" = "用户可能已停用公开资料。";
+"profile.public.report" = "举报用户";
+"profile.public.block" = "拉黑用户";
+"profile.public.more_actions" = "更多操作";
+"profile.public.block_confirm_title" = "拉黑这位用户？";
+"profile.public.block_confirm_action" = "拉黑";
+"profile.public.block_confirm_message" = "拉黑会取消互相关注，并限制双方进入同一受控互动空间。";
+"profile.public.hosted_events" = "主办的公开活动";
+"profile.public.more_events" = "查看更多活动";
+"profile.public.followers" = "%ld 位关注者";
+"profile.public.edit" = "编辑我的资料";
+"profile.public.following" = "已关注";
+"profile.public.follow" = "关注";
+"profile.public.blocked_banner" = "已拉黑 @%@";
+"profile.public.no_languages" = "未设置内容语言";
+
+"profile.region.tokyo" = "东京";
+"profile.region.kanagawa" = "神奈川";
+"profile.region.osaka" = "大阪";
+"profile.region.kyoto" = "京都";
+"profile.region.nationwide" = "日本全国";
+"profile.region.unknown" = "未公开常驻地区";
+
+"profile.language.zh" = "中文";
+"profile.language.ja" = "日语";
+"profile.language.en" = "英语";
+
+/* Account merge preview + errors */
+"profile.merge.stat_events" = "迁移活动";
+"profile.merge.stat_groups" = "迁移社群";
+"profile.merge.stat_points" = "迁移积分";
+"profile.merge.conflict.phone" = "两个账号都绑定了手机号";
+"profile.merge.conflict.event" = "两个账号报名了同一活动";
+"profile.merge.conflict.group" = "两个账号加入了同一社群";
+"profile.merge.conflict.operator" = "来源账号具有运营后台权限";
+"profile.merge.apple_credential_invalid" = "Apple 没有返回有效的第二账号凭证。";
+"profile.edit.image_unreadable" = "无法读取这张图片。";
+"profile.edit.load_failed" = "暂时无法加载个人资料。";
+"profile.edit.reload" = "重新加载";

@@ -1,0 +1,144 @@
+- generic [active] [ref=e1]:
+  - link "跳到主要内容" [ref=e2] [cursor=pointer]:
+    - /url: "#spott-main-content"
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - link "Spott" [ref=e5] [cursor=pointer]:
+        - /url: /discover
+      - link "地区：日本" [ref=e6] [cursor=pointer]:
+        - /url: /discover
+        - text: 日本
+    - navigation "主导航" [ref=e7]:
+      - link "发现" [ref=e8] [cursor=pointer]:
+        - /url: /discover
+      - link "群组" [ref=e9] [cursor=pointer]:
+        - /url: /groups
+    - generic [ref=e12]:
+      - generic [ref=e13]: 语言
+      - combobox "语言" [ref=e14] [cursor=pointer]:
+        - option "简体中文" [selected]
+        - option "日本語"
+        - option "English"
+  - status [ref=e15]:
+    - strong [ref=e16]: 公开只读预览
+    - generic [ref=e17]: 活动浏览、筛选、详情、分享与日历可用；登录、报名和发布请使用加密的内部测试入口。
+  - main [ref=e19]:
+    - generic [ref=e20]:
+      - generic [ref=e21]:
+        - heading "遇见真正想参加的活动" [level=1] [ref=e22]
+        - paragraph [ref=e23]: 看清时间、地点、费用与名额，再决定出发。
+      - generic [ref=e24]:
+        - generic [ref=e25]:
+          - generic [ref=e29]: 搜索活动
+          - searchbox "搜索活动" [ref=e256]
+        - generic [ref=e31]:
+          - generic [ref=e35]: 地区
+          - combobox "地区" [ref=e36] [cursor=pointer]:
+            - option "日本全部" [selected]
+            - option "东京"
+            - option "神奈川"
+            - option "埼玉"
+            - option "千叶"
+            - option "大阪"
+            - option "京都"
+        - generic "列表 / 地图" [ref=e37]:
+          - button "列表" [pressed] [ref=e38] [cursor=pointer]
+          - button "地图" [ref=e44] [cursor=pointer]
+      - generic [ref=e48]:
+        - group "时间" [ref=e49]:
+          - button "本周末" [ref=e50] [cursor=pointer]
+          - button "只看有名额" [ref=e54] [cursor=pointer]
+          - combobox "活动形式" [ref=e62] [cursor=pointer]:
+            - option "全部形式" [selected]
+            - option "线下"
+            - option "线上"
+            - option "线上与线下"
+          - combobox "费用" [ref=e66] [cursor=pointer]:
+            - option "全部费用" [selected]
+            - option "免费"
+            - option "付费"
+          - combobox "语言" [ref=e71] [cursor=pointer]:
+            - option "全部语言" [selected]
+            - option "中文"
+            - option "日语"
+            - option "英语"
+        - button "更多筛选" [ref=e73] [cursor=pointer]
+        - button "清除筛选" [ref=e78] [cursor=pointer]
+      - generic [ref=e258]:
+        - heading "新活动" [level=2] [ref=e260]
+        - generic [ref=e261]:
+          - article "东京余光 · 隅田川蓝调散步" [ref=e262]:
+            - link "东京余光 · 隅田川蓝调散步 7月25日周六12:00–14:30 东京余光 · 隅田川蓝调散步 清澄白河站附近 免费 线下 中文 语言已确认 活动标签 东京余光散步会 Spott 新主办方 余 13" [ref=e263] [cursor=pointer]:
+              - /url: /e/tokyo-afterglow-preview
+              - img "东京余光 · 隅田川蓝调散步" [ref=e265]
+              - generic [ref=e274]:
+                - paragraph [ref=e275]: 7月25日周六 · 12:00–14:30
+                - heading "东京余光 · 隅田川蓝调散步" [level=3] [ref=e276]
+                - generic [ref=e277]:
+                  - generic [ref=e278]: 清澄白河站附近
+                  - generic [ref=e282]:
+                    - text: 免费
+                    - generic [ref=e285]: ·
+                    - text: 线下
+                  - generic [ref=e286]:
+                    - text: 中文
+                    - generic [ref=e290]: ·
+                    - text: 语言已确认
+                - list "活动标签" [ref=e291]:
+                  - listitem [ref=e292]: "#城市探索"
+                  - listitem [ref=e293]: "#摄影"
+                  - listitem [ref=e294]: "#城市散步"
+                - generic [ref=e295]:
+                  - generic [ref=e296]: 东京余光散步会
+                  - generic [ref=e299]: Spott 新主办方
+              - strong [ref=e301]: 余 13
+          - article "下北沢 Listening Table · 一枚を聴く夜" [ref=e304]:
+            - link "下北沢 Listening Table · 一枚を聴く夜 8月31日周一21:00–00:00 下北沢 Listening Table · 一枚を聴く夜 下北沢 免费 线下 日语 语言已确认 活动标签 Shimokita Listening Table Spott 新主办方 余 11" [ref=e305] [cursor=pointer]:
+              - /url: /e/shimokita-vinyl-preview
+              - img "下北沢 Listening Table · 一枚を聴く夜" [ref=e307]
+              - generic [ref=e315]:
+                - paragraph [ref=e316]: 8月31日周一 · 21:00–00:00
+                - heading "下北沢 Listening Table · 一枚を聴く夜" [level=3] [ref=e317]
+                - generic [ref=e318]:
+                  - generic [ref=e319]: 下北沢
+                  - generic [ref=e323]:
+                    - text: 免费
+                    - generic [ref=e326]: ·
+                    - text: 线下
+                  - generic [ref=e327]:
+                    - text: 日语
+                    - generic [ref=e331]: ·
+                    - text: 语言已确认
+                - list "活动标签" [ref=e332]:
+                  - listitem [ref=e333]: "#音乐"
+                  - listitem [ref=e334]: "#音楽"
+                  - listitem [ref=e335]: "#レコード"
+                - generic [ref=e336]:
+                  - generic [ref=e337]: Shimokita Listening Table
+                  - generic [ref=e340]: Spott 新主办方
+              - strong [ref=e342]: 余 11
+          - article "Kamakura Morning Reset · Coastline Walk & Coffee" [ref=e345]:
+            - link "Kamakura Morning Reset · Coastline Walk & Coffee 10月15日周四12:00–15:00 Kamakura Morning Reset · Coastline Walk & Coffee 鎌倉海岸 JP¥3,800 线下 英语 语言已确认 活动标签 东京余光散步会 Spott 新主办方 余 3" [ref=e346] [cursor=pointer]:
+              - /url: /e/kamakura-morning-preview
+              - img "Kamakura Morning Reset · Coastline Walk & Coffee" [ref=e348]
+              - generic [ref=e354]:
+                - paragraph [ref=e355]: 10月15日周四 · 12:00–15:00
+                - heading "Kamakura Morning Reset · Coastline Walk & Coffee" [level=3] [ref=e356]
+                - generic [ref=e357]:
+                  - generic [ref=e358]: 鎌倉海岸
+                  - generic [ref=e362]:
+                    - text: JP¥3,800
+                    - generic [ref=e365]: ·
+                    - text: 线下
+                  - generic [ref=e366]:
+                    - text: 英语
+                    - generic [ref=e370]: ·
+                    - text: 语言已确认
+                - list "活动标签" [ref=e371]:
+                  - listitem [ref=e372]: "#户外"
+                  - listitem [ref=e373]: "#coast"
+                  - listitem [ref=e374]: "#morning"
+                - generic [ref=e375]:
+                  - generic [ref=e376]: 东京余光散步会
+                  - generic [ref=e379]: Spott 新主办方
+              - strong [ref=e381]: 余 3

@@ -1,0 +1,129 @@
+- generic [active] [ref=f10e1]:
+  - link "メインコンテンツへ移動" [ref=f10e2] [cursor=pointer]:
+    - /url: "#spott-main-content"
+  - banner [ref=f10e3]:
+    - generic [ref=f10e4]:
+      - link "Spott" [ref=f10e5] [cursor=pointer]:
+        - /url: /discover
+      - link "エリア：日本" [ref=f10e6] [cursor=pointer]:
+        - /url: /discover
+        - text: 日本
+    - generic [ref=f10e9]:
+      - generic [ref=f10e10]: 言語
+      - combobox "言語" [ref=f10e11] [cursor=pointer]:
+        - option "简体中文"
+        - option "日本語" [selected]
+        - option "English"
+  - status [ref=f10e12]:
+    - strong [ref=f10e13]: 公開・閲覧専用プレビュー
+    - generic [ref=f10e14]: 検索、絞り込み、詳細、共有、カレンダーは利用できます。ログイン、申込、公開は暗号化された社内テスト入口をご利用ください。
+  - navigation "モバイルナビゲーション" [ref=f10e15]:
+    - link "見つける" [ref=f10e16] [cursor=pointer]:
+      - /url: /discover
+    - link "グループ" [ref=f10e21] [cursor=pointer]:
+      - /url: /groups
+  - main [ref=f10e27]:
+    - generic [ref=f10e28]:
+      - generic [ref=f10e29]:
+        - generic [ref=f10e30]:
+          - text: 東京 · 趣味のコミュニティ
+          - heading "興味でつながるグループ" [level=1] [ref=f10e31]
+          - paragraph [ref=f10e32]: Web と iOS で同じグループに参加し、お知らせや次のイベントを確認できます。
+        - generic "コミュニティの概要" [ref=f10e34]:
+          - generic [ref=f10e35]:
+            - strong [ref=f10e36]: "2"
+            - generic [ref=f10e37]: 公開グループ
+          - generic [ref=f10e38]:
+            - strong [ref=f10e39]: "4"
+            - generic [ref=f10e40]: メンバー登録数
+          - generic [ref=f10e41]:
+            - strong [ref=f10e42]: "2"
+            - generic [ref=f10e43]: 最近の更新
+      - region "興味からグループを探す" [ref=f10e44]:
+        - generic [ref=f10e45]:
+          - generic [ref=f10e46]: 興味のグループを検索
+          - searchbox "興味のグループを検索" [ref=f10e50]
+        - group "興味で絞り込む" [ref=f10e51]:
+          - button "すべて" [pressed] [ref=f10e52] [cursor=pointer]
+          - button "音楽" [ref=f10e53] [cursor=pointer]
+          - button "まち歩き" [ref=f10e54] [cursor=pointer]
+      - region [ref=f10e55]:
+        - generic [ref=f10e57]:
+          - generic [ref=f10e58]: 公開コミュニティ
+          - heading "興味でつながるグループ" [level=2] [ref=f10e59]
+        - generic [ref=f10e60]:
+          - article [ref=f10e61]:
+            - link [ref=f10e62] [cursor=pointer]:
+              - /url: /g/shimokita-one-record
+              - generic [ref=f10e63]:
+                - generic [ref=f10e64]:
+                  - generic [ref=f10e66]: 東京
+                  - strong [ref=f10e67]: 下北
+                - generic [ref=f10e68]: 承認後に参加
+              - generic [ref=f10e69]:
+                - generic [ref=f10e70]:
+                  - generic [ref=f10e71]: 東京
+                  - generic [ref=f10e72]: 音楽
+                - heading "下北沢一枚聴く会" [level=2] [ref=f10e73]
+                - generic [ref=f10e74]: "承認後に参加. 東京. 音楽. Shimokita Listening Table が主催. ピン留めの便り: 今月のテーマ：一曲目. メンバー 2人. 定員 100人"
+                - paragraph [ref=f10e75]: 一度に数曲だけを、最後までゆっくり聴く会です。下北沢の小さなテーブルで、選んだ理由や最近見つけた音楽を持ち寄ります。
+                - generic [ref=f10e76]: Shimokita Listening Table が主催
+                - generic [ref=f10e77]:
+                  - generic [ref=f10e78]: 音楽
+                  - generic [ref=f10e79]: レコード
+                  - generic [ref=f10e80]: 少人数
+                - generic [ref=f10e81]:
+                  - generic [ref=f10e83]: ピン留めの便り
+                  - strong [ref=f10e84]: 今月のテーマ：一曲目
+                - generic [ref=f10e85]:
+                  - generic [ref=f10e86]: メンバー 2人
+                  - generic [ref=f10e90]: 定員 100人
+          - article [ref=f10e94]:
+            - link [ref=f10e95] [cursor=pointer]:
+              - /url: /g/tokyo-light-walks
+              - generic [ref=f10e96]:
+                - generic [ref=f10e97]:
+                  - generic [ref=f10e99]: 東京
+                  - strong [ref=f10e100]: 东京
+                - generic [ref=f10e101]: 誰でも参加
+              - generic [ref=f10e102]:
+                - generic [ref=f10e103]:
+                  - generic [ref=f10e104]: 東京
+                  - generic [ref=f10e105]: まち歩き
+                - heading "东京慢走与光线观察" [level=2] [ref=f10e106]
+                - generic [ref=f10e107]: "誰でも参加. 東京. まち歩き. 东京余光散步会 が主催. ピン留めの便り: 第一次同行前，可以先知道这些. メンバー 2人. 定員 100人"
+                - paragraph [ref=f10e108]: 不赶景点，也不比设备。每月选一段适合慢走的东京街区，边走边观察光线、建筑和日常生活。
+                - generic [ref=f10e109]: 东京余光散步会 が主催
+                - generic [ref=f10e110]:
+                  - generic [ref=f10e111]: 城市散步
+                  - generic [ref=f10e112]: 摄影
+                  - generic [ref=f10e113]: 新手友好
+                - generic [ref=f10e114]:
+                  - generic [ref=f10e116]: ピン留めの便り
+                  - strong [ref=f10e117]: 第一次同行前，可以先知道这些
+                - generic [ref=f10e118]:
+                  - generic [ref=f10e119]: メンバー 2人
+                  - generic [ref=f10e123]: 定員 100人
+    - generic [ref=f10e127]:
+      - generic [ref=f10e128]:
+        - generic [ref=f10e129]: SPOTT
+        - paragraph [ref=f10e130]: イベントを見つけ、仲間と出会う。
+      - generic [ref=f10e131]:
+        - link "見つける" [ref=f10e132] [cursor=pointer]:
+          - /url: /discover
+        - link "グループ" [ref=f10e133] [cursor=pointer]:
+          - /url: /groups
+        - link "安全センター" [ref=f10e134] [cursor=pointer]:
+          - /url: /safety
+        - link "プライバシー" [ref=f10e135] [cursor=pointer]:
+          - /url: /privacy
+        - link "利用規約" [ref=f10e136] [cursor=pointer]:
+          - /url: /terms
+      - generic [ref=f10e137]:
+        - generic [ref=f10e138]:
+          - generic [ref=f10e139]: 言語
+          - combobox "言語" [ref=f10e140] [cursor=pointer]:
+            - option "简体中文"
+            - option "日本語" [selected]
+            - option "English"
+        - paragraph [ref=f10e141]: Tokyo · 2026

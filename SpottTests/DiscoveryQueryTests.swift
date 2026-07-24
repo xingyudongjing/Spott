@@ -23,6 +23,8 @@ final class DiscoveryQueryTests: XCTestCase {
             language: .ja,
             price: .paid,
             bounds: .init(west: 139.6, south: 35.5, east: 139.9, north: 35.8),
+            near: .init(latitude: 35.66, longitude: 139.7),
+            sort: .almostFull,
             cursor: "2026-07-18T08:30:00Z|019b",
             limit: 20
         )
@@ -31,14 +33,23 @@ final class DiscoveryQueryTests: XCTestCase {
             query.queryItems.map(\.name),
             [
                 "q", "region", "category", "startsAfter", "startsBefore", "availableOnly",
-                "format", "language", "price", "bounds", "cursor", "limit",
+                "format", "language", "price", "bounds", "near", "sort", "cursor", "limit",
             ]
         )
         XCTAssertEqual(query.queryItems.first { $0.name == "format" }?.value, "hybrid")
         XCTAssertEqual(query.queryItems.first { $0.name == "language" }?.value, "ja")
         XCTAssertEqual(query.queryItems.first { $0.name == "availableOnly" }?.value, "true")
         XCTAssertEqual(query.queryItems.first { $0.name == "bounds" }?.value, "139.6,35.5,139.9,35.8")
+        XCTAssertEqual(query.queryItems.first { $0.name == "near" }?.value, "35.66,139.7")
+        XCTAssertEqual(query.queryItems.first { $0.name == "sort" }?.value, "almost_full")
         XCTAssertEqual(query.queryItems.first { $0.name == "cursor" }?.value, "2026-07-18T08:30:00Z|019b")
+    }
+
+    func testSortModesMatchTheServerContractExactly() {
+        XCTAssertEqual(
+            EventDiscoverySort.allCases.map(\.rawValue).sorted(),
+            ["almost_full", "distance", "newest", "recommended", "time"]
+        )
     }
 
     func testEventSummaryRejectsMissingRequiredServerFacts() throws {

@@ -1,0 +1,141 @@
+"discovery.title" = "見つける";
+"discovery.search.prompt" = "イベント・エリア・興味を検索";
+"discovery.search.recent" = "最近の検索";
+"discovery.search.recent.delete" = "検索履歴を削除：%@";
+"discovery.search.categories" = "カテゴリから探す";
+
+"discovery.region.accessibility" = "エリア";
+"discovery.region.tokyo" = "東京";
+"discovery.region.kanagawa" = "神奈川";
+"discovery.region.osaka" = "大阪";
+"discovery.region.kyoto" = "京都";
+"discovery.region.fallback" = "日本";
+
+"discovery.toolbar.notifications" = "通知";
+"discovery.toolbar.show_map" = "地図を表示";
+"discovery.toolbar.show_list" = "リストを表示";
+
+"discovery.chip.filters" = "絞り込み";
+"discovery.chip.filters.active" = "%lld件の条件を適用中";
+"discovery.chip.nearby" = "近く";
+
+"discovery.category.all" = "すべて";
+"discovery.category.family" = "親子";
+"discovery.category.outdoor" = "アウトドア";
+"discovery.category.sports" = "スポーツ";
+"discovery.category.city_walk" = "街歩き";
+"discovery.category.food" = "グルメ";
+"discovery.category.art" = "文化・アート";
+"discovery.category.learning" = "学び";
+"discovery.category.networking" = "交流・キャリア";
+"discovery.category.music" = "音楽";
+"discovery.category.games" = "ボードゲーム";
+
+"discovery.module.today.eyebrow" = "TODAY · 今日";
+"discovery.module.today.title" = "今日参加できる";
+"discovery.module.weekend.eyebrow" = "WEEKEND · 週末";
+"discovery.module.weekend.title" = "今週末";
+"discovery.module.nearby.eyebrow" = "NEARBY · 近く";
+"discovery.module.nearby.title" = "近くで人気";
+"discovery.module.interest.eyebrow" = "FOR YOU · あなたに";
+"discovery.module.interest.title" = "興味に合わせたおすすめ";
+"discovery.module.new.eyebrow" = "NEW · 新着";
+"discovery.module.new.title" = "新着イベント";
+"discovery.module.verified.title" = "認証済みホスト";
+"discovery.module.followed.title" = "フォロー中の更新";
+"discovery.module.see_all" = "すべて見る";
+"discovery.module.nearby.view_map" = "地図で見る";
+"discovery.module.nearby.enable.title" = "位置情報をオンにして、近くのイベントを見つけよう";
+"discovery.module.nearby.enable.action" = "オンにする";
+
+"discovery.card.today" = "今日 %@";
+"discovery.card.tomorrow" = "明日 %@";
+"discovery.card.free" = "無料";
+"discovery.card.fee_onsite" = "¥%@ 現地払い";
+"discovery.card.fee_pending" = "料金は公開待ち";
+"discovery.card.time_pending" = "日時未定";
+"discovery.card.capacity" = "%lld/%lld";
+"discovery.card.remaining_low" = "残り%lld枠";
+"discovery.card.waitlist" = "ウェイトリスト";
+"discovery.card.full" = "満員";
+"discovery.card.hosted_count" = "開催%lld回";
+"discovery.card.attendance_90" = "出席率90%+";
+"discovery.card.attendance_70" = "出席率70%+";
+"discovery.card.verified" = "認証済みホスト";
+"discovery.card.favorite" = "お気に入りに追加";
+"discovery.card.unfavorite" = "お気に入りを解除";
+"discovery.card.promoted" = "広告";
+"discovery.card.open_detail" = "イベント詳細を開く";
+
+"discovery.all.title" = "すべてのイベント";
+"discovery.all.count" = "%lld件のイベント";
+"discovery.all.count_more" = "%lld件以上のイベント";
+
+"discovery.sort.title" = "並び替え";
+"discovery.sort.recommended" = "おすすめ順";
+"discovery.sort.time" = "開催日順";
+"discovery.sort.newest" = "新着順";
+"discovery.sort.almost_full" = "残りわずか順";
+"discovery.sort.distance" = "近い順";
+
+"discovery.results.clear" = "クリア";
+"discovery.results.chip.nearby" = "近く";
+"discovery.results.chip.map_area" = "地図の範囲";
+"discovery.results.chip.remove" = "条件を外す：%@";
+
+"discovery.filter.title" = "絞り込み";
+"discovery.filter.done" = "完了";
+"discovery.filter.any" = "指定なし";
+"discovery.filter.date" = "日付";
+"discovery.filter.date.any" = "指定なし";
+"discovery.filter.date.today" = "今日";
+"discovery.filter.date.tomorrow" = "明日";
+"discovery.filter.date.weekend" = "今週末";
+"discovery.filter.date.custom" = "カスタム";
+"discovery.filter.date.starts" = "開始";
+"discovery.filter.date.ends" = "終了";
+"discovery.filter.format" = "開催形式";
+"discovery.filter.format.in_person" = "対面";
+"discovery.filter.format.online" = "オンライン";
+"discovery.filter.format.hybrid" = "ハイブリッド";
+"discovery.filter.language" = "言語";
+"discovery.filter.language.zh" = "簡体字中国語";
+"discovery.filter.language.ja" = "日本語";
+"discovery.filter.language.en" = "English";
+"discovery.filter.price" = "料金";
+"discovery.filter.price.free" = "無料";
+"discovery.filter.price.paid" = "有料";
+"discovery.filter.available" = "空きのあるイベントのみ";
+"discovery.filter.clear_all" = "すべてクリア";
+
+"discovery.location.denied.title" = "位置情報の許可が必要です";
+"discovery.location.denied.message" = "近くのイベントを表示するには、設定でSpottの位置情報の利用を許可してください。";
+"discovery.location.denied.settings" = "設定を開く";
+"discovery.location.denied.cancel" = "キャンセル";
+
+"discovery.state.loading" = "イベントを読み込み中";
+"discovery.state.offline" = "保存済みのイベントを表示中";
+"discovery.state.update_failed" = "更新できませんでした";
+"discovery.state.retry" = "再試行";
+"discovery.state.empty.title" = "このエリアにはまだイベントがありません";
+"discovery.state.empty.message" = "エリアを変えるか条件をゆるめるか、最初の主催者になりましょう。";
+"discovery.state.empty.reload" = "再読み込み";
+"discovery.state.results_empty.title" = "この条件に合うイベントはありません";
+"discovery.state.results_empty.clear" = "条件をクリア";
+"discovery.state.results_empty.weekend" = "今週末を見る";
+"discovery.state.error.title" = "読み込めませんでした";
+"discovery.state.error.retry" = "再接続";
+"discovery.state.error.code" = "エラーコード：%@";
+"discovery.pagination.loading" = "イベントをさらに読み込み中…";
+
+"discovery.map.a11y.label" = "イベントマップ";
+"discovery.map.a11y.hint" = "マップには主催者が公開したおおよその場所だけを表示します。同じ結果をリストでも確認できます。";
+"discovery.map.results" = "地図の結果%lld件";
+"discovery.map.results_title" = "マップの結果";
+"discovery.map.close" = "閉じる";
+"discovery.map.no_locations.title" = "表示できる公開場所がありません";
+"discovery.map.no_locations.message" = "これらのイベントはまだ公開の地図位置がありません。リストでご覧ください。";
+"discovery.map.minicard.hint" = "イベント詳細を開く";
+
+"discovery.colophon.title" = "今夜の%@は、ここまで";
+"discovery.colophon.map" = "地図を開く";

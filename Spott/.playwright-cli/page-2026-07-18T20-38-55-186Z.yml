@@ -1,0 +1,144 @@
+- generic [active] [ref=f16e1]:
+  - link "Skip to main content" [ref=f16e2] [cursor=pointer]:
+    - /url: "#spott-main-content"
+  - banner [ref=f16e3]:
+    - generic [ref=f16e4]:
+      - link "Spott" [ref=f16e5] [cursor=pointer]:
+        - /url: /discover
+      - 'link "Region: Japan" [ref=f16e6] [cursor=pointer]':
+        - /url: /discover
+        - text: Japan
+    - navigation "Primary navigation" [ref=f16e7]:
+      - link "Discover" [ref=f16e8] [cursor=pointer]:
+        - /url: /discover
+      - link "Groups" [ref=f16e9] [cursor=pointer]:
+        - /url: /groups
+    - generic [ref=f16e12]:
+      - generic [ref=f16e13]: Language
+      - combobox "Language" [ref=f16e14] [cursor=pointer]:
+        - option "简体中文"
+        - option "日本語"
+        - option "English" [selected]
+  - status [ref=f16e15]:
+    - strong [ref=f16e16]: Public read-only preview
+    - generic [ref=f16e17]: Browse, filters, details, sharing and calendar are available. Use the encrypted internal-test entry for sign-in, registration and publishing.
+  - main [ref=f16e19]:
+    - generic [ref=f16e20]:
+      - generic [ref=f16e21]:
+        - heading "Find events you genuinely want to join" [level=1] [ref=f16e22]
+        - paragraph [ref=f16e23]: See the time, place, fee, and availability before you head out.
+      - generic [ref=f16e24]:
+        - generic [ref=f16e25]:
+          - generic [ref=f16e29]: Search events
+          - searchbox "Search events" [ref=f16e30]
+        - generic [ref=f16e31]:
+          - generic [ref=f16e35]: Area
+          - combobox "Area" [ref=f16e36] [cursor=pointer]:
+            - option "All Japan" [selected]
+            - option "Tokyo"
+            - option "Kanagawa"
+            - option "Saitama"
+            - option "Chiba"
+            - option "Osaka"
+            - option "Kyoto"
+        - generic "List / Map" [ref=f16e37]:
+          - button "List" [pressed] [ref=f16e38] [cursor=pointer]
+          - button "Map" [ref=f16e44] [cursor=pointer]
+      - generic [ref=f16e48]:
+        - group "When" [ref=f16e49]:
+          - button "This weekend" [ref=f16e50] [cursor=pointer]
+          - button "Open spots" [ref=f16e54] [cursor=pointer]
+          - combobox "Format" [ref=f16e62] [cursor=pointer]:
+            - option "All formats" [selected]
+            - option "In person"
+            - option "Online"
+            - option "Hybrid"
+          - combobox "Price" [ref=f16e66] [cursor=pointer]:
+            - option "All prices" [selected]
+            - option "Free"
+            - option "Paid"
+          - combobox "Language" [ref=f16e71] [cursor=pointer]:
+            - option "All languages" [selected]
+            - option "Chinese"
+            - option "Japanese"
+            - option "English"
+        - button "More filters" [ref=f16e73] [cursor=pointer]
+        - button "Clear filters" [ref=f16e78] [cursor=pointer]
+      - generic [ref=f16e80]:
+        - heading "New events" [level=2] [ref=f16e82]
+        - generic [ref=f16e83]:
+          - article "东京余光 · 隅田川蓝调散步" [ref=f16e84]:
+            - link "东京余光 · 隅田川蓝调散步 Sat, July 2512:00–14:30 东京余光 · 隅田川蓝调散步 清澄白河站附近 Free In person Chinese Language confirmed Event tags 东京余光散步会 New to hosting on Spott 13 left" [ref=f16e85] [cursor=pointer]:
+              - /url: /e/tokyo-afterglow-preview
+              - img "东京余光 · 隅田川蓝调散步" [ref=f16e87]
+              - generic [ref=f16e96]:
+                - paragraph [ref=f16e97]: Sat, July 25 · 12:00–14:30
+                - heading "东京余光 · 隅田川蓝调散步" [level=3] [ref=f16e98]
+                - generic [ref=f16e99]:
+                  - generic [ref=f16e100]: 清澄白河站附近
+                  - generic [ref=f16e104]:
+                    - text: Free
+                    - generic [ref=f16e107]: ·
+                    - text: In person
+                  - generic [ref=f16e108]:
+                    - text: Chinese
+                    - generic [ref=f16e112]: ·
+                    - text: Language confirmed
+                - list "Event tags" [ref=f16e113]:
+                  - listitem [ref=f16e114]: "#City walks"
+                  - listitem [ref=f16e115]: "#摄影"
+                  - listitem [ref=f16e116]: "#城市散步"
+                - generic [ref=f16e117]:
+                  - generic [ref=f16e118]: 东京余光散步会
+                  - generic [ref=f16e121]: New to hosting on Spott
+              - strong [ref=f16e123]: 13 left
+          - article "下北沢 Listening Table · 一枚を聴く夜" [ref=f16e126]:
+            - link "下北沢 Listening Table · 一枚を聴く夜 Mon, August 3121:00–00:00 下北沢 Listening Table · 一枚を聴く夜 下北沢 Free In person Japanese Language confirmed Event tags Shimokita Listening Table New to hosting on Spott 11 left" [ref=f16e127] [cursor=pointer]:
+              - /url: /e/shimokita-vinyl-preview
+              - img "下北沢 Listening Table · 一枚を聴く夜" [ref=f16e129]
+              - generic [ref=f16e137]:
+                - paragraph [ref=f16e138]: Mon, August 31 · 21:00–00:00
+                - heading "下北沢 Listening Table · 一枚を聴く夜" [level=3] [ref=f16e139]
+                - generic [ref=f16e140]:
+                  - generic [ref=f16e141]: 下北沢
+                  - generic [ref=f16e145]:
+                    - text: Free
+                    - generic [ref=f16e148]: ·
+                    - text: In person
+                  - generic [ref=f16e149]:
+                    - text: Japanese
+                    - generic [ref=f16e153]: ·
+                    - text: Language confirmed
+                - list "Event tags" [ref=f16e154]:
+                  - listitem [ref=f16e155]: "#Music"
+                  - listitem [ref=f16e156]: "#音楽"
+                  - listitem [ref=f16e157]: "#レコード"
+                - generic [ref=f16e158]:
+                  - generic [ref=f16e159]: Shimokita Listening Table
+                  - generic [ref=f16e162]: New to hosting on Spott
+              - strong [ref=f16e164]: 11 left
+          - article "Kamakura Morning Reset · Coastline Walk & Coffee" [ref=f16e167]:
+            - link "Kamakura Morning Reset · Coastline Walk & Coffee Thu, October 1512:00–15:00 Kamakura Morning Reset · Coastline Walk & Coffee 鎌倉海岸 ¥3,800 In person English Language confirmed Event tags 东京余光散步会 New to hosting on Spott 3 left" [ref=f16e168] [cursor=pointer]:
+              - /url: /e/kamakura-morning-preview
+              - img "Kamakura Morning Reset · Coastline Walk & Coffee" [ref=f16e170]
+              - generic [ref=f16e176]:
+                - paragraph [ref=f16e177]: Thu, October 15 · 12:00–15:00
+                - heading "Kamakura Morning Reset · Coastline Walk & Coffee" [level=3] [ref=f16e178]
+                - generic [ref=f16e179]:
+                  - generic [ref=f16e180]: 鎌倉海岸
+                  - generic [ref=f16e184]:
+                    - text: ¥3,800
+                    - generic [ref=f16e187]: ·
+                    - text: In person
+                  - generic [ref=f16e188]:
+                    - text: English
+                    - generic [ref=f16e192]: ·
+                    - text: Language confirmed
+                - list "Event tags" [ref=f16e193]:
+                  - listitem [ref=f16e194]: "#Outdoors"
+                  - listitem [ref=f16e195]: "#coast"
+                  - listitem [ref=f16e196]: "#morning"
+                - generic [ref=f16e197]:
+                  - generic [ref=f16e198]: 东京余光散步会
+                  - generic [ref=f16e201]: New to hosting on Spott
+              - strong [ref=f16e203]: 3 left

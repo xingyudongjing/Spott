@@ -204,7 +204,7 @@ struct DiscoveryFeedSkeleton: View {
         VStack(alignment: .leading, spacing: 16) {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(Color.secondary.opacity(0.12))
-                .frame(height: 420)
+                .frame(height: DiscoveryHeroCard.posterHeight)
                 .padding(.horizontal, 16)
             HStack(spacing: 12) {
                 ForEach(0 ..< 2, id: \.self) { _ in

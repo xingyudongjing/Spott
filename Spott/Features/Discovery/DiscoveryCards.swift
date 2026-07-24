@@ -300,6 +300,12 @@ private struct DiscoveryCapacityCluster: View {
 }
 
 struct DiscoveryHeroCard: View {
+    /// Sized so the poster — including its bottom meta row (capacity ring) —
+    /// lands entirely above Discovery's floating chrome at the resting scroll
+    /// offset: the tab bar capsule and the create FAB both live in the bottom
+    /// ~150pt of the screen, and a taller card pushed the ring underneath them.
+    static let posterHeight: CGFloat = 360
+
     @Environment(AppModel.self) private var model
     @Environment(\.locale) private var locale
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -344,7 +350,7 @@ struct DiscoveryHeroCard: View {
     private var scrimLayout: some View {
         Button(action: open) {
             EventCoverView(url: event.coverURL, category: event.category, cornerRadius: 24)
-                .frame(height: 420)
+                .frame(height: Self.posterHeight)
                 .overlay(alignment: .bottom) { scrim }
                 .overlay(alignment: .bottomLeading) { heroText }
                 .overlay(alignment: .topLeading) { promotedOverlay }

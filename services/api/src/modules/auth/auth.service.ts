@@ -15,6 +15,7 @@ import {
   type SessionTransportClass,
   type VerifiedBFFAuthority,
 } from '../../platform/web-bff-authority.js';
+import { DUMMY_PASSWORD_HASH, hashPassword, verifyPassword } from './password-hash.js';
 import { SessionTokenService, type DeviceBindingProof } from './session-token.service.js';
 
 const emailSchema = z.string().trim().toLowerCase().email().max(254);
@@ -266,6 +267,119 @@ export class AuthService {
     });
     if (outcome.kind === 'invalid') this.throwInvalidOtp(outcome.attempts, outcome.retryAt);
     return outcome.session;
+  }
+
+  async registerWithPassword(
+    input: { email: string; password: string; nickname?: string | undefined; deviceId: string },
+    transportClass: SessionTransportClass,
+  ): Promise<SessionResponse> {
+    if (transportClass === 'ops') {
+      throw new DomainError('SESSION_TRANSPORT_MISMATCH', '会话通道校验失败，请重新登录。', 403, {
+        retryable: false,
+      });
+    }
+    const email = emailSchema.parse(input.email);
+    const deviceId = deviceSchema.parse(input.deviceId);
+    const nickname = input.nickname ?? email.split('@', 1)[0]?.slice(0, 40) ?? 'Spott 用户';
+    // scrypt is deliberately expensive; derive outside the transaction to keep locks short.
+    const passwordHash = await hashPassword(input.password);
+    const emailHash = this.crypto.lookupHash(email);
+    const emailCipher = this.crypto.encrypt(email);
+    const providerSubject = emailHash.toString('hex');
+    return this.database.transaction(async (client) => {
+      const existingCredential = await client.query(
+        'SELECT user_id FROM identity.user_credentials WHERE email = $1',
+        [email],
+      );
+      if (existingCredential.rowCount) this.throwEmailAlreadyRegistered();
+      // The same email may already own an OTP-created account. Password registration does not
+      // prove mailbox ownership, so refuse instead of silently attaching a password to it.
+      const existingIdentity = await this.findUserByIdentity(client, 'email', providerSubject);
+      if (existingIdentity) this.throwEmailAlreadyRegistered();
+      const user = await this.createUser(client, 'email', providerSubject, emailCipher, emailHash);
+      await client.query('UPDATE identity.profiles SET nickname = $2 WHERE user_id = $1', [
+        user.id,
+        nickname,
+      ]);
+      try {
+        await client.query(
+          `INSERT INTO identity.user_credentials(user_id, email, password_hash)
+           VALUES ($1, $2, $3)`,
+          [user.id, email, passwordHash],
+        );
+      } catch (error) {
+        if (this.pgCode(error) === '23505') this.throwEmailAlreadyRegistered();
+        throw error;
+      }
+      // TODO(TEMPORARY POLICY): password-registered users are marked phone-verified so the core
+      // journey (publish/register gating on phoneVerified) works before the SMS provider lands.
+      // Remove this block once real phone verification is mandatory for password signups.
+      const verified = await client.query<{ phone_verified_at: Date }>(
+        `UPDATE identity.users
+         SET phone_verified_at = COALESCE(phone_verified_at, clock_timestamp())
+         WHERE id = $1 RETURNING phone_verified_at`,
+        [user.id],
+      );
+      user.phone_verified_at = verified.rows[0]?.phone_verified_at ?? new Date();
+      return this.createSession(
+        client,
+        user,
+        deviceId,
+        this.platformForTransport(transportClass),
+        transportClass,
+      );
+    });
+  }
+
+  async loginWithPassword(
+    input: { email: string; password: string; deviceId: string },
+    transportClass: SessionTransportClass,
+  ): Promise<SessionResponse> {
+    if (transportClass === 'ops') {
+      throw new DomainError('SESSION_TRANSPORT_MISMATCH', '会话通道校验失败，请重新登录。', 403, {
+        retryable: false,
+      });
+    }
+    const email = emailSchema.parse(input.email);
+    const deviceId = deviceSchema.parse(input.deviceId);
+    const result = await this.database.query<UserRow & { password_hash: string }>(
+      `SELECT u.id, u.public_handle, u.status, u.phone_verified_at, u.restriction_flags,
+              c.password_hash
+       FROM identity.user_credentials c
+       JOIN identity.users u ON u.id = c.user_id AND u.deleted_at IS NULL
+       WHERE c.email = $1`,
+      [email],
+    );
+    const row = result.rows[0];
+    // Unknown emails still pay the full scrypt cost against a dummy digest, and the error below
+    // never distinguishes unknown-email from wrong-password.
+    const valid = await verifyPassword(input.password, row?.password_hash ?? DUMMY_PASSWORD_HASH);
+    if (!row || !valid) {
+      throw new DomainError('INVALID_CREDENTIALS', '邮箱或密码不正确。', 401, {
+        retryable: false,
+      });
+    }
+    return this.database.transaction((client) =>
+      this.createSession(
+        client,
+        {
+          id: row.id,
+          public_handle: row.public_handle,
+          status: row.status,
+          phone_verified_at: row.phone_verified_at,
+          restriction_flags: row.restriction_flags,
+        },
+        deviceId,
+        this.platformForTransport(transportClass),
+        transportClass,
+      ),
+    );
+  }
+
+  private throwEmailAlreadyRegistered(): never {
+    throw new DomainError('EMAIL_ALREADY_REGISTERED', '该邮箱已注册，请直接登录。', 409, {
+      retryable: false,
+    });
   }
 
   async authenticateApple(

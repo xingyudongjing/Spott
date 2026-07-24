@@ -203,7 +203,7 @@ function withNonProductionSessionSecurityDefaults(
 
 export function corsOrigins(
   config: Pick<Configuration, 'NODE_ENV' | 'WEB_ORIGIN' | 'OPS_ORIGIN'>,
-): string[] {
+): (string | RegExp)[] {
   const configured = [...config.WEB_ORIGIN, ...config.OPS_ORIGIN];
   const localDevelopmentOrigins = config.NODE_ENV === 'development'
     ? [
@@ -217,7 +217,17 @@ export function corsOrigins(
         'http://127.0.0.1:3003',
       ]
     : [];
-  return [...new Set([...configured, ...localDevelopmentOrigins])];
+  // Development only: allow the web app served from this machine's private LAN IP
+  // (phone on the same WiFi) without hand-editing WEB_ORIGIN every time the IP changes.
+  const lanDevelopmentOriginPatterns = config.NODE_ENV === 'development'
+    ? [
+        /^http:\/\/(?:192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):300[0-3]$/,
+      ]
+    : [];
+  return [
+    ...new Set([...configured, ...localDevelopmentOrigins]),
+    ...lanDevelopmentOriginPatterns,
+  ];
 }
 
 let cached: Configuration | undefined;

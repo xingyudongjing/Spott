@@ -840,3 +840,60 @@ describe('EventsService controlled event comments', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 });
+
+describe('EventsService going-preview social proof', () => {
+  const eventId = '019b0000-0000-7000-8100-000000000001';
+
+  it('returns confirmed count with real overlapping avatar previews when the guest list is shown', async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({
+        rows: [{ id: eventId, status: 'published', show_guest_list: true, confirmed_count: 12 }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          { user_id: 'u1', display_name: '小美', handle: 'mei', avatar_url: 'https://cdn/a1.jpg' },
+          { user_id: 'u2', display_name: null, handle: 'ken', avatar_url: null },
+        ],
+      });
+    const service = new EventsService({ query } as never, {} as never, {} as never, {} as never);
+
+    const preview = await service.goingPreview(eventId) as {
+      confirmedCount: number;
+      previews: Array<{ userId: string; displayName: string; avatarURL: string | null }>;
+      hasMore: boolean;
+    };
+
+    expect(preview.confirmedCount).toBe(12);
+    expect(preview.previews).toEqual([
+      { userId: 'u1', displayName: '小美', avatarURL: 'https://cdn/a1.jpg' },
+      { userId: 'u2', displayName: '@ken', avatarURL: null },
+    ]);
+    expect(preview.hasMore).toBe(true);
+    const previewSql = query.mock.calls[1]?.[0] as string;
+    expect(previewSql).toContain("r.status IN ('confirmed', 'checked_in')");
+    expect(previewSql).not.toMatch(/email|phone/i);
+  });
+
+  it('reveals the count but no identities when the organizer hides the guest list', async () => {
+    const query = vi.fn().mockResolvedValueOnce({
+      rows: [{ id: eventId, status: 'published', show_guest_list: false, confirmed_count: 7 }],
+    });
+    const service = new EventsService({ query } as never, {} as never, {} as never, {} as never);
+
+    const preview = await service.goingPreview(eventId) as {
+      confirmedCount: number;
+      previews: unknown[];
+      hasMore: boolean;
+    };
+
+    expect(preview).toEqual({ confirmedCount: 7, previews: [], hasMore: true });
+    expect(query).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a missing or removed event', async () => {
+    const query = vi.fn().mockResolvedValueOnce({ rows: [] });
+    const service = new EventsService({ query } as never, {} as never, {} as never, {} as never);
+
+    await expect(service.goingPreview(eventId)).rejects.toMatchObject({ code: 'EVENT_NOT_FOUND' });
+  });
+});

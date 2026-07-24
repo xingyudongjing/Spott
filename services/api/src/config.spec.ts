@@ -89,6 +89,31 @@ describe('corsOrigins', () => {
       OPS_ORIGIN: ['https://ops.spott.jp'],
     })).toEqual(['https://spott.jp', 'https://ops.spott.jp']);
   });
+
+  it('allows private-LAN web origins on dev ports in development only', () => {
+    const developmentOrigins = corsOrigins({
+      NODE_ENV: 'development',
+      WEB_ORIGIN: ['http://localhost:3000'],
+      OPS_ORIGIN: [],
+    });
+    const lanPattern = developmentOrigins.find(
+      (origin): origin is RegExp => origin instanceof RegExp,
+    );
+    expect(lanPattern).toBeDefined();
+    expect(lanPattern?.test('http://192.168.102.109:3002')).toBe(true);
+    expect(lanPattern?.test('http://10.0.0.7:3003')).toBe(true);
+    expect(lanPattern?.test('http://172.20.1.5:3000')).toBe(true);
+    expect(lanPattern?.test('http://192.168.1.4:8080')).toBe(false);
+    expect(lanPattern?.test('http://8.8.8.8:3002')).toBe(false);
+    expect(lanPattern?.test('https://evil.example')).toBe(false);
+
+    const productionOrigins = corsOrigins({
+      NODE_ENV: 'production',
+      WEB_ORIGIN: ['https://spott.jp'],
+      OPS_ORIGIN: [],
+    });
+    expect(productionOrigins.some((origin) => origin instanceof RegExp)).toBe(false);
+  });
 });
 
 describe('session security configuration', () => {

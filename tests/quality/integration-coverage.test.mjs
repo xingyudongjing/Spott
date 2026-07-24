@@ -14,6 +14,7 @@ import test from 'node:test';
 const repositoryRoot = resolve(import.meta.dirname, '../..');
 const manifestPath = join(import.meta.dirname, 'integration-coverage.json');
 const ignoredDirectories = new Set([
+  '.claude',
   '.git',
   '.next',
   '.turbo',

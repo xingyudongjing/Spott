@@ -428,6 +428,8 @@ export class WebBFFTransportGuard implements CanActivate {
     const path = request.url.split('?', 1)[0];
     if (
       path === '/v1/auth/email/verify' ||
+      path === '/v1/auth/password/register' ||
+      path === '/v1/auth/password/login' ||
       path === '/v1/auth/apple' ||
       path === '/v1/auth/google'
     ) {

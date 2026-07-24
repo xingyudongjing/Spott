@@ -22,6 +22,21 @@ const persistentDeviceBindingProofSchema = z
   })
   .strict();
 
+const passwordRegisterSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  password: z.string().min(8).max(128),
+  nickname: z.string().min(1).max(40).optional(),
+  deviceId: z.string().uuid(),
+});
+
+// Login accepts any non-empty password: length policy is not re-checked so responses never leak
+// which rule a stored password was created under.
+const passwordLoginSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  password: z.string().min(1).max(128),
+  deviceId: z.string().uuid(),
+});
+
 @Controller()
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
@@ -45,6 +60,20 @@ export class AuthController {
       transportClass === 'native' ? 'ios' : 'web',
       transportClass,
     );
+  }
+
+  @Public()
+  @Post('auth/password/register')
+  registerWithPassword(@Req() request: SpottRequest, @Body() body: unknown) {
+    const input = passwordRegisterSchema.parse(body);
+    return this.auth.registerWithPassword(input, this.issuanceTransport(request));
+  }
+
+  @Public()
+  @Post('auth/password/login')
+  loginWithPassword(@Req() request: SpottRequest, @Body() body: unknown) {
+    const input = passwordLoginSchema.parse(body);
+    return this.auth.loginWithPassword(input, this.issuanceTransport(request));
   }
 
   @Public()
